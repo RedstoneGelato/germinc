@@ -1,0 +1,10 @@
+GitHub commands:
+	git add . -> adds all files to be uploaded
+	git commit -m "notes go here" -> commits to GitHub with notes
+	git push -u origin master -> actually uploads the folder to GitHub
+
+PI commands:
+	SSH germinc1@10.18.23.1 -> remote access to pi
+	source env/bin/activate -> activates virtual environment
+	htop -> see performance stats
+	
