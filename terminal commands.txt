@@ -8,3 +8,6 @@ PI commands:
 	source env/bin/activate -> activates virtual environment
 	htop -> see performance stats
 	
+
+github token
+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
