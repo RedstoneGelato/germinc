@@ -126,11 +126,11 @@ class MotorThread(threading.Thread):
 
         self.command = None
 
-        self.i2c = busio.I2C(board.SCL, board.SDA)
-        self.motor = PowerfulBLDCDriver(self.i2c, 0x20)
-        self.motor.set_speed_limit(2000000)
-        self.motor.configure_operating_mode_and_sensor(3, 1)
-        self.motor.configure_command_mode(12)
+        #self.i2c = busio.I2C(board.SCL, board.SDA)
+        #self.motor = PowerfulBLDCDriver(self.i2c, 0x20)
+        #self.motor.set_speed_limit(2000000)
+        #self.motor.configure_operating_mode_and_sensor(3, 1)
+        #self.motor.configure_command_mode(12)
 
     def run(self):
         while self.running:
