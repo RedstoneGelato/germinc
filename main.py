@@ -1,4 +1,5 @@
 import threading
+import math
 import cv2
 import numpy as np
 import time
@@ -16,13 +17,9 @@ class CameraThread(threading.Thread):
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        # shared data
-        self.bluecx = None
-        self.bluecy = None
-        self.orangecx = None
-        self.orangecy = None
-        self.yellowcx = None
-        self.yellowcy = None
+        self.blue = [0,0,0,0] # top left x, top left y, width, height
+        self.orange = [0,0,0,0]
+        self.yellow = [0,0,0,0]
         self.frame = None
 
         self.running = True
@@ -36,10 +33,10 @@ class CameraThread(threading.Thread):
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             hsv = cv2.GaussianBlur(hsv, (5, 5), 0)
 
-            # Reset values each frame
-            self.bluecx = self.bluecy = None
-            self.orangecx = self.orangecy = None
-            self.yellowcx = self.yellowcy = None
+            # Reset values
+            self.blue = [0,0,0,0]
+            self.orange = [0,0,0,0]
+            self.yellow = [0,0,0,0]
 
             # --- BLUE ---
             lower_blue = np.array([85, 100, 50])
@@ -60,8 +57,7 @@ class CameraThread(threading.Thread):
 
             if x_min < x_max:
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
-                self.bluecx = (x_min + x_max) // 2
-                self.bluecy = (y_min + y_max) // 2
+                self.blue = [x_min, y_min, w, h]
 
             # --- ORANGE ---
             lower_orange = np.array([0, 180, 180])
@@ -82,8 +78,7 @@ class CameraThread(threading.Thread):
 
             if x_min < x_max:
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 165, 255), 2)
-                self.orangecx = (x_min + x_max) // 2
-                self.orangecy = (y_min + y_max) // 2
+                self.orange = [x_min, y_min, w, h]
 
             # --- YELLOW ---
             lower_yellow = np.array([15, 90, 125])
@@ -104,8 +99,7 @@ class CameraThread(threading.Thread):
 
             if x_min < x_max:
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
-                self.yellowcx = (x_min + x_max) // 2
-                self.yellowcy = (y_min + y_max) // 2
+                self.yellow = [x_min, y_min, w, h]
 
             # save the latest frame
             self.frame = frame
@@ -124,20 +118,36 @@ class MotorThread(threading.Thread):
         self.daemon = True
         self.running = True
 
-        self.command = None
+        self.motor1 = 0
+        self.motor2 = 0
+        self.motor3 = 0
+        self.motor4 = 0
 
         #self.i2c = busio.I2C(board.SCL, board.SDA)
-        #self.motor = PowerfulBLDCDriver(self.i2c, 0x20)
-        #self.motor.set_speed_limit(2000000)
-        #self.motor.configure_operating_mode_and_sensor(3, 1)
-        #self.motor.configure_command_mode(12)
+        #self.motor1 = PowerfulBLDCDriver(self.i2c, 0x20)
+        #self.motor1.set_speed_limit(2000000)
+        #self.motor1.configure_operating_mode_and_sensor(3, 1)
+        #self.motor1.configure_command_mode(12)
+        #self.motor2 = PowerfulBLDCDriver(self.i2c, 0x20)
+        #self.motor2.set_speed_limit(2000000)
+        #self.motor2.configure_operating_mode_and_sensor(3, 1)
+        #self.motor2.configure_command_mode(12)
+        #self.motor3 = PowerfulBLDCDriver(self.i2c, 0x20)
+        #self.motor3.set_speed_limit(2000000)
+        #self.motor3.configure_operating_mode_and_sensor(3, 1)
+        #self.motor3.configure_command_mode(12)
+        #self.motor4 = PowerfulBLDCDriver(self.i2c, 0x20)
+        #self.motor4.set_speed_limit(2000000)
+        #self.motor4.configure_operating_mode_and_sensor(3, 1)
+        #self.motor4.configure_command_mode(12)
 
     def run(self):
         while self.running:
-            if self.command is not None:
-                print(self.command)
-
-                self.command = None
+            #self.motor1.set_speed(self.motor1)
+            #self.motor2.set_speed(self.motor2)
+            #self.motor3.set_speed(self.motor3)
+            #self.motor4.set_speed(self.motor4)
+            pass
 
 def main():
     camera = CameraThread()
@@ -147,12 +157,9 @@ def main():
     motors.start()
 
     while True:
-        motors.command = "hi testing"
-
-        print("Blue:", camera.bluecx, camera.bluecy)
-        print("Orange:", camera.orangecx, camera.orangecy)
-        print("Yellow:", camera.yellowcx, camera.yellowcy)
-        print()
+        bot_position = [320, 150]
+        ball_position = [camera.orange[0] + (camera.orange[2] // 2),camera.orange[1] + camera.orange[3]]
+        gradient = math.tan(ball_position[1] - bot_position[1]) / (ball_position[0] - bot_position[0])
 
         time.sleep(0.2)
 
