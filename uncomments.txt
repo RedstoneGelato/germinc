@@ -1,0 +1,13 @@
+on pi:
+    uncomment import lines
+    change self.cap at line 18 to
+        self.cap = cv2.VideoCapture(0)
+
+    comment lines 87 - 94 (draw rectangles)
+    uncomment and configure lines 129 - 145 (i2c address)
+    uncomment lines 149 - 152 (motor runs)
+
+
+on windows:
+    do the opposite but self cap line:
+        self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)

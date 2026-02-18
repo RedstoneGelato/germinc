@@ -3,26 +3,23 @@ import math
 import cv2
 import numpy as np
 import time
-import board
-import busio
-from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
+#import board
+#import busio
+#from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 
-class CameraThread(threading.Thread):
+class FrameGrabber(threading.Thread):
     def __init__(self):
         super().__init__()
-        self.daemon = True  # thread closes when main program closes
-
-        self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-        self.blue = [0,0,0,0] # top left x, top left y, width, height
-        self.orange = [0,0,0,0]
-        self.yellow = [0,0,0,0]
-        self.frame = None
-
+        self.daemon = True
         self.running = True
+        self.frame = None
+        self.hsv = None
+
+        self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
     def run(self):
         while self.running:
@@ -30,87 +27,92 @@ class CameraThread(threading.Thread):
             if not ret:
                 continue
 
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            hsv = cv2.GaussianBlur(hsv, (5, 5), 0)
-
-            # Reset values
-            self.blue = [0,0,0,0]
-            self.orange = [0,0,0,0]
-            self.yellow = [0,0,0,0]
-
-            # --- BLUE ---
-            lower_blue = np.array([85, 100, 50])
-            upper_blue = np.array([140, 255, 255])
-            maskblue = cv2.inRange(hsv, lower_blue, upper_blue)
-            contours, _ = cv2.findContours(maskblue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            x_min, y_min = float('inf'), float('inf')
-            x_max, y_max = 0, 0
-
-            for c in contours:
-                if cv2.contourArea(c) > 500:
-                    x, y, w, h = cv2.boundingRect(c)
-                    x_min = min(x_min, x)
-                    y_min = min(y_min, y)
-                    x_max = max(x_max, x + w)
-                    y_max = max(y_max, y + h)
-
-            if x_min < x_max:
-                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
-                self.blue = [x_min, y_min, x_max - x_min, y_max - y_min]
-
-            # --- ORANGE ---
-            lower_orange = np.array([0, 180, 180])
-            upper_orange = np.array([20, 255, 255])
-            maskorange = cv2.inRange(hsv, lower_orange, upper_orange)
-            contours, _ = cv2.findContours(maskorange, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            x_min, y_min = float('inf'), float('inf')
-            x_max, y_max = 0, 0
-
-            for c in contours:
-                if cv2.contourArea(c) > 300:
-                    x, y, w, h = cv2.boundingRect(c)
-                    x_min = min(x_min, x)
-                    y_min = min(y_min, y)
-                    x_max = max(x_max, x + w)
-                    y_max = max(y_max, y + h)
-
-            if x_min < x_max:
-                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 165, 255), 2)
-                self.orange = [x_min, y_min, x_max - x_min, y_max - y_min]
-
-            # --- YELLOW ---
-            lower_yellow = np.array([15, 90, 125])
-            upper_yellow = np.array([30, 255, 255])
-            maskyellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-            contours, _ = cv2.findContours(maskyellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            x_min, y_min = float('inf'), float('inf')
-            x_max, y_max = 0, 0
-
-            for c in contours:
-                if cv2.contourArea(c) > 500:
-                    x, y, w, h = cv2.boundingRect(c)
-                    x_min = min(x_min, x)
-                    y_min = min(y_min, y)
-                    x_max = max(x_max, x + w)
-                    y_max = max(y_max, y + h)
-
-            if x_min < x_max:
-                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
-                self.yellow = [x_min, y_min, x_max - x_min, y_max - y_min]
-
-            # save the latest frame
             self.frame = frame
-
-            # display and quit
-            cv2.imshow("Camera", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                self.running = False
+            self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         self.cap.release()
-        cv2.destroyAllWindows()
+
+
+class DetectionThread(threading.Thread):
+    def __init__(self, grabber):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+        self.grabber = grabber
+
+        self.blue = [0,0,0,0]
+        self.orange = [0,0,0,0]
+        self.yellow = [0,0,0,0]
+        self.green = [0,0,0,0]
+        self.frame = None
+
+        # HSV ranges
+        self.lower_blue   = np.array([85, 100, 50])
+        self.upper_blue   = np.array([140, 255, 255])
+        self.lower_orange = np.array([0, 180, 180])
+        self.upper_orange = np.array([20, 255, 255])
+        self.lower_yellow = np.array([15, 90, 125])
+        self.upper_yellow = np.array([30, 255, 255])
+        self.lower_green  = np.array([35, 50, 50])
+        self.upper_green  = np.array([85, 255, 255])
+
+        self.kernel = np.ones((3,3), np.uint8)
+
+    def run(self):
+        while self.running:
+            if self.grabber.hsv is None or self.grabber.frame is None:
+                continue
+
+            frame = self.grabber.frame.copy()
+            hsv   = self.grabber.hsv.copy()
+
+            # reset
+            self.blue   = [0,0,0,0]
+            self.orange = [0,0,0,0]
+            self.yellow = [0,0,0,0]
+            self.green  = [0,0,0,0]
+
+            masks = {
+                "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
+                "orange": cv2.morphologyEx(cv2.inRange(hsv, self.lower_orange, self.upper_orange), cv2.MORPH_OPEN, self.kernel),
+                "yellow": cv2.morphologyEx(cv2.inRange(hsv, self.lower_yellow, self.upper_yellow), cv2.MORPH_OPEN, self.kernel),
+                "green":  cv2.morphologyEx(cv2.inRange(hsv, self.lower_green, self.upper_green), cv2.MORPH_OPEN, self.kernel)
+            }
+
+            self.blue   = self._merge_blobs(masks["blue"])
+            self.orange = self._merge_blobs(masks["orange"])
+            self.yellow = self._merge_blobs(masks["yellow"])
+            self.green  = self._merge_blobs(masks["green"])
+
+            if frame is not None:
+                for color, bbox in zip(["blue","orange","yellow","green"], [self.blue,self.orange,self.yellow,self.green]):
+                    x, y, w, h = bbox
+                    if w > 0 and h > 0:
+                        if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
+                        if color=="orange": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,165,255), 2)
+                        if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
+                        if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
+
+            self.frame = frame
+
+    def _merge_blobs(self, mask):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        x_min = y_min = float('inf')
+        x_max = y_max = 0
+
+        for c in contours:
+            if cv2.contourArea(c) < 300:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            x_min = min(x_min, x)
+            y_min = min(y_min, y)
+            x_max = max(x_max, x + w)
+            y_max = max(y_max, y + h)
+
+        if x_min < x_max and y_min < y_max:
+            return [x_min, y_min, x_max - x_min, y_max - y_min]
+        else:
+            return [0,0,0,0]
 
 class MotorThread(threading.Thread):
     def __init__(self):
@@ -165,30 +167,46 @@ def SpeedUp(motor1,motor2,motor3,motor4,maxspeed):
         return new1,new2,new3,new4
 
 def main():
-    camera = CameraThread()
+    grabber = FrameGrabber()
+    grabber.start()
+
+    camera = DetectionThread(grabber)
     camera.start()
-    
+
     motors = MotorThread()
     motors.start()
 
     while True:
-        bot_position = [320, 150]
+        bot_position = [160, 70]
         ball_position = [camera.orange[0] + (camera.orange[2] // 2),camera.orange[1] + camera.orange[3]] # x, y
         angle = math.atan2(ball_position[1] - bot_position[1], ball_position[0] - bot_position[0])
 
         if bot_position[1] - ball_position[1] < 10 and abs(bot_position[0] - ball_position[0]) < 10: #activate dribbler and try to score
+            print("0")
             pass
 
         elif ball_position[1] - bot_position[1] < 50: # pathfind to the ball
+            print("1")
             motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4 = SpeedUp(math.sin(angle - math.pi/4), math.sin(angle - 3*math.pi/4), math.sin(angle - 5*math.pi/4), math.sin(angle - 7*math.pi/4), motors.speedlimit)
 
         else: # back up
+            print("2")
             motors.motorspeed1 = motors.speedlimit * -1
             motors.motorspeed2 = motors.speedlimit * -1
             motors.motorspeed3 = motors.speedlimit * -1
             motors.motorspeed4 = motors.speedlimit * -1
 
-        if not camera.running:
-            break
+        if camera.frame is not None:
+            cv2.imshow("Cam", camera.frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                grabber.running = False
+                camera.running = False
+                motors.running = False
+                break
+
+    grabber.join()
+    camera.join()
+    motors.join()
+    cv2.destroyAllWindows()
 
 main()
