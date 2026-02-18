@@ -57,7 +57,7 @@ class CameraThread(threading.Thread):
 
             if x_min < x_max:
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
-                self.blue = [x_min, y_min, w, h]
+                self.blue = [x_min, y_min, x_max - x_min, y_max - y_min]
 
             # --- ORANGE ---
             lower_orange = np.array([0, 180, 180])
@@ -78,7 +78,7 @@ class CameraThread(threading.Thread):
 
             if x_min < x_max:
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 165, 255), 2)
-                self.orange = [x_min, y_min, w, h]
+                self.orange = [x_min, y_min, x_max - x_min, y_max - y_min]
 
             # --- YELLOW ---
             lower_yellow = np.array([15, 90, 125])
@@ -99,7 +99,7 @@ class CameraThread(threading.Thread):
 
             if x_min < x_max:
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
-                self.yellow = [x_min, y_min, w, h]
+                self.yellow = [x_min, y_min, x_max - x_min, y_max - y_min]
 
             # save the latest frame
             self.frame = frame
@@ -117,46 +117,52 @@ class MotorThread(threading.Thread):
         super().__init__()
         self.daemon = True
         self.running = True
+        self.speedlimit = 2000000
 
-        self.motor1 = 0
-        self.motor2 = 0
-        self.motor3 = 0
-        self.motor4 = 0
+        self.motorspeed1 = 0
+        self.motorspeed2 = 0
+        self.motorspeed3 = 0
+        self.motorspeed4 = 0
 
         #self.i2c = busio.I2C(board.SCL, board.SDA)
         #self.motor1 = PowerfulBLDCDriver(self.i2c, 0x20)
-        #self.motor1.set_speed_limit(2000000)
+        #self.motor1.set_speed_limit(self.speedlimit)
         #self.motor1.configure_operating_mode_and_sensor(3, 1)
         #self.motor1.configure_command_mode(12)
         #self.motor2 = PowerfulBLDCDriver(self.i2c, 0x20)
-        #self.motor2.set_speed_limit(2000000)
+        #self.motor2.set_speed_limit(self.speedlimit)
         #self.motor2.configure_operating_mode_and_sensor(3, 1)
         #self.motor2.configure_command_mode(12)
         #self.motor3 = PowerfulBLDCDriver(self.i2c, 0x20)
-        #self.motor3.set_speed_limit(2000000)
+        #self.motor3.set_speed_limit(self.speedlimit)
         #self.motor3.configure_operating_mode_and_sensor(3, 1)
         #self.motor3.configure_command_mode(12)
         #self.motor4 = PowerfulBLDCDriver(self.i2c, 0x20)
-        #self.motor4.set_speed_limit(2000000)
+        #self.motor4.set_speed_limit(self.speedlimit)
         #self.motor4.configure_operating_mode_and_sensor(3, 1)
         #self.motor4.configure_command_mode(12)
 
     def run(self):
         while self.running:
-            #self.motor1.set_speed(self.motor1)
-            #self.motor2.set_speed(self.motor2)
-            #self.motor3.set_speed(self.motor3)
-            #self.motor4.set_speed(self.motor4)
+            #self.motor1.set_speed(self.motorspeed1)
+            #self.motor2.set_speed(self.motorspeed2)
+            #self.motor3.set_speed(self.motorspeed3)
+            #self.motor4.set_speed(self.motorspeed4)
             pass
 
 def SpeedUp(motor1,motor2,motor3,motor4,maxspeed):
-    spdmax = max(math.abs(motor1), math.abs(motor2), math.abs(motor3), math.abs(motor4))
-    multiplier = maxspeed/spdmax
-    1 = motor1 * multiplier
-    2 = motor2 * multiplier
-    3 = motor3 * multiplier
-    4 = motor4 * multiplier
-    return 1,2,3,4
+    spdmax = max(abs(motor1), abs(motor2), abs(motor3), abs(motor4))
+
+    if spdmax == 0:
+        return 0,0,0,0
+    
+    else:
+        multiplier = maxspeed/spdmax
+        new1 = motor1 * multiplier
+        new2 = motor2 * multiplier
+        new3 = motor3 * multiplier
+        new4 = motor4 * multiplier
+        return new1,new2,new3,new4
 
 def main():
     camera = CameraThread()
@@ -167,13 +173,20 @@ def main():
 
     while True:
         bot_position = [320, 150]
-        ball_position = [camera.orange[0] + (camera.orange[2] // 2),camera.orange[1] + camera.orange[3]]
-        angle = math.atan(ball_position[1] - bot_position[1]) / (ball_position[0] - bot_position[0])
+        ball_position = [camera.orange[0] + (camera.orange[2] // 2),camera.orange[1] + camera.orange[3]] # x, y
+        angle = math.atan2(ball_position[1] - bot_position[1], ball_position[0] - bot_position[0])
 
-        motors.motor1 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[0]
-        motors.motor2 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[1]
-        motors.motor3 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[2]
-        motors.motor4 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[3]
+        if bot_position[1] - ball_position[1] < 10 and abs(bot_position[0] - ball_position[0]) < 10: #activate dribbler and try to score
+            pass
+
+        elif ball_position[1] - bot_position[1] < 50: # pathfind to the ball
+            motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4 = SpeedUp(math.sin(angle - math.pi/4), math.sin(angle - 3*math.pi/4), math.sin(angle - 5*math.pi/4), math.sin(angle - 7*math.pi/4), motors.speedlimit)
+
+        else: # back up
+            motors.motorspeed1 = motors.speedlimit * -1
+            motors.motorspeed2 = motors.speedlimit * -1
+            motors.motorspeed3 = motors.speedlimit * -1
+            motors.motorspeed4 = motors.speedlimit * -1
 
         if not camera.running:
             break
