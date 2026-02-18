@@ -149,6 +149,15 @@ class MotorThread(threading.Thread):
             #self.motor4.set_speed(self.motor4)
             pass
 
+def SpeedUp(motor1,motor2,motor3,motor4,maxspeed):
+    spdmax = max(math.abs(motor1), math.abs(motor2), math.abs(motor3), math.abs(motor4))
+    multiplier = maxspeed/spdmax
+    1 = motor1 * multiplier
+    2 = motor2 * multiplier
+    3 = motor3 * multiplier
+    4 = motor4 * multiplier
+    return 1,2,3,4
+
 def main():
     camera = CameraThread()
     camera.start()
@@ -159,9 +168,12 @@ def main():
     while True:
         bot_position = [320, 150]
         ball_position = [camera.orange[0] + (camera.orange[2] // 2),camera.orange[1] + camera.orange[3]]
-        gradient = math.tan(ball_position[1] - bot_position[1]) / (ball_position[0] - bot_position[0])
+        angle = math.atan(ball_position[1] - bot_position[1]) / (ball_position[0] - bot_position[0])
 
-        time.sleep(0.2)
+        motors.motor1 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[0]
+        motors.motor2 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[1]
+        motors.motor3 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[2]
+        motors.motor4 = SpeedUp(math.sin(angle - pi/4), math.sin(angle - 3*pi/4), math.sin(angle - 5*pi/4), math.sin(angle - 7*pi/4), 2000000)[3]
 
         if not camera.running:
             break
