@@ -19,12 +19,12 @@ class FrameGrabber(threading.Thread):
         self.cap = picamera2.Picamera2()
         cfg = self.cap.create_video_configuration()
         self.cap.configure(cfg)
+        self.cap.set_controls({"AwbMode": 1})
         self.cap.start()
 
     def run(self):
         while self.running:
             frame = self.cap.capture_array("main")
-
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
