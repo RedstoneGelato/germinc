@@ -23,7 +23,7 @@ class FrameGrabber(threading.Thread):
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
-            "ColourGains": (2.1, 2.7)   # red, blue
+            "ColourGains": (2.1, 2.7)   # blue, red tweak when needed
         })
         self.cap.start()
 
@@ -204,10 +204,10 @@ def main():
                 motors.running = False
                 break
 
+    grabber.cap.stop()
     grabber.join()
     camera.join()
     motors.join()
     cv2.destroyAllWindows()
-    camera.cap.stop()
 
 main()
