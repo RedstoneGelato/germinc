@@ -17,7 +17,7 @@ class FrameGrabber(threading.Thread):
         self.hsv = None
 
         self.cap = picamera2.Picamera2()
-        cfg = self.cap.create_video_configuration(main={"size": (640, 480), "format": "RGB888"})
+        cfg = self.cap.create_video_configuration(main={"size": (320, 240), "format": "RGB888"})
         self.cap.configure(cfg)
         self.cap.set_controls({"AwbEnable": False})
         self.cap.set_controls({"ColourGains": [32, 0]})
