@@ -18,12 +18,12 @@ class FrameGrabber(threading.Thread):
 
         self.cap = picamera2.Picamera2()
         config = self.cap.create_preview_configuration(
-            main={"size": (320, 240), "format": "BGR888"},
+            main={"size": (320, 240), "format": "RGB888"},
 	    lores={"size": (160, 120), "format": "YUV420"})
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
-            "ColourGains": (1, 1)   # blue, red
+            "ColourGains": (2.1, 2.7)   # red, blue
         })
         self.cap.start()
 

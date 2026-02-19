@@ -3,7 +3,7 @@ from picamera2 import Picamera2
 
 # --- Initial camera setup ---
 picam2 = Picamera2()
-config = picam2.create_preview_configuration(main={"size": (320, 240), "format": "BGR888"})
+config = picam2.create_preview_configuration(main={"size": (320, 240), "format": "RGB888"})
 picam2.configure(config)
 
 # Disable automatic white balance
