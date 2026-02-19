@@ -33,30 +33,6 @@ class FrameGrabber(threading.Thread):
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-            self.cap.set_controls({"ColourGains": (blue_gain, red_gain)})
-            cv2.imshow("cam", frame)
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord('q'):
-                break
-
-            # Increase red
-            if key == ord('p'):
-                red_gain += 0.1
-            # Decrease red
-            if key == ord('y'):
-                red_gain -= 0.1
-
-            # Increase blue
-            if key == ord('u'):
-                blue_gain += 0.1
-            # Decrease blue
-            if key == ord('i'):
-                blue_gain -= 0.1
-
-            print(f"blue: {blue_gain:.2f}, red: {red_gain:.2f}")
-
-
 class DetectionThread(threading.Thread):
     def __init__(self, grabber):
         super().__init__()
