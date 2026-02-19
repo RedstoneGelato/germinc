@@ -47,14 +47,14 @@ class DetectionThread(threading.Thread):
         self.frame = None
 
         # HSV ranges
-        self.lower_blue   = np.array([85, 100, 50])
-        self.upper_blue   = np.array([140, 255, 255])
+        self.lower_blue   = np.array([110, 125, 100])
+        self.upper_blue   = np.array([130, 180, 160])
         self.lower_orange = np.array([0, 180, 180])
         self.upper_orange = np.array([20, 255, 255])
-        self.lower_yellow = np.array([15, 90, 125])
-        self.upper_yellow = np.array([30, 255, 255])
-        self.lower_green  = np.array([35, 50, 50])
-        self.upper_green  = np.array([85, 255, 255])
+        self.lower_yellow = np.array([20, 180, 100])
+        self.upper_yellow = np.array([40, 255, 160])
+        self.lower_green  = np.array([60, 100, 75])
+        self.upper_green  = np.array([80, 255, 125])
 
         self.kernel = np.ones((3,3), np.uint8)
 
