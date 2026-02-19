@@ -34,7 +34,7 @@ class FrameGrabber(threading.Thread):
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
             self.cap.set_controls({"ColourGains": (blue_gain, red_gain)})
-
+            cv2.imshow("cam", frame)
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord('q'):
