@@ -21,7 +21,10 @@ class FrameGrabber(threading.Thread):
             main={"size": (320, 240), "format": "BGR888"},
             lores={"size": (160, 120), "format": "YUV420"})
         self.cap.configure(config)
-        self.cap.set_controls({"AwbEnable": True})
+        self.cap.set_controls({
+            "AwbEnable": False,
+            "ColourGains": (2.2, 0.4)   # tune these
+        })
         self.cap.start()
 
     def run(self):
