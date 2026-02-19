@@ -21,9 +21,7 @@ class FrameGrabber(threading.Thread):
 
     def run(self):
         while self.running:
-            ret, frame = self.cap.capture_array("main")
-            if not ret:
-                continue
+            frame = self.cap.capture_array("main")
 
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
