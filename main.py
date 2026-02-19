@@ -1,6 +1,7 @@
 import threading
 import math
 import cv2
+import picamera2
 import numpy as np
 import time
 #import board
@@ -15,7 +16,8 @@ class FrameGrabber(threading.Thread):
         self.frame = None
         self.hsv = None
 
-        self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        self.cap = picamera2.Picamera2()
+        self.cap.start()
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
@@ -23,14 +25,12 @@ class FrameGrabber(threading.Thread):
 
     def run(self):
         while self.running:
-            ret, frame = self.cap.read()
+            ret, frame = self.cap.capture_array("main")
             if not ret:
                 continue
 
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        self.cap.release()
 
 
 class DetectionThread(threading.Thread):
