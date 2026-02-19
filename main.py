@@ -22,6 +22,7 @@ class FrameGrabber(threading.Thread):
         self.cap.set_controls({"AwbEnable": True})
         self.cap.set_controls({"AwbMode": 1})
         self.cap.set_controls({"AnalogueGain": 1.0})
+        self.cap.set_controls({"ColourGains": [0, 0]})
         self.cap.start()
 
     def run(self):
