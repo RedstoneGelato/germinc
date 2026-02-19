@@ -19,7 +19,7 @@ class FrameGrabber(threading.Thread):
         self.cap = picamera2.Picamera2()
         cfg = self.cap.create_video_configuration()
         self.cap.configure(cfg)
-        self.cap.set_controls({"AnalogueGain": 1.0}, {"ColourGains": [2.0, 1.5]})
+        self.cap.set_controls({"AwbEnable": True}, {"AwbMode": AwbModeEnum.Auto}, {"AnalogueGain": 1.0})
         self.cap.start()
 
     def run(self):
