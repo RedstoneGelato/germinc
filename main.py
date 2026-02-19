@@ -80,14 +80,14 @@ class DetectionThread(threading.Thread):
             self.yellow = self._merge_blobs(masks["yellow"])
             self.green  = self._merge_blobs(masks["green"])
 
-            if frame is not None:
-                for color, bbox in zip(["blue","orange","yellow","green"], [self.blue,self.orange,self.yellow,self.green]):
-                    x, y, w, h = bbox
-                    if w > 0 and h > 0:
-                        if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
-                        if color=="orange": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,165,255), 2)
-                        if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
-                        if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
+            # if frame is not None:
+            #     for color, bbox in zip(["blue","orange","yellow","green"], [self.blue,self.orange,self.yellow,self.green]):
+            #         x, y, w, h = bbox
+            #         if w > 0 and h > 0:
+            #             if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
+            #             if color=="orange": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,165,255), 2)
+            #             if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
+            #             if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
 
             self.frame = frame
 
@@ -193,7 +193,7 @@ def main():
             motors.motorspeed4 = motors.speedlimit * -1
 
         if camera.frame is not None:
-            cv2.imshow("Cam", camera.frame)
+            #cv2.imshow("Cam", camera.frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 grabber.running = False
                 camera.running = False
