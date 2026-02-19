@@ -17,6 +17,8 @@ class FrameGrabber(threading.Thread):
         self.hsv = None
 
         self.cap = picamera2.Picamera2()
+        cfg = self.cap.create_video_configuration()
+        self.cap.configure(cfg)
         self.cap.start()
 
     def run(self):
