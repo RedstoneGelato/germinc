@@ -4,9 +4,9 @@ import cv2
 import picamera2
 import numpy as np
 import time
-#import board
-#import busio
-#from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
+import board
+import busio
+from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -18,10 +18,6 @@ class FrameGrabber(threading.Thread):
 
         self.cap = picamera2.Picamera2()
         self.cap.start()
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
     def run(self):
         while self.running:
