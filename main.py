@@ -18,7 +18,7 @@ class FrameGrabber(threading.Thread):
 
         self.cap = picamera2.Picamera2()
         config = self.cap.create_preview_configuration(
-            main={"size": (320, 240), "format": "RGB888"},
+            main={"size": (320, 240), "format": "BGR888"},
 	    lores={"size": (160, 120), "format": "YUV420"})
         self.cap.configure(config)
         self.cap.set_controls({
@@ -32,6 +32,29 @@ class FrameGrabber(threading.Thread):
             frame = self.cap.capture_array("main")
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+            self.cap.set_controls({"ColourGains": (blue_gain, red_gain)})
+
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == ord('q'):
+                break
+
+            # Increase red
+            if key == ord('p'):
+                red_gain += 0.1
+            # Decrease red
+            if key == ord('y'):
+                red_gain -= 0.1
+
+            # Increase blue
+            if key == ord('u'):
+                blue_gain += 0.1
+            # Decrease blue
+            if key == ord('i'):
+                blue_gain -= 0.1
+
+            print(f"blue: {blue_gain:.2f}, red: {red_gain:.2f}")
 
 
 class DetectionThread(threading.Thread):
