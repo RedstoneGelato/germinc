@@ -208,5 +208,6 @@ def main():
     camera.join()
     motors.join()
     cv2.destroyAllWindows()
+    camera.cap.stop()
 
 main()
