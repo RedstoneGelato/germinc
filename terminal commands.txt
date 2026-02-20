@@ -3,8 +3,10 @@ GitHub commands:
 	git commit -m "notes go here" -> commits to GitHub with notes
 	git push -u origin master -> actually uploads the folder to GitHub
 
+	git pull -> pulls stuff on github
+
 PI commands:
-	SSH germinc1@10.18.23.1 -> remote access to pi
+	SSH germinc1@1"insert ip here" -> remote access to pi
 	source env/bin/activate -> activates virtual environment
 	htop -> see performance stats
 	
