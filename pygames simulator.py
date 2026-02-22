@@ -3,7 +3,7 @@ import math
 import numpy as np
 
 pygame.init()
-WIDTH, HEIGHT = 900, 600
+WIDTH, HEIGHT = 600, 900
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Omniwheel Strategy Simulator with Ball Physics")
 clock = pygame.time.Clock()
@@ -59,18 +59,18 @@ def compute_motor_commands(robot_pos, robot_heading, ball_pos, enemies):
     # TUNABLE CONSTANTS
     # ------------------------
     attract_strength = 1.5
-    avoid_strength   = 10
+    avoid_strength   = 20
     border_strength  = 2.0
     wrap_strength    = 2.0
     heading_keep_gain = 2.0
-    BAD = 0.5  # misalignment threshold
+    BAD = 0.3  # misalignment threshold
 
     to_ball = ball_pos - robot_pos
     d = np.linalg.norm(to_ball)
     if d > 1e-6:
         to_ball /= d
 
-    DESIRED_HEADING = 0.0
+    DESIRED_HEADING = 3*math.pi/2
     GOAL_DIR = np.array([0.0, -1.0])
 
     alignment = to_ball @ GOAL_DIR
@@ -96,10 +96,10 @@ def compute_motor_commands(robot_pos, robot_heading, ball_pos, enemies):
     # Conditional swirl
     # ------------------------
     if d_target > 1e-6:
-        swirl_dir = np.array([-to_ball[1], to_ball[0]]) if ball_pos[1] - robot_pos[1] > 0 else np.array([to_ball[1], -to_ball[0]])
+        swirl_dir = np.array([-to_ball[1], to_ball[0]]) if ball_pos[0] - robot_pos[0] > 0 else np.array([to_ball[1], -to_ball[0]])
         if alignment < BAD:
             t = np.clip((BAD - alignment) / (BAD + 1.0), 0, 1)
-            wrap_scale = math.exp(-(d_target - 0.3) * 0.01)
+            wrap_scale = math.exp(-(d_target + 0.1) * 0.01)
             swirl_force = wrap_strength * t * wrap_scale
             force_x += swirl_dir[0] * swirl_force
             force_y += swirl_dir[1] * swirl_force
