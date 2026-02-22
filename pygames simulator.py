@@ -5,7 +5,7 @@ import numpy as np
 pygame.init()
 WIDTH, HEIGHT = 900, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("General Omniwheel Strategy Simulator")
+pygame.display.set_caption("Omniwheel Strategy Simulator with Ball Physics")
 clock = pygame.time.Clock()
 
 # ------------------------------------------------------------
@@ -17,7 +17,6 @@ ROBOT_RADIUS = 18
 ENEMY_RADIUS = 20
 BALL_RADIUS = 10
 
-
 # ------------------------------------------------------------
 # WORLD OBJECTS
 # ------------------------------------------------------------
@@ -26,6 +25,10 @@ robot_heading = 0.0
 robot_vel = np.array([0.0, 0.0], float)
 
 ball_pos = np.array([WIDTH/2 + 150, HEIGHT/2], float)
+ball_vel = np.array([0.0, 0.0], float)
+ball_mass = 1.0
+ball_friction = 0.98
+ball_max_speed = 600.0  # pixels/sec
 
 enemies = [
     np.array([300, 250], float),
@@ -34,7 +37,6 @@ enemies = [
 
 dragging_ball = False
 dragging_enemy = None
-
 
 # ------------------------------------------------------------
 # HELPERS
@@ -45,37 +47,32 @@ def wrap_angle(a):
 
 
 def omni_to_velocity(m1, m2, m3, m4):
-    """
-    Converts 4 omniwheel speeds into robot translation (vx, vy) and rotation.
-    Simple + readable model, not physics-accurate but good for simulation.
-    """
+    """Convert 4 omniwheel speeds into vx, vy, rotation."""
     vx = (m1 + m2 + m3 + m4) * 0.25
     vy = (-m1 + m2 + m3 - m4) * 0.25
     rot = (-m1 + m2 - m3 + m4) * 0.25
     return vx, vy, rot
 
-# ------------------------------------------------------------
-# MAIN LOGIC BLOCK (FLUID MOTION)
-# ------------------------------------------------------------
+
 def compute_motor_commands(robot_pos, robot_heading, ball_pos, enemies):
-    # -----------------------------------------------------
+    # ------------------------
     # TUNABLE CONSTANTS
-    # -----------------------------------------------------
+    # ------------------------
     attract_strength = 1.5
-    avoid_strength   = 5
+    avoid_strength   = 10
     border_strength  = 2.0
     wrap_strength    = 2.0
     heading_keep_gain = 2.0
-    BAD = 0.4   # misalignment threshold
+    BAD = 0.5  # misalignment threshold
 
     to_ball = ball_pos - robot_pos
     d = np.linalg.norm(to_ball)
-    to_ball /= d
+    if d > 1e-6:
+        to_ball /= d
 
-    DESIRED_HEADING = 0.0           # always face this way
-    GOAL_DIR = np.array([1.0, 0.0]) # ball should move right
+    DESIRED_HEADING = 0.0
+    GOAL_DIR = np.array([1.0, 0.0])
 
-    # angle alignment with scoring direction
     alignment = to_ball @ GOAL_DIR
 
     robot_x, robot_y = robot_pos
@@ -84,94 +81,63 @@ def compute_motor_commands(robot_pos, robot_heading, ball_pos, enemies):
     force_y = 0.0
 
     # ------------------------
-    # 1. BEHIND-BALL TARGET
+    # Behind-ball target
     # ------------------------
-    if alignment > 0.99:
-        OFFSET = 0
-    else:
-        OFFSET = 50  # tune this
-
+    OFFSET = 50 if alignment < 0.95 else 0
     shadow_point = ball_pos - GOAL_DIR * OFFSET
-
     to_target = shadow_point - robot_pos
-    d = np.linalg.norm(to_target)
-
-    if d > 1e-6:
-        to_target /= d
+    d_target = np.linalg.norm(to_target)
+    if d_target > 1e-6:
+        to_target /= d_target
         force_x += to_target[0] * attract_strength
         force_y += to_target[1] * attract_strength
 
-    # -----------------------------------------------------
-    # 2. CONDITIONAL SWIRL BASED ON APPROACH ANGLE (correct)
-    # -----------------------------------------------------
-    if d > 1e-6:
-        # alignment:
-        #   1.0 = perfect
-        #   0.0 = sideways
-        #  -1.0 = backwards
-
-        # swirl direction (perpendicular)
-        if ball_pos[1] - robot_pos[1] > 0:
-            swirl_x = -to_ball[1]
-            swirl_y =  to_ball[0]
-        else:
-            swirl_x = to_ball[1]
-            swirl_y = -to_ball[0]
-
+    # ------------------------
+    # Conditional swirl
+    # ------------------------
+    if d_target > 1e-6:
+        swirl_dir = np.array([-to_ball[1], to_ball[0]]) if ball_pos[1] - robot_pos[1] > 0 else np.array([to_ball[1], -to_ball[0]])
         if alignment < BAD:
-            # how bad is our angle?
-            t = (BAD - alignment) / (BAD + 1.0)   # maps into 0..1
-            t = np.clip(t, 0, 1)
-
-            wrap_scale = math.exp(-(d - 0.5) * 0.01)
-
+            t = np.clip((BAD - alignment) / (BAD + 1.0), 0, 1)
+            wrap_scale = math.exp(-(d_target - 0.3) * 0.01)
             swirl_force = wrap_strength * t * wrap_scale
-            force_x += swirl_x * swirl_force
-            force_y += swirl_y * swirl_force
+            force_x += swirl_dir[0] * swirl_force
+            force_y += swirl_dir[1] * swirl_force
 
-    # -----------------------------------------------------
-    # 3. Enemy push-away
-    # -----------------------------------------------------
+    # ------------------------
+    # Enemy push-away
+    # ------------------------
     for ex, ey in enemies:
         dx = robot_x - ex
         dy = robot_y - ey
-        d = math.hypot(dx, dy)
-
-        if d < 1e-6:
+        dist = math.hypot(dx, dy)
+        if dist < 1e-6:
             continue
-
-        strength = avoid_strength / max(d, 1)
-        dx /= d
-        dy /= d
-
+        strength = avoid_strength / max(dist, 1)
+        dx /= dist
+        dy /= dist
         force_x += dx * strength
         force_y += dy * strength
 
-    # -----------------------------------------------------
-    # 4. Border force
-    # -----------------------------------------------------
+    # ------------------------
+    # Border force
+    # ------------------------
     margin = 40
+    if robot_x < margin: force_x += border_strength
+    if robot_x > field_w - margin: force_x -= border_strength
+    if robot_y < margin: force_y += border_strength
+    if robot_y > field_h - margin: force_y -= border_strength
 
-    if robot_x < margin:
-        force_x += border_strength
-    if robot_x > field_w - margin:
-        force_x -= border_strength
-    if robot_y < margin:
-        force_y += border_strength
-    if robot_y > field_h - margin:
-        force_y -= border_strength
-
-    # -----------------------------------------------------
-    # 5. Rotation — keep fixed facing direction
-    # -----------------------------------------------------
+    # ------------------------
+    # Rotation
+    # ------------------------
     heading_error = wrap_angle(DESIRED_HEADING - robot_heading)
     rot = heading_error * heading_keep_gain
 
-    # -----------------------------------------------------
-    # 6. Convert to omniwheel speeds
-    # -----------------------------------------------------
+    # ------------------------
+    # Convert to wheel speeds
+    # ------------------------
     vx, vy = force_x, force_y
-
     m1 =  vx - vy - rot
     m2 =  vx + vy + rot
     m3 =  vx + vy - rot
@@ -188,11 +154,12 @@ running = True
 while running:
     dt = clock.tick(60) / 1000
 
+    # ------------------------
+    # Events & dragging
+    # ------------------------
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
-
-        # drag the ball/enemy
         if event.type == pygame.MOUSEBUTTONDOWN:
             mx, my = pygame.mouse.get_pos()
             if np.linalg.norm(ball_pos - [mx, my]) < BALL_RADIUS:
@@ -200,43 +167,78 @@ while running:
             for i, e in enumerate(enemies):
                 if np.linalg.norm(e - [mx, my]) < ENEMY_RADIUS:
                     dragging_enemy = i
-
         if event.type == pygame.MOUSEBUTTONUP:
             dragging_ball = False
             dragging_enemy = None
 
     if dragging_ball:
         ball_pos = np.array(pygame.mouse.get_pos(), float)
+        ball_vel[:] = 0
     if dragging_enemy is not None:
         enemies[dragging_enemy] = np.array(pygame.mouse.get_pos(), float)
 
-    # run strategy
+    # ------------------------
+    # Strategy -> motor commands
+    # ------------------------
     m1, m2, m3, m4 = compute_motor_commands(robot_pos, robot_heading, ball_pos, enemies)
-
-    # convert wheels -> motion
     vx, vy, rot = omni_to_velocity(m1, m2, m3, m4)
     robot_vel = np.array([vx, vy])
-
     robot_pos += robot_vel * 150 * dt
     robot_heading += rot * 2.0 * dt
 
-    # --------------------------------------------------------
+    # ------------------------
+    # Ball physics
+    # ------------------------
+    if not dragging_ball:
+        # push from robot if touching
+        to_ball = ball_pos - robot_pos
+        dist = np.linalg.norm(to_ball)
+        if dist < ROBOT_RADIUS + BALL_RADIUS and dist > 1e-6:
+            push_strength = 2000.0
+            ball_vel += (to_ball / dist) * push_strength * dt
+
+        # update position
+        ball_pos += ball_vel * dt
+        ball_vel *= ball_friction
+
+        # limit speed
+        speed = np.linalg.norm(ball_vel)
+        if speed > ball_max_speed:
+            ball_vel = (ball_vel / speed) * ball_max_speed
+
+        # border collision
+        if ball_pos[0] < BALL_RADIUS:
+            ball_pos[0] = BALL_RADIUS
+            ball_vel[0] *= -0.5
+        if ball_pos[0] > WIDTH - BALL_RADIUS:
+            ball_pos[0] = WIDTH - BALL_RADIUS
+            ball_vel[0] *= -0.5
+        if ball_pos[1] < BALL_RADIUS:
+            ball_pos[1] = BALL_RADIUS
+            ball_vel[1] *= -0.5
+        if ball_pos[1] > HEIGHT - BALL_RADIUS:
+            ball_pos[1] = HEIGHT - BALL_RADIUS
+            ball_vel[1] *= -0.5
+
+    # ------------------------
     # DRAW EVERYTHING
-    # --------------------------------------------------------
+    # ------------------------
     screen.fill((30, 30, 30))
 
+    # ball
     pygame.draw.circle(screen, (255, 145, 0), ball_pos.astype(int), BALL_RADIUS)
 
+    # enemies
     for e in enemies:
         pygame.draw.circle(screen, (255, 50, 50), e.astype(int), ENEMY_RADIUS)
 
+    # robot
     pygame.draw.circle(screen, (100, 200, 255), robot_pos.astype(int), ROBOT_RADIUS)
-
-    # heading line
     hx = robot_pos[0] + math.cos(robot_heading) * ROBOT_RADIUS
     hy = robot_pos[1] + math.sin(robot_heading) * ROBOT_RADIUS
     pygame.draw.line(screen, (200, 200, 255), robot_pos, (hx, hy), 3)
 
+    # debug text
     font = pygame.font.SysFont("Arial", 18)
     txt = font.render(f"m1={m1:.2f}  m2={m2:.2f}  m3={m3:.2f}  m4={m4:.2f}", True, (220, 220, 220))
     screen.blit(txt, (10, 10))
