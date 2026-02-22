@@ -33,8 +33,6 @@ class FrameGrabber(threading.Thread):
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-            time.sleep(0.02)
-
 class DetectionThread(threading.Thread):
     def __init__(self, grabber):
         super().__init__()
