@@ -89,7 +89,7 @@ class DetectionThread(threading.Thread):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
-                        if color=="black": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,165,255), 2)
+                        if color=="black": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,0,0), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
                         if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
 
