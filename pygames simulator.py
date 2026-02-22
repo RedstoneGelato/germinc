@@ -54,77 +54,123 @@ def omni_to_velocity(m1, m2, m3, m4):
     rot = (-m1 + m2 - m3 + m4) * 0.25
     return vx, vy, rot
 
-
 # ------------------------------------------------------------
 # MAIN LOGIC BLOCK (FLUID MOTION)
 # ------------------------------------------------------------
 def compute_motor_commands(robot_pos, robot_heading, ball_pos, enemies):
+    # -----------------------------------------------------
+    # TUNABLE CONSTANTS
+    # -----------------------------------------------------
+    attract_strength = 1.5
+    avoid_strength   = 5
+    border_strength  = 2.0
+    wrap_strength    = 2.0
+    heading_keep_gain = 2.0
+    BAD = 0.4   # misalignment threshold
+
+    to_ball = ball_pos - robot_pos
+    d = np.linalg.norm(to_ball)
+    to_ball /= d
+
+    DESIRED_HEADING = 0.0           # always face this way
+    GOAL_DIR = np.array([1.0, 0.0]) # ball should move right
+
+    # angle alignment with scoring direction
+    alignment = to_ball @ GOAL_DIR
+
     robot_x, robot_y = robot_pos
+    field_w, field_h = field_size
+    force_x = 0.0
+    force_y = 0.0
 
-    # FIELD PARAMS ---------------------------------------
-    attract_strength = 2.0
-    avoid_strength = 3.0
-    swirl_strength = 20.0     # <-- this is what you were missing!!
-    field_strength = 1.2
-    rotation_gain = 5.0
-    margin = 40
+    # ------------------------
+    # 1. BEHIND-BALL TARGET
+    # ------------------------
+    if alignment > 0.99:
+        OFFSET = 0
+    else:
+        OFFSET = 50  # tune this
 
-    force_x = 0
-    force_y = 0
+    shadow_point = ball_pos - GOAL_DIR * OFFSET
 
-    # 1) MAIN ATTRACTION TO BALL -------------------------
-    bx, by = ball_pos
-    dx = bx - robot_x
-    dy = by - robot_y
-    dist = math.hypot(dx, dy)
-    if dist > 1e-6:
-        dx /= dist
-        dy /= dist
-    force_x += dx * attract_strength
-    force_y += dy * attract_strength
+    to_target = shadow_point - robot_pos
+    d = np.linalg.norm(to_target)
 
-    # 2) ENEMY REPULSION + SWIRL -------------------------
+    if d > 1e-6:
+        to_target /= d
+        force_x += to_target[0] * attract_strength
+        force_y += to_target[1] * attract_strength
+
+    # -----------------------------------------------------
+    # 2. CONDITIONAL SWIRL BASED ON APPROACH ANGLE (correct)
+    # -----------------------------------------------------
+    if d > 1e-6:
+        # alignment:
+        #   1.0 = perfect
+        #   0.0 = sideways
+        #  -1.0 = backwards
+
+        # swirl direction (perpendicular)
+        if ball_pos[1] - robot_pos[1] > 0:
+            swirl_x = -to_ball[1]
+            swirl_y =  to_ball[0]
+        else:
+            swirl_x = to_ball[1]
+            swirl_y = -to_ball[0]
+
+        if alignment < BAD:
+            # how bad is our angle?
+            t = (BAD - alignment) / (BAD + 1.0)   # maps into 0..1
+            t = np.clip(t, 0, 1)
+
+            wrap_scale = math.exp(-(d - 0.5) * 0.01)
+
+            swirl_force = wrap_strength * t * wrap_scale
+            force_x += swirl_x * swirl_force
+            force_y += swirl_y * swirl_force
+
+    # -----------------------------------------------------
+    # 3. Enemy push-away
+    # -----------------------------------------------------
     for ex, ey in enemies:
         dx = robot_x - ex
         dy = robot_y - ey
         d = math.hypot(dx, dy)
+
         if d < 1e-6:
             continue
 
-        # radial repulsion
-        rep = avoid_strength / max(d, 1)
-        force_x += (dx/d) * rep
-        force_y += (dy/d) * rep
+        strength = avoid_strength / max(d, 1)
+        dx /= d
+        dy /= d
 
-        # tangential swirl (90° rotated vector)
-        tx = -dy / d
-        ty =  dx / d
+        force_x += dx * strength
+        force_y += dy * strength
 
-        swirl = swirl_strength / max(d, 1)
-        force_x += tx * swirl
-        force_y += ty * swirl
+    # -----------------------------------------------------
+    # 4. Border force
+    # -----------------------------------------------------
+    margin = 40
 
-    # 3) WALL FORCE --------------------------------------
-    field_w, field_h = field_size
     if robot_x < margin:
-        force_x += field_strength
+        force_x += border_strength
     if robot_x > field_w - margin:
-        force_x -= field_strength
+        force_x -= border_strength
     if robot_y < margin:
-        force_y += field_strength
+        force_y += border_strength
     if robot_y > field_h - margin:
-        force_y -= field_strength
+        force_y -= border_strength
 
-    # 4) ROTATION TO FACE BALL ---------------------------
-    aim_x = ball_pos[0] - robot_x
-    aim_y = ball_pos[1] - robot_y
-    target_angle = math.atan2(aim_y, aim_x)
-    angle_error = wrap_angle(target_angle - robot_heading)
-    rot = angle_error * rotation_gain
+    # -----------------------------------------------------
+    # 5. Rotation — keep fixed facing direction
+    # -----------------------------------------------------
+    heading_error = wrap_angle(DESIRED_HEADING - robot_heading)
+    rot = heading_error * heading_keep_gain
 
-    # 5) OMNIWHEEL KINEMATICS ----------------------------
-    vx = force_x
-    vy = force_y
+    # -----------------------------------------------------
+    # 6. Convert to omniwheel speeds
+    # -----------------------------------------------------
+    vx, vy = force_x, force_y
 
     m1 =  vx - vy - rot
     m2 =  vx + vy + rot
