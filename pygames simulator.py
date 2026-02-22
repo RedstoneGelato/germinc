@@ -71,7 +71,7 @@ def compute_motor_commands(robot_pos, robot_heading, ball_pos, enemies):
         to_ball /= d
 
     DESIRED_HEADING = 0.0
-    GOAL_DIR = np.array([1.0, 0.0])
+    GOAL_DIR = np.array([0.0, -1.0])
 
     alignment = to_ball @ GOAL_DIR
 
