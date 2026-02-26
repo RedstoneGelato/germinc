@@ -119,6 +119,7 @@ class BlackBallDetection(threading.Thread):
         self.grabber = grabber
         self.ball = [0,0,0,0]  # x,y,w,h
         self.kernel = np.ones((3,3), np.uint8)
+        self.debug_frame = None
 
     def run(self):
         while self.running:
@@ -131,6 +132,7 @@ class BlackBallDetection(threading.Thread):
             # threshold for dark stuff
             mask = cv2.threshold(v, 40, 255, cv2.THRESH_BINARY_INV)[1]
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
+            debug = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
             contours,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -157,6 +159,7 @@ class BlackBallDetection(threading.Thread):
             if best is not None:
                 x,y,w,h = cv2.boundingRect(best)
                 self.ball = [x,y,w,h]
+                cv2.rectangle(debug, (x,y), (x+w,y+h), (0,255,0), 2)
             else:
                 self.ball = [0,0,0,0]
 
@@ -248,7 +251,7 @@ def main():
 
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
-            cv2.imshow("black", black.v)
+            cv2.imshow("black", black.debug)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 grabber.running = False
                 camera.running = False
