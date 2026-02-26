@@ -42,7 +42,7 @@ class DetectionThread(threading.Thread):
 
         self.blue = [0,0,0,0]
         self.yellow = [0,0,0,0]
-        self.green = [0,0,0,0]
+        self.enemies = []
         self.frame = None
 
         # HSV ranges
@@ -66,7 +66,7 @@ class DetectionThread(threading.Thread):
             # reset
             self.blue   = [0,0,0,0]
             self.yellow = [0,0,0,0]
-            self.green  = [0,0,0,0]
+            self.enemies  = []
 
             masks = {
                 "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
@@ -76,15 +76,23 @@ class DetectionThread(threading.Thread):
 
             self.blue   = self._merge_blobs(masks["blue"])
             self.yellow = self._merge_blobs(masks["yellow"])
-            self.green  = self._merge_blobs(masks["green"])
+
+            inv_green = cv2.bitwise_not(masks["green"])
+            inv_green = cv2.bitwise_and(inv_green, cv2.bitwise_not(masks["blue"]))
+            inv_green = cv2.bitwise_and(inv_green, cv2.bitwise_not(masks["yellow"]))
+            inv_green = cv2.morphologyEx(inv_green, cv2.MORPH_OPEN, self.kernel)
+            inv_green = cv2.morphologyEx(inv_green, cv2.MORPH_CLOSE, self.kernel)
+            self.enemies = self.get_enemy_blobs(inv_green)
 
             if frame is not None:
-                for color, bbox in zip(["blue","yellow","green"], [self.blue,self.yellow,self.green]):
+                for color, bbox in zip(["blue","yellow"], [self.blue,self.yellow]):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
-                        if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
+
+                for x, y, w, h in self.enemies:
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)  # red for enemies
 
             self.frame = frame
 
@@ -106,6 +114,22 @@ class DetectionThread(threading.Thread):
             return [x_min, y_min, x_max - x_min, y_max - y_min]
         else:
             return [0,0,0,0]
+
+    def get_enemy_blobs(self, mask, min_area=500):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        blobs = []
+
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < min_area:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            if h > 0 and h < 60 and w < 60:
+                if y < 10 or y + h > 230:   # too close to edges
+                    continue
+            blobs.append([x, y, w, h])
+
+        return blobs
 
 class MotorThread(threading.Thread):
     def __init__(self):
