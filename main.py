@@ -132,7 +132,7 @@ class BlackBallDetection(threading.Thread):
             # threshold for dark stuff
             mask = cv2.threshold(v, 40, 255, cv2.THRESH_BINARY_INV)[1]
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-            debug_frame = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            self.debug_frame = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
             contours,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
