@@ -50,7 +50,7 @@ class DetectionThread(threading.Thread):
         self.lower_blue   = np.array([90, 110, 100])
         self.upper_blue   = np.array([110, 255, 255])
         self.lower_black = np.array([0, 0, 0])
-        self.upper_black = np.array([180, 255, 25])
+        self.upper_black = np.array([180, 255, 70])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
         self.lower_green  = np.array([60, 100, 75])
@@ -80,7 +80,7 @@ class DetectionThread(threading.Thread):
             }
 
             self.blue   = self._merge_blobs(masks["blue"])
-            self.black = self._merge_blobs(masks["black"])
+            self.black = self._find_ball_blob(masks["black"])
             self.yellow = self._merge_blobs(masks["yellow"])
             self.green  = self._merge_blobs(masks["green"])
 
@@ -89,7 +89,7 @@ class DetectionThread(threading.Thread):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
-                        if color=="black": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,0,0), 2)
+                        if color=="black": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,0,255), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
                         if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
 
@@ -111,6 +111,37 @@ class DetectionThread(threading.Thread):
 
         if x_min < x_max and y_min < y_max:
             return [x_min, y_min, x_max - x_min, y_max - y_min]
+        else:
+            return [0,0,0,0]
+
+    def _find_ball_blob(self, mask):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        best = None
+        best_area = 0
+
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < 200:
+                continue
+
+            peri = cv2.arcLength(c, True)
+            if peri == 0:
+                continue
+
+            circularity = 4 * math.pi * area / (peri * peri)
+
+            # Only the ball must be round-ish
+            if circularity < 0.35:
+                continue
+
+            if area > best_area:
+                best_area = area
+                best = c
+
+        if best is not None:
+            x, y, w, h = cv2.boundingRect(best)
+            return [x, y, w, h]
         else:
             return [0,0,0,0]
 
