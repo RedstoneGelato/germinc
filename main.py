@@ -50,7 +50,7 @@ class DetectionThread(threading.Thread):
         self.lower_blue   = np.array([90, 110, 100])
         self.upper_blue   = np.array([110, 255, 255])
         self.lower_black = np.array([0, 0, 0])
-        self.upper_black = np.array([180, 255, 25])
+        self.upper_black = np.array([180, 255, 50])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
         self.lower_green  = np.array([60, 100, 75])
