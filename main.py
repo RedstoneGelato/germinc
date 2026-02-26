@@ -159,7 +159,7 @@ class BlackBallDetection(threading.Thread):
             if best is not None:
                 x,y,w,h = cv2.boundingRect(best)
                 self.ball = [x,y,w,h]
-                cv2.rectangle(debug, (x,y), (x+w,y+h), (0,255,0), 2)
+                cv2.rectangle(self.debug_frame, (x,y), (x+w,y+h), (0,255,0), 2)
             else:
                 self.ball = [0,0,0,0]
 
@@ -251,12 +251,15 @@ def main():
 
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
+
+        if black.debug_frame is not None:
             cv2.imshow("black", black.debug_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                grabber.running = False
-                camera.running = False
-                motors.running = False
-                break
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            grabber.running = False
+            camera.running = False
+            motors.running = False
+            break
 
     grabber.cap.stop()
     grabber.join()
