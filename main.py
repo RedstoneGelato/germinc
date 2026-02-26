@@ -47,10 +47,10 @@ class DetectionThread(threading.Thread):
         self.frame = None
 
         # HSV ranges
-        self.lower_blue   = np.array([90, 110, 100])
+        self.lower_blue   = np.array([90, 200, 100])
         self.upper_blue   = np.array([110, 255, 255])
-        self.lower_black = np.array([0, 0, 0])
-        self.upper_black = np.array([180, 255, 70])
+        self.lower_black = np.array([0, 0, 10])
+        self.upper_black = np.array([180, 180, 180])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
         self.lower_green  = np.array([60, 100, 75])
@@ -122,7 +122,7 @@ class DetectionThread(threading.Thread):
 
         for c in contours:
             area = cv2.contourArea(c)
-            if area < 200:
+            if area < 300 or area > 600:
                 continue
 
             peri = cv2.arcLength(c, True)
@@ -132,7 +132,7 @@ class DetectionThread(threading.Thread):
             circularity = 4 * math.pi * area / (peri * peri)
 
             # Only the ball must be round-ish
-            if circularity < 0.35:
+            if circularity < 0.3:
                 continue
 
             if area > best_area:
