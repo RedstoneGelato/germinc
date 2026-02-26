@@ -32,6 +32,7 @@ class FrameGrabber(threading.Thread):
             frame = self.cap.capture_array("main")
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            time.sleep(0.001)
 
 class DetectionThread(threading.Thread):
     def __init__(self, grabber):
@@ -65,7 +66,6 @@ class DetectionThread(threading.Thread):
 
             # reset
             self.blue   = [0,0,0,0]
-            self.black = [0,0,0,0]
             self.yellow = [0,0,0,0]
             self.green  = [0,0,0,0]
 
@@ -119,6 +119,8 @@ class BlackBallDetection(threading.Thread):
         self.grabber = grabber
         self.ball = [0,0,0,0]  # x,y,w,h
         self.kernel = np.ones((3,3), np.uint8)
+        self.lower_black = np.array([0, 0, 0])
+        self.upper_black = np.array([180, 80, 20])
         self.debug_frame = None
 
     def run(self):
@@ -130,8 +132,9 @@ class BlackBallDetection(threading.Thread):
             v = hsv[:,:,2]
 
             # threshold for dark stuff
-            mask = cv2.threshold(v, 100, 255, cv2.THRESH_BINARY_INV)[1]
+            mask = cv2.inRange(hsv, self.lower_black, self.upper_black)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
             self.debug_frame = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
             contours,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
