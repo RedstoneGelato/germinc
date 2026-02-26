@@ -32,7 +32,6 @@ class FrameGrabber(threading.Thread):
             frame = self.cap.capture_array("main")
             self.frame = frame
             self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            time.sleep(0.001)
 
 class DetectionThread(threading.Thread):
     def __init__(self, grabber):
@@ -42,13 +41,16 @@ class DetectionThread(threading.Thread):
         self.grabber = grabber
 
         self.blue = [0,0,0,0]
+        self.black = [0,0,0,0]
         self.yellow = [0,0,0,0]
         self.green = [0,0,0,0]
         self.frame = None
 
         # HSV ranges
-        self.lower_blue   = np.array([90, 110, 150])
+        self.lower_blue   = np.array([90, 110, 100])
         self.upper_blue   = np.array([110, 255, 255])
+        self.lower_black = np.array([0, 0, 0])
+        self.upper_black = np.array([180, 255, 25])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
         self.lower_green  = np.array([60, 100, 75])
@@ -66,24 +68,28 @@ class DetectionThread(threading.Thread):
 
             # reset
             self.blue   = [0,0,0,0]
+            self.black = [0,0,0,0]
             self.yellow = [0,0,0,0]
             self.green  = [0,0,0,0]
 
             masks = {
                 "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
+                "black": cv2.morphologyEx(cv2.inRange(hsv, self.lower_black, self.upper_black), cv2.MORPH_OPEN, self.kernel),
                 "yellow": cv2.morphologyEx(cv2.inRange(hsv, self.lower_yellow, self.upper_yellow), cv2.MORPH_OPEN, self.kernel),
                 "green":  cv2.morphologyEx(cv2.inRange(hsv, self.lower_green, self.upper_green), cv2.MORPH_OPEN, self.kernel)
             }
 
             self.blue   = self._merge_blobs(masks["blue"])
+            self.black = self._merge_blobs(masks["black"])
             self.yellow = self._merge_blobs(masks["yellow"])
             self.green  = self._merge_blobs(masks["green"])
 
             if frame is not None:
-                for color, bbox in zip(["blue","yellow","green"], [self.blue,self.yellow,self.green]):
+                for color, bbox in zip(["blue","black","yellow","green"], [self.blue,self.black,self.yellow,self.green]):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
+                        if color=="black": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,0,0), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
                         if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
 
@@ -107,64 +113,6 @@ class DetectionThread(threading.Thread):
             return [x_min, y_min, x_max - x_min, y_max - y_min]
         else:
             return [0,0,0,0]
-        
-# ------------------------------
-# Black ball detection (brightness + circularity)
-# ------------------------------
-class BlackBallDetection(threading.Thread):
-    def __init__(self, grabber):
-        super().__init__()
-        self.daemon = True
-        self.running = True
-        self.grabber = grabber
-        self.ball = [0,0,0,0]  # x,y,w,h
-        self.kernel = np.ones((3,3), np.uint8)
-        self.lower_black = np.array([0, 0, 0])
-        self.upper_black = np.array([180, 80, 20])
-        self.debug_frame = None
-
-    def run(self):
-        while self.running:
-            if self.grabber.hsv is None:
-                continue
-
-            hsv = self.grabber.hsv.copy()
-            v = hsv[:,:,2]
-
-            # threshold for dark stuff
-            mask = cv2.inRange(hsv, self.lower_black, self.upper_black)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
-            self.debug_frame = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-
-            contours,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            best = None
-            best_area = 0
-
-            for c in contours:
-                area = cv2.contourArea(c)
-                if area < 300:
-                    continue
-
-                peri = cv2.arcLength(c, True)
-                if peri == 0:
-                    continue
-                circ = 4*math.pi*area/(peri*peri)
-
-                if circ < 0.4:
-                    continue  # not ball-ish
-
-                if area > best_area:
-                    best_area = area
-                    best = c
-
-            if best is not None:
-                x,y,w,h = cv2.boundingRect(best)
-                self.ball = [x,y,w,h]
-                cv2.rectangle(self.debug_frame, (x,y), (x+w,y+h), (0,255,0), 2)
-            else:
-                self.ball = [0,0,0,0]
 
 class MotorThread(threading.Thread):
     def __init__(self):
@@ -225,16 +173,12 @@ def main():
     camera = DetectionThread(grabber)
     camera.start()
 
-    black = BlackBallDetection(grabber)
-    black.start()
-
     motors = MotorThread()
     motors.start()
 
     while True:
         bot_position = [160, 70]
-        bx,by,bw,bh = black.ball
-        ball_position = [bx + bw//2, by + bh]  # centre-bottom of blob
+        ball_position = [camera.black[0] + (camera.black[2] // 2),camera.black[1] + camera.black[3]] # x, y
         angle = math.atan2(ball_position[1] - bot_position[1], ball_position[0] - bot_position[0])
 
         if bot_position[1] - ball_position[1] < 10 and abs(bot_position[0] - ball_position[0]) < 10: #activate dribbler and try to score
@@ -254,15 +198,11 @@ def main():
 
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
-
-        if black.debug_frame is not None:
-            cv2.imshow("black", black.debug_frame)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            grabber.running = False
-            camera.running = False
-            motors.running = False
-            break
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                grabber.running = False
+                camera.running = False
+                motors.running = False
+                break
 
     grabber.cap.stop()
     grabber.join()
