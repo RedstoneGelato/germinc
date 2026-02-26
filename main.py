@@ -41,7 +41,6 @@ class DetectionThread(threading.Thread):
         self.grabber = grabber
 
         self.blue = [0,0,0,0]
-        self.black = [0,0,0,0]
         self.yellow = [0,0,0,0]
         self.green = [0,0,0,0]
         self.frame = None
@@ -49,8 +48,6 @@ class DetectionThread(threading.Thread):
         # HSV ranges
         self.lower_blue   = np.array([90, 200, 100])
         self.upper_blue   = np.array([110, 255, 255])
-        self.lower_black = np.array([0, 0, 10])
-        self.upper_black = np.array([180, 180, 180])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
         self.lower_green  = np.array([60, 100, 75])
@@ -68,28 +65,24 @@ class DetectionThread(threading.Thread):
 
             # reset
             self.blue   = [0,0,0,0]
-            self.black = [0,0,0,0]
             self.yellow = [0,0,0,0]
             self.green  = [0,0,0,0]
 
             masks = {
                 "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
-                "black": cv2.morphologyEx(cv2.inRange(hsv, self.lower_black, self.upper_black), cv2.MORPH_OPEN, self.kernel),
                 "yellow": cv2.morphologyEx(cv2.inRange(hsv, self.lower_yellow, self.upper_yellow), cv2.MORPH_OPEN, self.kernel),
                 "green":  cv2.morphologyEx(cv2.inRange(hsv, self.lower_green, self.upper_green), cv2.MORPH_OPEN, self.kernel)
             }
 
             self.blue   = self._merge_blobs(masks["blue"])
-            self.black = self._find_ball_blob(masks["black"])
             self.yellow = self._merge_blobs(masks["yellow"])
             self.green  = self._merge_blobs(masks["green"])
 
             if frame is not None:
-                for color, bbox in zip(["blue","black","yellow","green"], [self.blue,self.black,self.yellow,self.green]):
+                for color, bbox in zip(["blue","yellow","green"], [self.blue,self.yellow,self.green]):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
-                        if color=="black": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,0,255), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
                         if color=="green":  cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
 
@@ -111,37 +104,6 @@ class DetectionThread(threading.Thread):
 
         if x_min < x_max and y_min < y_max:
             return [x_min, y_min, x_max - x_min, y_max - y_min]
-        else:
-            return [0,0,0,0]
-
-    def _find_ball_blob(self, mask):
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        best = None
-        best_area = 0
-
-        for c in contours:
-            area = cv2.contourArea(c)
-            if area < 300 or area > 600:
-                continue
-
-            peri = cv2.arcLength(c, True)
-            if peri == 0:
-                continue
-
-            circularity = 4 * math.pi * area / (peri * peri)
-
-            # Only the ball must be round-ish
-            if circularity < 0.3:
-                continue
-
-            if area > best_area:
-                best_area = area
-                best = c
-
-        if best is not None:
-            x, y, w, h = cv2.boundingRect(best)
-            return [x, y, w, h]
         else:
             return [0,0,0,0]
 
@@ -208,24 +170,24 @@ def main():
     motors.start()
 
     while True:
-        bot_position = [160, 70]
-        ball_position = [camera.black[0] + (camera.black[2] // 2),camera.black[1] + camera.black[3]] # x, y
-        angle = math.atan2(ball_position[1] - bot_position[1], ball_position[0] - bot_position[0])
+        # bot_position = [160, 70]
+        # ball_position = [camera.black[0] + (camera.black[2] // 2),camera.black[1] + camera.black[3]] # x, y
+        # angle = math.atan2(ball_position[1] - bot_position[1], ball_position[0] - bot_position[0])
 
-        if bot_position[1] - ball_position[1] < 10 and abs(bot_position[0] - ball_position[0]) < 10: #activate dribbler and try to score
-            print("0")
-            pass
+        # if bot_position[1] - ball_position[1] < 10 and abs(bot_position[0] - ball_position[0]) < 10: #activate dribbler and try to score
+        #     print("0")
+        #     pass
 
-        elif ball_position[1] - bot_position[1] < 50: # pathfind to the ball
-            print("1")
-            motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4 = SpeedUp(math.sin(angle - math.pi/4), math.sin(angle - 3*math.pi/4), math.sin(angle - 5*math.pi/4), math.sin(angle - 7*math.pi/4), motors.speedlimit)
+        # elif ball_position[1] - bot_position[1] < 50: # pathfind to the ball
+        #     print("1")
+        #     motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4 = SpeedUp(math.sin(angle - math.pi/4), math.sin(angle - 3*math.pi/4), math.sin(angle - 5*math.pi/4), math.sin(angle - 7*math.pi/4), motors.speedlimit)
 
-        else: # back up
-            print("2")
-            motors.motorspeed1 = motors.speedlimit * -1
-            motors.motorspeed2 = motors.speedlimit * -1
-            motors.motorspeed3 = motors.speedlimit * -1
-            motors.motorspeed4 = motors.speedlimit * -1
+        # else: # back up
+        #     print("2")
+        #     motors.motorspeed1 = motors.speedlimit * -1
+        #     motors.motorspeed2 = motors.speedlimit * -1
+        #     motors.motorspeed3 = motors.speedlimit * -1
+        #     motors.motorspeed4 = motors.speedlimit * -1
 
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
