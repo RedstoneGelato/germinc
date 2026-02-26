@@ -55,10 +55,10 @@ class DetectionThread(threading.Thread):
         self.frame  = None
 
         # HSV ranges (blue/yellow/green only)
-        self.lower_blue   = np.array([110, 125, 100])
-        self.upper_blue   = np.array([130, 180, 160])
-        self.lower_yellow = np.array([20, 180, 100])
-        self.upper_yellow = np.array([40, 255, 160])
+        self.lower_blue   = np.array([90, 110, 100])
+        self.upper_blue   = np.array([110, 255, 255])
+        self.lower_yellow = np.array([0, 180, 180])
+        self.upper_yellow = np.array([40, 255, 255])
         self.lower_green  = np.array([60, 100, 75])
         self.upper_green  = np.array([80, 255, 125])
 
@@ -93,7 +93,7 @@ class DetectionThread(threading.Thread):
 
         for c in contours:
             area = cv2.contourArea(c)
-            if area < 300 or area > 10000:
+            if area < 300:
                 continue
             x,y,w,h = cv2.boundingRect(c)
             x_min = min(x_min, x)
@@ -119,7 +119,7 @@ class BlackDetectionThread(threading.Thread):
         self.frame = None
         self.black = [0,0,0,0]
 
-        self.dark_threshold = 60   # threshold
+        self.dark_threshold = 20   # threshold
         self.kernel = np.ones((5,5), np.uint8)
 
     def run(self):
@@ -149,7 +149,7 @@ class BlackDetectionThread(threading.Thread):
 
         for c in contours:
             area = cv2.contourArea(c)
-            if area < 300 or area > 10000:
+            if area < 300:
                 continue
 
             x,y,w,h = cv2.boundingRect(c)
