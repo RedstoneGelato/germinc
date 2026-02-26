@@ -46,12 +46,12 @@ class DetectionThread(threading.Thread):
         self.frame = None
 
         # HSV ranges
-        self.lower_blue   = np.array([90, 110, 100])
+        self.lower_blue   = np.array([90, 110, 150])
         self.upper_blue   = np.array([110, 255, 255])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
         self.lower_green  = np.array([60, 100, 75])
-        self.upper_green  = np.array([80, 255, 125])
+        self.upper_green  = np.array([90, 255, 125])
 
         self.kernel = np.ones((3,3), np.uint8)
 
@@ -248,6 +248,7 @@ def main():
 
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
+            cv2.imshow("black", black.v)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 grabber.running = False
                 camera.running = False
