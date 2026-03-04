@@ -169,19 +169,58 @@ class MotorThread(threading.Thread):
             #self.motor4.set_speed(self.motorspeed4)
             pass
 
-def SpeedUp(motor1,motor2,motor3,motor4,maxspeed):
-    spdmax = max(abs(motor1), abs(motor2), abs(motor3), abs(motor4))
+def VelocityToMotor(xvel, yvel, rot, maxspd):
+    standard = 1/max(abs(xvel),abs(yvel),1)
+    xvel *= standard
+    yvel *= standard
 
-    if spdmax == 0:
-        return 0,0,0,0
-    
+    motor1 = xvel*math.cos(math.pi/6) + yvel*math.sin(math.pi/6) + rot
+    motor2 = xvel*math.cos(5*math.pi/6) + yvel*math.sin(5*math.pi/6) + rot
+    motor3 = xvel*math.cos(4*math.pi/3) + yvel*math.sin(4*math.pi/3) + rot
+    motor4 = xvel*math.cos(5*math.pi/3) + yvel*math.sin(5*math.pi/3) + rot
+
+    scale = maxspd/max(abs(motor1), abs(motor2), abs(motor3), abs(motor4))
+    motor1 *= scale
+    motor2 *= scale
+    motor3 *= scale
+    motor4 *= scale
+
+    return motor1,motor2,motor3,motor4
+
+def Ultrasonic(left, right, top, back, fieldsize, max_diff):
+    field_width, field_height = fieldsize
+
+    # Candidate X positions
+    cx_left = left
+    cx_right = field_width - right
+
+    # Candidate Y positions
+    cy_back = field_height - back
+    cy_front = top  # 'top' = distance to front wall
+
+    # Disagreement between opposite sensors
+    dx = abs(cx_left - cx_right)
+    dy = abs(cy_back - cy_front)
+
+    # Weighting (closer agreement → stronger weight)
+    wx = max(0.01, 1 / (1 + dx))
+    wy = max(0.01, 1 / (1 + dy))
+
+    # Fuse X
+    if dx > max_diff:
+        # One side is probably blocked → trust the smaller reading
+        cx = cx_left if left < right else cx_right
     else:
-        multiplier = maxspeed/spdmax
-        new1 = motor1 * multiplier
-        new2 = motor2 * multiplier
-        new3 = motor3 * multiplier
-        new4 = motor4 * multiplier
-        return new1,new2,new3,new4
+        # Weighted average (they more or less agree)
+        cx = (cx_left * wx + cx_right * wx) / (wx + wx)
+
+    # Fuse Y
+    if dy > max_diff:
+        cy = cy_back if back < top else cy_front
+    else:
+        cy = (cy_back * wy + cy_front * wy) / (wy + wy)
+
+    return cx, cy
 
 def main():
     grabber = FrameGrabber()
@@ -194,24 +233,35 @@ def main():
     motors.start()
 
     while True:
-        # bot_position = [160, 70]
-        # ball_position = [camera.black[0] + (camera.black[2] // 2),camera.black[1] + camera.black[3]] # x, y
-        # angle = math.atan2(ball_position[1] - bot_position[1], ball_position[0] - bot_position[0])
+        maxspd = 2000000
+        spin_weight = 0.05
+        fieldsize = [1820,2430] # width, height
 
-        # if bot_position[1] - ball_position[1] < 10 and abs(bot_position[0] - ball_position[0]) < 10: #activate dribbler and try to score
-        #     print("0")
-        #     pass
+        ir = [0,0] # sub in for actual ir values direction, strength
+        ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]]
+        if ballpos[1] > 10:
+            desiredpos = [ballpos[0], ballpos[1] - 10]
+        elif ballpos[0] > 0:
+            desiredpos = [ballpos[0] - 10, ballpos[1] - 10]
+        else:
+            desiredpos = [ballpos[0] + 10, ballpos[1] - 10]
+        xvel, yvel = desiredpos
 
-        # elif ball_position[1] - bot_position[1] < 50: # pathfind to the ball
-        #     print("1")
-        #     motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4 = SpeedUp(math.sin(angle - math.pi/4), math.sin(angle - 3*math.pi/4), math.sin(angle - 5*math.pi/4), math.sin(angle - 7*math.pi/4), motors.speedlimit)
+        compass = math.pi/2 # sub in for actual IMU values
+        desired_heading = math.pi/2
+        heading_error = desired_heading - compass
+        rot = spin_weight * heading_error
+        rot = max(min(rot, 1), -1)
 
-        # else: # back up
-        #     print("2")
-        #     motors.motorspeed1 = motors.speedlimit * -1
-        #     motors.motorspeed2 = motors.speedlimit * -1
-        #     motors.motorspeed3 = motors.speedlimit * -1
-        #     motors.motorspeed4 = motors.speedlimit * -1
+        USreadings = [0,0,0,0] # sub in for actual ultrasonic values, left, right, top, back
+        bot_position = Ultrasonic(USreadings[0],USreadings[1],USreadings[2],USreadings[3],fieldsize,25)
+        if bot_position[0] < 50:
+            xvel = max(xvel,0)
+        elif bot_position[0] > 1770:
+            xvel = min(xvel,0)
+
+        speed1,speed2,speed3,speed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
+
 
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
