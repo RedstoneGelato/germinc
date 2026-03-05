@@ -143,31 +143,30 @@ class MotorThread(threading.Thread):
         self.motorspeed3 = 0
         self.motorspeed4 = 0
 
-        #self.i2c = busio.I2C(board.SCL, board.SDA)
-        #self.motor1 = PowerfulBLDCDriver(self.i2c, 0x25)
-        #self.motor1.set_speed_limit(self.speedlimit)
-        #self.motor1.configure_operating_mode_and_sensor(3, 1)
-        #self.motor1.configure_command_mode(12)
-        #self.motor2 = PowerfulBLDCDriver(self.i2c, 0x27)
-        #self.motor2.set_speed_limit(self.speedlimit)
-        #self.motor2.configure_operating_mode_and_sensor(3, 1)
-        #self.motor2.configure_command_mode(12)
-        #self.motor3 = PowerfulBLDCDriver(self.i2c, 0x26)
-        #self.motor3.set_speed_limit(self.speedlimit)
-        #self.motor3.configure_operating_mode_and_sensor(3, 1)
-        #self.motor3.configure_command_mode(12)
-        #self.motor4 = PowerfulBLDCDriver(self.i2c, 0x28)
-        #self.motor4.set_speed_limit(self.speedlimit)
-        #self.motor4.configure_operating_mode_and_sensor(3, 1)
-        #self.motor4.configure_command_mode(12)
+        self.i2c = busio.I2C(board.SCL, board.SDA)
+        self.motor1 = PowerfulBLDCDriver(self.i2c, 0x19)
+        self.motor1.set_speed_limit(self.speedlimit)
+        self.motor1.configure_operating_mode_and_sensor(3, 1)
+        self.motor1.configure_command_mode(12)
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 0x1B)
+        self.motor2.set_speed_limit(self.speedlimit)
+        self.motor2.configure_operating_mode_and_sensor(3, 1)
+        self.motor2.configure_command_mode(12)
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 0x1A)
+        self.motor3.set_speed_limit(self.speedlimit)
+        self.motor3.configure_operating_mode_and_sensor(3, 1)
+        self.motor3.configure_command_mode(12)
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 0x1C)
+        self.motor4.set_speed_limit(self.speedlimit)
+        self.motor4.configure_operating_mode_and_sensor(3, 1)
+        self.motor4.configure_command_mode(12)
 
     def run(self):
         while self.running:
-            #self.motor1.set_speed(self.motorspeed1)
-            #self.motor2.set_speed(self.motorspeed2)
-            #self.motor3.set_speed(self.motorspeed3)
-            #self.motor4.set_speed(self.motorspeed4)
-            pass
+            self.motor1.set_speed(self.motorspeed1)
+            self.motor2.set_speed(self.motorspeed2)
+            self.motor3.set_speed(self.motorspeed3)
+            self.motor4.set_speed(self.motorspeed4)
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
     standard = 1/max(abs(xvel),abs(yvel),1)
@@ -190,15 +189,12 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 def Ultrasonic(left, right, top, back, fieldsize, max_diff):
     field_width, field_height = fieldsize
 
-    # Candidate X positions
     cx_left = left
     cx_right = field_width - right
 
-    # Candidate Y positions
     cy_back = field_height - back
     cy_front = top  # 'top' = distance to front wall
 
-    # Disagreement between opposite sensors
     dx = abs(cx_left - cx_right)
     dy = abs(cy_back - cy_front)
 
@@ -206,15 +202,13 @@ def Ultrasonic(left, right, top, back, fieldsize, max_diff):
     wx = max(0.01, 1 / (1 + dx))
     wy = max(0.01, 1 / (1 + dy))
 
-    # Fuse X
     if dx > max_diff:
         # One side is probably blocked → trust the smaller reading
         cx = cx_left if left < right else cx_right
     else:
-        # Weighted average (they more or less agree)
+        # Weighted average
         cx = (cx_left * wx + cx_right * wx) / (wx + wx)
 
-    # Fuse Y
     if dy > max_diff:
         cy = cy_back if back < top else cy_front
     else:
@@ -253,7 +247,7 @@ def main():
         rot = spin_weight * heading_error
         rot = max(min(rot, 1), -1)
 
-        USreadings = [0,0,0,0] # sub in for actual ultrasonic values, left, right, top, back
+        USreadings = [910,910,1215,1215] # sub in for actual ultrasonic values, left, right, top, back
         bot_position = Ultrasonic(USreadings[0],USreadings[1],USreadings[2],USreadings[3],fieldsize,25)
         if bot_position[0] < 50:
             xvel = max(xvel,0)
