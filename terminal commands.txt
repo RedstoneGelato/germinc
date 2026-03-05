@@ -3,13 +3,25 @@ GitHub commands:
 	git commit -m "notes go here" -> commits to GitHub with notes
 	git push -u origin master -> actually uploads the folder to GitHub
 
-	git pull -> pulls stuff on github
+	git restore -> if you accidentally made changes before pulling, use this to restore so that you can pull (ONLY USE IF THE CHANGES YOU MADE ARE UNIMPORTANT)
+	git pull -> pull and download stuff from github
 
 PI commands:
-	SSH germinc1@1"insert ip here" -> remote access to pi
+	SSH germinc1@germinc.local -> remote access to pi
 	source env/bin/activate -> activates virtual environment
 	htop -> see performance stats
-	
+
+	ls -> list all files in the current directory (-a for hidden files)
+	cd -> change directories
+	touch -> make a file in the current directory
+	mkdir -> make a folder or new directory under the current directory
+
+	python3 "script name" -> runs script with python3
+	sudo nano "script name" -> opens the script with the nano script editor
+
+NANO commands:
+	ctrl + O, enter -> save
+	ctrl + X -> quit
 
 github token
 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
