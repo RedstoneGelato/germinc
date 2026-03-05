@@ -167,18 +167,20 @@ class MotorThread(threading.Thread):
             self.motor2.set_speed(self.motorspeed2)
             self.motor3.set_speed(self.motorspeed3)
             self.motor4.set_speed(self.motorspeed4)
+            time.sleep(0.005)
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
-    standard = 1/max(abs(xvel),abs(yvel),1)
-    xvel *= standard
-    yvel *= standard
+    mag = math.hypot(xvel, yvel)
+    if mag > 1:
+        xvel /= mag
+        yvel /= mag
 
     motor1 = xvel*math.cos(math.pi/6) + yvel*math.sin(math.pi/6) + rot
     motor2 = xvel*math.cos(5*math.pi/6) + yvel*math.sin(5*math.pi/6) + rot
     motor3 = xvel*math.cos(4*math.pi/3) + yvel*math.sin(4*math.pi/3) + rot
     motor4 = xvel*math.cos(5*math.pi/3) + yvel*math.sin(5*math.pi/3) + rot
 
-    scale = maxspd/max(abs(motor1), abs(motor2), abs(motor3), abs(motor4))
+    scale = maxspd/max(abs(motor1), abs(motor2), abs(motor3), abs(motor4), 1)
     motor1 *= scale
     motor2 *= scale
     motor3 *= scale
@@ -231,7 +233,7 @@ def main():
         spin_weight = 0.05
         fieldsize = [1820,2430] # width, height
 
-        ir = [0,0] # sub in for actual ir values direction, strength
+        ir = [math.pi/2,100] # sub in for actual ir values direction, strength
         ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]]
         if ballpos[1] > 10:
             desiredpos = [ballpos[0], ballpos[1] - 10]
@@ -254,8 +256,7 @@ def main():
         elif bot_position[0] > 1770:
             xvel = min(xvel,0)
 
-        speed1,speed2,speed3,speed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
-
+        motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
 
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
