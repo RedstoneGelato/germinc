@@ -183,10 +183,10 @@ class MotorThread(threading.Thread):
 
     def run(self):
         while self.running:
-            self.motor1.set_speed(self.motorspeed1)
-            self.motor2.set_speed(self.motorspeed2)
-            self.motor3.set_speed(self.motorspeed3)
-            self.motor4.set_speed(self.motorspeed4)
+            self.motor1.set_speed(int(self.motorspeed1))
+            self.motor2.set_speed(int(self.motorspeed2))
+            self.motor3.set_speed(int(self.motorspeed3))
+            self.motor4.set_speed(int(self.motorspeed4))
             time.sleep(0.005)
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
