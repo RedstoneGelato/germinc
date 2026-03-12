@@ -136,8 +136,8 @@ class MotorThread(threading.Thread):
         super().__init__()
         self.daemon = True
         self.running = True
-        self.speedlimit = 10000000
 
+        self.speedlimit = 10000000
         self.motorspeed1 = 0
         self.motorspeed2 = 0
         self.motorspeed3 = 0
@@ -238,6 +238,37 @@ def Ultrasonic(left, right, top, back, fieldsize, max_diff):
 
     return cx, cy
 
+def safe_shutdown(grabber, camera, motors):
+    print("Shutting down safely...")
+
+    # stop motors first
+    motors.motorspeed1 = 0
+    motors.motorspeed2 = 0
+    motors.motorspeed3 = 0
+    motors.motorspeed4 = 0
+
+    # allow motor thread to send stop command
+    time.sleep(0.05)
+
+    # stop threads
+    grabber.running = False
+    camera.running = False
+    motors.running = False
+
+    try:
+        grabber.cap.stop()
+    except:
+        pass
+
+    # wait for threads
+    grabber.join()
+    camera.join()
+    motors.join()
+
+    cv2.destroyAllWindows()
+
+    print("Robot stopped.")
+
 def main():
     grabber = FrameGrabber()
     grabber.start()
@@ -248,52 +279,38 @@ def main():
     motors = MotorThread()
     motors.start()
 
-    while True:
-        maxspd = 2000000
-        spin_weight = 0.05
-        fieldsize = [1820,2430] # width, height
+    try:
+        while True:
+            maxspd = 2000000
+            spin_weight = 0.05
+            fieldsize = [1820,2430] # width, height
 
-        ir = [math.pi/2,100] # sub in for actual ir values direction, strength
-        ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]]
-        if ballpos[1] > 10:
-            desiredpos = [ballpos[0], ballpos[1] - 10]
-        elif ballpos[0] > 0:
-            desiredpos = [ballpos[0] - 10, ballpos[1] - 10]
-        else:
-            desiredpos = [ballpos[0] + 10, ballpos[1] - 10]
-        xvel, yvel = desiredpos
+            ir = [math.pi/2,100] # sub in for actual ir values direction, strength
+            ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]]
+            if ballpos[1] > 10:
+                desiredpos = [ballpos[0], ballpos[1] - 10]
+            elif ballpos[0] > 0:
+                desiredpos = [ballpos[0] - 10, ballpos[1] - 10]
+            else:
+                desiredpos = [ballpos[0] + 10, ballpos[1] - 10]
+            xvel, yvel = desiredpos
 
-        compass = math.pi/2 # sub in for actual IMU values
-        desired_heading = math.pi/2
-        heading_error = desired_heading - compass
-        rot = spin_weight * heading_error
-        rot = max(min(rot, 1), -1)
+            compass = math.pi/2 # sub in for actual IMU values
+            desired_heading = math.pi/2
+            heading_error = desired_heading - compass
+            rot = spin_weight * heading_error
+            rot = max(min(rot, 1), -1)
 
-        USreadings = [910,910,1215,1215] # sub in for actual ultrasonic values, left, right, top, back
-        bot_position = Ultrasonic(USreadings[0],USreadings[1],USreadings[2],USreadings[3],fieldsize,25)
-        if bot_position[0] < 50:
-            xvel = max(xvel,0)
-        elif bot_position[0] > 1770:
-            xvel = min(xvel,0)
+            USreadings = [910,910,1215,1215] # sub in for actual ultrasonic values, left, right, top, back
+            bot_position = Ultrasonic(USreadings[0],USreadings[1],USreadings[2],USreadings[3],fieldsize,25)
+            if bot_position[0] < 50:
+                xvel = max(xvel,0)
+            elif bot_position[0] > 1770:
+                xvel = min(xvel,0)
 
-        motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
-
-        if camera.frame is not None:
-            cv2.imshow("Cam", camera.frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                motors.motorspeed1 = 0
-                motors.motorspeed2 = 0
-                motors.motorspeed3 = 0
-                motors.motorspeed4 = 0
-                grabber.running = False
-                camera.running = False
-                motors.running = False
-                break
-
-    grabber.cap.stop()
-    grabber.join()
-    camera.join()
-    motors.join()
-    cv2.destroyAllWindows()
+            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
+    
+    except KeyboardInterrupt:
+        safe_shutdown(grabber,camera,motors)
 
 main()
