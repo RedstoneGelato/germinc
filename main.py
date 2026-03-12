@@ -136,7 +136,7 @@ class MotorThread(threading.Thread):
         super().__init__()
         self.daemon = True
         self.running = True
-        self.speedlimit = 2000000
+        self.speedlimit = 10000000
 
         self.motorspeed1 = 0
         self.motorspeed2 = 0
@@ -144,19 +144,39 @@ class MotorThread(threading.Thread):
         self.motorspeed4 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
-        self.motor1 = PowerfulBLDCDriver(self.i2c, 0x19)
+        self.motor1 = PowerfulBLDCDriver(self.i2c, 25)
+        self.motor1.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
+        self.motor1.set_id_pid_constants(1500, 200)
+        self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor1.set_position_pid_constants(275, 0, 0)
+        self.motor1.set_position_region_boundary(250000)
         self.motor1.set_speed_limit(self.speedlimit)
         self.motor1.configure_operating_mode_and_sensor(3, 1)
         self.motor1.configure_command_mode(12)
-        self.motor2 = PowerfulBLDCDriver(self.i2c, 0x1B)
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor2.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
+        self.motor2.set_id_pid_constants(1500, 200)
+        self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor2.set_position_pid_constants(275, 0, 0)
+        self.motor2.set_position_region_boundary(250000)
         self.motor2.set_speed_limit(self.speedlimit)
         self.motor2.configure_operating_mode_and_sensor(3, 1)
         self.motor2.configure_command_mode(12)
-        self.motor3 = PowerfulBLDCDriver(self.i2c, 0x1A)
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 26)
+        self.motor3.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
+        self.motor3.set_id_pid_constants(1500, 200)
+        self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor3.set_position_pid_constants(275, 0, 0)
+        self.motor3.set_position_region_boundary(250000)
         self.motor3.set_speed_limit(self.speedlimit)
         self.motor3.configure_operating_mode_and_sensor(3, 1)
         self.motor3.configure_command_mode(12)
-        self.motor4 = PowerfulBLDCDriver(self.i2c, 0x1C)
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor4.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
+        self.motor4.set_id_pid_constants(1500, 200)
+        self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor4.set_position_pid_constants(275, 0, 0)
+        self.motor4.set_position_region_boundary(250000)
         self.motor4.set_speed_limit(self.speedlimit)
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
@@ -261,6 +281,10 @@ def main():
         if camera.frame is not None:
             cv2.imshow("Cam", camera.frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
+                motors.motorspeed1 = 0
+                motors.motorspeed2 = 0
+                motors.motorspeed3 = 0
+                motors.motorspeed4 = 0
                 grabber.running = False
                 camera.running = False
                 motors.running = False
