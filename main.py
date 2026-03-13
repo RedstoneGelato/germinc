@@ -7,19 +7,21 @@ import time
 import board
 import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
+import adafruit_bno055
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
         super().__init__()
         self.daemon = True
         self.running = True
+
         self.frame = None
         self.hsv = None
-
         self.cap = picamera2.Picamera2()
+        self.cap.set_controls({"FrameRate": 60})
         config = self.cap.create_preview_configuration(
             main={"size": (320, 240), "format": "RGB888"},
-	    lores={"size": (160, 120), "format": "YUV420"})
+	        lores={"size": (160, 120), "format": "YUV420"})
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
@@ -27,11 +29,14 @@ class FrameGrabber(threading.Thread):
         })
         self.cap.start()
 
+        self.hsv = np.zeros((120,160,3), dtype=np.uint8)
+
     def run(self):
         while self.running:
-            frame = self.cap.capture_array("main")
+            frame = self.cap.capture_array("lores")
             self.frame = frame
-            self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            self.hsv[:] = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            time.sleep(0.005)
 
 class DetectionThread(threading.Thread):
     def __init__(self, grabber):
@@ -44,6 +49,8 @@ class DetectionThread(threading.Thread):
         self.yellow = [0,0,0,0]
         self.enemies = []
         self.frame = None
+        self.debug = False
+        self.ready = False
 
         # HSV ranges
         self.lower_blue   = np.array([90, 200, 100])
@@ -58,10 +65,12 @@ class DetectionThread(threading.Thread):
     def run(self):
         while self.running:
             if self.grabber.hsv is None or self.grabber.frame is None:
+                time.sleep(0.005)
                 continue
 
-            frame = self.grabber.frame.copy()
-            hsv   = self.grabber.hsv.copy()
+            frame = self.grabber.frame
+            hsv   = self.grabber.hsv
+            self.ready = True
 
             # reset
             self.blue   = [0,0,0,0]
@@ -84,7 +93,7 @@ class DetectionThread(threading.Thread):
             inv_green = cv2.morphologyEx(inv_green, cv2.MORPH_CLOSE, self.kernel)
             self.enemies = self.get_enemy_blobs(inv_green)
 
-            if frame is not None:
+            if frame is not None and self.debug == True:
                 for color, bbox in zip(["blue","yellow"], [self.blue,self.yellow]):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
@@ -95,6 +104,7 @@ class DetectionThread(threading.Thread):
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)  # red for enemies
 
             self.frame = frame
+            time.sleep(0.005)
 
     def _merge_blobs(self, mask):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -130,6 +140,34 @@ class DetectionThread(threading.Thread):
             blobs.append([x, y, w, h])
 
         return blobs
+    
+class IMUThread(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+
+        self.i2c = busio.I2C(board.SCL, board.SDA)
+        self.imu = adafruit_bno055.BNO055_I2C(self.i2c, 40)
+        self.imu.mode = adafruit_bno055.IMUPLUS_MODE
+
+        self.heading = 0
+        self.alpha = 0.2
+        self.ready = False
+
+    def run(self):
+        while self.running:
+            euler = self.imu.euler # 0 → north, 90 → east, 180 → south, 270 → west
+            if euler[0] is not None:
+                self.ready = True
+                heading = math.radians(euler[0] % 360)
+
+                if heading > math.pi:
+                    heading -= 2 * math.pi
+
+                self.heading = (self.heading * (1-self.alpha)) + (heading * self.alpha)
+            time.sleep(0.01)
+
 
 class MotorThread(threading.Thread):
     def __init__(self):
@@ -238,7 +276,7 @@ def Ultrasonic(left, right, top, back, fieldsize, max_diff):
 
     return cx, cy
 
-def safe_shutdown(grabber, camera, motors):
+def safe_shutdown(grabber, camera, motors, imu):
     print("Shutting down safely...")
 
     # stop motors first
@@ -254,6 +292,7 @@ def safe_shutdown(grabber, camera, motors):
     grabber.running = False
     camera.running = False
     motors.running = False
+    imu.running = False
 
     try:
         grabber.cap.stop()
@@ -264,6 +303,7 @@ def safe_shutdown(grabber, camera, motors):
     grabber.join()
     camera.join()
     motors.join()
+    imu.join()
 
     cv2.destroyAllWindows()
 
@@ -278,6 +318,17 @@ def main():
 
     motors = MotorThread()
     motors.start()
+
+    imu = IMUThread()
+    imu.start()
+
+    print("Waiting for sensors...")
+    while not (imu.ready and camera.ready):
+        time.sleep(0.05)
+
+    print("running")
+
+    heading_offset = imu.heading
 
     try:
         while True:
@@ -295,9 +346,11 @@ def main():
                 desiredpos = [ballpos[0] + 10, ballpos[1] - 10]
             xvel, yvel = desiredpos
 
-            compass = math.pi/2 # sub in for actual IMU values
-            desired_heading = math.pi/2
+            compass = imu.heading - heading_offset
+            compass = (compass + math.pi) % (2*math.pi) - math.pi
+            desired_heading = 0
             heading_error = desired_heading - compass
+            heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             rot = spin_weight * heading_error
             rot = max(min(rot, 1), -1)
 
@@ -311,6 +364,6 @@ def main():
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
     
     except KeyboardInterrupt:
-        safe_shutdown(grabber,camera,motors)
+        safe_shutdown(grabber,camera,motors, imu)
 
 main()
