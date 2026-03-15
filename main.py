@@ -8,6 +8,7 @@ import board
 import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno055
+import RPi.GPIO as GPIO
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -53,12 +54,12 @@ class DetectionThread(threading.Thread):
         self.ready = False
 
         # HSV ranges
-        self.lower_blue   = np.array([90, 200, 100])
-        self.upper_blue   = np.array([110, 255, 255])
+        self.lower_blue = np.array([90, 200, 100])
+        self.upper_blue = np.array([110, 255, 255])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
-        self.lower_green  = np.array([60, 100, 75])
-        self.upper_green  = np.array([90, 255, 125])
+        self.lower_green = np.array([60, 100, 75])
+        self.upper_green = np.array([90, 255, 125])
 
         self.kernel = np.ones((3,3), np.uint8)
 
@@ -68,8 +69,8 @@ class DetectionThread(threading.Thread):
                 time.sleep(0.005)
                 continue
 
-            frame = self.grabber.frame
-            hsv   = self.grabber.hsv
+            frame = self.grabber.frame.copy()
+            hsv = self.grabber.hsv.copy()
             self.ready = True
 
             # reset
@@ -83,7 +84,7 @@ class DetectionThread(threading.Thread):
                 "green":  cv2.morphologyEx(cv2.inRange(hsv, self.lower_green, self.upper_green), cv2.MORPH_OPEN, self.kernel)
             }
 
-            self.blue   = self._merge_blobs(masks["blue"])
+            self.blue = self._merge_blobs(masks["blue"])
             self.yellow = self._merge_blobs(masks["yellow"])
 
             inv_green = cv2.bitwise_not(masks["green"])
@@ -121,7 +122,7 @@ class DetectionThread(threading.Thread):
             y_max = max(y_max, y + h)
 
         if x_min < x_max and y_min < y_max:
-            return [x_min, y_min, x_max - x_min, y_max - y_min]
+            return [x_min, y_min, x_max - x_min, y_max - y_min] # coords of top left corner, width, height
         else:
             return [0,0,0,0]
 
@@ -168,6 +169,17 @@ class IMUThread(threading.Thread):
                 self.heading = (self.heading * (1-self.alpha)) + (heading * self.alpha)
             time.sleep(0.01)
 
+class Solenoid:
+    def __init__(self, pin):
+        self.pin = pin
+
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(self.pin, GPIO.OUT)
+        GPIO.output(self.pin, GPIO.LOW)
+
+    def fire(self, duration = 0.03):
+        GPIO.output(self.pin, GPIO.HIGH)
+        threading.Timer(duration, lambda: GPIO.output(self.pin, GPIO.LOW)).start()
 
 class MotorThread(threading.Thread):
     def __init__(self):
@@ -180,6 +192,7 @@ class MotorThread(threading.Thread):
         self.motorspeed2 = 0
         self.motorspeed3 = 0
         self.motorspeed4 = 0
+        self.motorspeed5 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
         self.motor1 = PowerfulBLDCDriver(self.i2c, 25)
@@ -219,12 +232,23 @@ class MotorThread(threading.Thread):
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
+        self.motor5 = PowerfulBLDCDriver(self.i2c, 29) # dribbler motor
+        self.motor5.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
+        self.motor5.set_id_pid_constants(1500, 200)
+        self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor5.set_position_pid_constants(275, 0, 0)
+        self.motor5.set_position_region_boundary(250000)
+        self.motor5.set_speed_limit(self.speedlimit)
+        self.motor5.configure_operating_mode_and_sensor(3, 1)
+        self.motor5.configure_command_mode(12)
+
     def run(self):
         while self.running:
             self.motor1.set_speed(int(self.motorspeed1))
             self.motor2.set_speed(int(self.motorspeed2))
             self.motor3.set_speed(int(self.motorspeed3))
             self.motor4.set_speed(int(self.motorspeed4))
+            self.motor5.set_speed(int(self.motorspeed5))
             time.sleep(0.005)
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
@@ -284,6 +308,7 @@ def safe_shutdown(grabber, camera, motors, imu):
     motors.motorspeed2 = 0
     motors.motorspeed3 = 0
     motors.motorspeed4 = 0
+    motors.motorspeed5 = 0
 
     # allow motor thread to send stop command
     time.sleep(0.05)
@@ -293,6 +318,7 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.running = False
     motors.running = False
     imu.running = False
+    GPIO.cleanup()
 
     try:
         grabber.cap.stop()
@@ -322,6 +348,8 @@ def main():
     imu = IMUThread()
     imu.start()
 
+    kicker = Solenoid(17)
+
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready):
         time.sleep(0.05)
@@ -329,38 +357,65 @@ def main():
     print("running")
 
     heading_offset = imu.heading
+    goal_colour = 0 # 0 is yellow, 1 is blue
+    HAS_BALL = False
 
     try:
         while True:
-            maxspd = 2000000
-            spin_weight = 0.05
-            fieldsize = [1820,2430] # width, height
+            maxspd = 2000000 # ideal max speed
+            spin_weight = 0.05 # bigger number = bot spins more instead of moves more
+            field_size = [1820,2430] # width, height
+            desired_heading = 0
+
+            USreadings = [910,910,1215,1215] # sub in for actual ultrasonic values, left, right, top, back
+            bot_position = Ultrasonic(USreadings[0],USreadings[1],USreadings[2],USreadings[3],field_size,25)
 
             ir = [math.pi/2,100] # sub in for actual ir values direction, strength
-            ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]]
-            if ballpos[1] > 10:
-                desiredpos = [ballpos[0], ballpos[1] - 10]
-            elif ballpos[0] > 0:
-                desiredpos = [ballpos[0] - 10, ballpos[1] - 10]
-            else:
-                desiredpos = [ballpos[0] + 10, ballpos[1] - 10]
-            xvel, yvel = desiredpos
+            ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]] #relative position of ball: x,y
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
-            desired_heading = 0
+
+            if ir[1] > 800 and ballpos[1] > 0 and abs(compass) < math.pi/4: # ball is in ball capture zone check: close enough, infront of bot, facing forwards
+                HAS_BALL = True
+            else:
+                HAS_BALL = False
+
+            if HAS_BALL:
+                spin_weight = 0.1
+                motors.motorspeed5 = 2000000
+
+                if goal_colour == 0:
+                    desired_heading = math.atan2((camera.yellow[1] + camera.yellow[3]/2), (camera.yellow[0] + camera.yellow[2]/2))
+                    desired_pos = [camera.yellow[0] + camera.yellow[2]/2, camera.yellow[1] + camera.yellow[3]/2]
+                else:
+                    desired_heading = math.atan2((camera.blue[1] + camera.blue[3]/2), (camera.blue[0] + camera.blue[2]/2))
+                    desired_pos = [camera.blue[0] + camera.blue[2]/2, camera.blue[1] + camera.blue[3]/2]
+
+                if ir[1] > 1000 and abs(ballpos[0]) < 10: # kick check: very close, center
+                    kicker.fire()
+            else:
+                spin_weight = 0.05
+                desired_heading = 0
+                motors.motorspeed5 = 0
+
+                if ballpos[1] > 10:
+                    desired_pos = [ballpos[0], ballpos[1] - 10] # directly behind the ball
+                elif ballpos[0] > 0:
+                    desired_pos = [ballpos[0] - 10, ballpos[1] - 10] # bot can go to bottom right corner of ball without colliding
+                else:
+                    desired_pos = [ballpos[0] + 10, ballpos[1] - 10] # bottom left
+
+                if bot_position[0] < 50:
+                    desired_pos[0] = max(desired_pos[0],0)
+                elif bot_position[0] > 1770:
+                    desired_pos[0] = min(desired_pos[0],0)
+
+            xvel, yvel = desired_pos
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             rot = spin_weight * heading_error
             rot = max(min(rot, 1), -1)
-
-            USreadings = [910,910,1215,1215] # sub in for actual ultrasonic values, left, right, top, back
-            bot_position = Ultrasonic(USreadings[0],USreadings[1],USreadings[2],USreadings[3],fieldsize,25)
-            if bot_position[0] < 50:
-                xvel = max(xvel,0)
-            elif bot_position[0] > 1770:
-                xvel = min(xvel,0)
-
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
     
     except KeyboardInterrupt:
