@@ -7,7 +7,8 @@ import time
 import board
 import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
-import adafruit_bno055
+import adafruit_bno08x
+from adafruit_bno08x.i2c import BNO08X_I2C
 import RPi.GPIO as GPIO
 
 class FrameGrabber(threading.Thread):
@@ -168,9 +169,9 @@ class IMUThread(threading.Thread):
         self.daemon = True
         self.running = True
 
-        self.i2c = busio.I2C(board.SCL, board.SDA)
-        self.imu = adafruit_bno055.BNO055_I2C(self.i2c, 40)
-        self.imu.mode = adafruit_bno055.IMUPLUS_MODE
+        self.i2c = busio.I2C(board.SCL, board.SDA, frequency = 800000)
+        self.imu = adafruit_bno08x.BNO055_I2C(self.i2c, 40)
+        self.imu.mode = adafruit_bno08x.IMUPLUS_MODE
 
         self.heading = 0
         self.alpha = 0.2
