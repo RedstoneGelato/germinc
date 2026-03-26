@@ -169,7 +169,7 @@ class IMUThread(threading.Thread):
         self.running = True
 
         self.i2c = busio.I2C(board.SCL, board.SDA, frequency = 800000)
-        self.imu = BNO08X_I2C(self.i2c, 74)
+        self.imu = BNO08X_I2C(self.i2c)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
 
         self.heading = 0
@@ -439,6 +439,7 @@ def main():
             rot = spin_weight * heading_error
             rot = max(min(rot, 1), -1)
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
+            print(imu.heading)
     
     except KeyboardInterrupt:
         safe_shutdown(grabber,camera,motors, imu)
