@@ -170,7 +170,7 @@ class IMUThread(threading.Thread):
 
         self.i2c = busio.I2C(board.SCL, board.SDA, frequency = 800000)
         self.imu = BNO08X_I2C(self.i2c, 74)
-        self.imu.mode = adafruit_bno08x.IMUPLUS_MODE
+        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
 
         self.heading = 0
         self.alpha = 0.2
@@ -178,15 +178,20 @@ class IMUThread(threading.Thread):
 
     def run(self):
         while self.running:
-            euler = self.imu.euler # 0 → north, 90 → east, 180 → south, 270 → west
-            if euler[0] is not None:
+            quat = self.imu.quaternion  # (x, y, z, w)
+            if quat is not None:
                 self.ready = True
-                heading = math.radians(euler[0] % 360)
 
-                if heading > math.pi:
-                    heading -= 2 * math.pi
+                x, y, z, w = quat
 
-                self.heading = (self.heading * (1-self.alpha)) + (heading * self.alpha)
+                # convert quaternion → yaw (heading)
+                heading = math.atan2(
+                    2*(w*z + x*y),
+                    1 - 2*(y*y + z*z)
+                )
+
+                # smooth
+                self.heading = (self.heading * (1 - self.alpha)) + (heading * self.alpha)
             time.sleep(0.01)
 
 class MotorThread(threading.Thread):
