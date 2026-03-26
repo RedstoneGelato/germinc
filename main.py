@@ -9,7 +9,6 @@ import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-import RPi.GPIO as GPIO
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -190,18 +189,6 @@ class IMUThread(threading.Thread):
                 self.heading = (self.heading * (1-self.alpha)) + (heading * self.alpha)
             time.sleep(0.01)
 
-class Solenoid:
-    def __init__(self, pin):
-        self.pin = pin
-
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self.pin, GPIO.OUT)
-        GPIO.output(self.pin, GPIO.LOW)
-
-    def fire(self, duration = 0.03):
-        GPIO.output(self.pin, GPIO.HIGH)
-        threading.Timer(duration, lambda: GPIO.output(self.pin, GPIO.LOW)).start()
-
 class MotorThread(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -345,7 +332,6 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.running = False
     motors.running = False
     imu.running = False
-    GPIO.cleanup()
 
     try:
         grabber.cap.stop()
@@ -374,8 +360,6 @@ def main():
 
     imu = IMUThread()
     imu.start()
-
-    kicker = Solenoid(17)
 
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready):
@@ -440,7 +424,7 @@ def main():
                         desired_pos = [goalx,goaly]
 
                 if ir[1] > 1000 and abs(ballpos[0]) < 10: # kick check: very close, center
-                    kicker.fire()
+                    pass
             else:
                 spin_weight = 0.05
                 desired_heading = 0
