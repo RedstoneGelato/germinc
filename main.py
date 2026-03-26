@@ -200,7 +200,6 @@ class MotorThread(threading.Thread):
         self.motorspeed2 = 0
         self.motorspeed3 = 0
         self.motorspeed4 = 0
-        self.motorspeed5 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
         self.motor1 = PowerfulBLDCDriver(self.i2c, 25)
@@ -240,23 +239,12 @@ class MotorThread(threading.Thread):
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
-        self.motor5 = PowerfulBLDCDriver(self.i2c, 29) # dribbler motor
-        self.motor5.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
-        self.motor5.set_id_pid_constants(1500, 200)
-        self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor5.set_position_pid_constants(275, 0, 0)
-        self.motor5.set_position_region_boundary(250000)
-        self.motor5.set_speed_limit(self.speedlimit)
-        self.motor5.configure_operating_mode_and_sensor(3, 1)
-        self.motor5.configure_command_mode(12)
-
     def run(self):
         while self.running:
             self.motor1.set_speed(int(self.motorspeed1))
             self.motor2.set_speed(int(self.motorspeed2))
             self.motor3.set_speed(int(self.motorspeed3))
             self.motor4.set_speed(int(self.motorspeed4))
-            self.motor5.set_speed(int(self.motorspeed5))
             time.sleep(0.005)
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
@@ -322,7 +310,6 @@ def safe_shutdown(grabber, camera, motors, imu):
     motors.motorspeed2 = 0
     motors.motorspeed3 = 0
     motors.motorspeed4 = 0
-    motors.motorspeed5 = 0
 
     # allow motor thread to send stop command
     time.sleep(0.05)
@@ -394,7 +381,6 @@ def main():
 
             if HAS_BALL:
                 spin_weight = 0.1
-                motors.motorspeed5 = 2000000
 
                 if goal_colour == 0:
                     if camera.yellow == [0,0,0,0]:
@@ -428,7 +414,6 @@ def main():
             else:
                 spin_weight = 0.05
                 desired_heading = 0
-                motors.motorspeed5 = 0
 
                 if ballpos[1] > 10:
                     desired_pos = [ballpos[0], ballpos[1] - 10] # directly behind the ball
