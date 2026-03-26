@@ -169,7 +169,7 @@ class IMUThread(threading.Thread):
         self.running = True
 
         self.i2c = busio.I2C(board.SCL, board.SDA, frequency = 800000)
-        self.imu = adafruit_bno08x.BNO055_I2C(self.i2c, 74)
+        self.imu = adafruit_bno08x.BNO08X_I2C(self.i2c, 74)
         self.imu.mode = adafruit_bno08x.IMUPLUS_MODE
 
         self.heading = 0
