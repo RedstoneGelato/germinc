@@ -9,13 +9,13 @@ import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-import RPi.GPIO as GPIO
+from gpiozero import OutputDevice
+import select
 import sys
 
 PIN = 17
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(PIN, GPIO.OUT)
-GPIO.output(PIN, GPIO.LOW)
+kick_pin = OutputDevice(17)
+kick_pin.off()
 last_kick = 0
 kick_active = False
 kick_start = 0
@@ -284,7 +284,7 @@ def trigger_kick():
     if now - last_kick < kick_cooldown:
         return
 
-    GPIO.output(PIN, GPIO.HIGH)   # or LOW if inverted
+    kick_pin.on()   # or LOW if inverted
     kick_active = True
     kick_start = now
     last_kick = now
@@ -293,7 +293,7 @@ def update_kick():
     global kick_active
 
     if kick_active and (time.time() - kick_start > kick_duration):
-        GPIO.output(PIN, GPIO.LOW)
+        kick_pin.off()
         kick_active = False
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
@@ -355,7 +355,6 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.join()
     motors.join()
     imu.join()
-    GPIO.cleanup()
 
     cv2.destroyAllWindows()
 
