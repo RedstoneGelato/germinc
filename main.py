@@ -10,6 +10,7 @@ from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 import RPi.GPIO as GPIO
+import sys
 
 PIN = 17
 GPIO.setmode(GPIO.BCM)
@@ -314,6 +315,17 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
+def enter_pressed():
+    if not sys.stdin.isatty():
+        return False
+    
+    ready, _, _ = select.select((sys.stdin),[],[],0)
+    if not ready:
+        return False
+    
+    sys.stdin.readline()
+    return True
+
 def safe_shutdown(grabber, camera, motors, imu):
     print("Shutting down safely...")
 
@@ -435,6 +447,9 @@ def main():
                     desired_pos = [ballpos[0] - 10, ballpos[1] - 10] # bot can go to bottom right corner of ball without colliding
                 else:
                     desired_pos = [ballpos[0] + 10, ballpos[1] - 10] # bottom left
+
+            if enter_pressed():
+                trigger_kick()
 
             xvel = 0.7*xvel + 0.3*(desired_pos[0] - 80)
             yvel = 0.7*yvel + 0.3*(desired_pos[1] - 60)
