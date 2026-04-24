@@ -10,7 +10,6 @@ from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 from gpiozero import OutputDevice
-import keyboard
 
 kick_pin = OutputDevice(17, active_high=True, initial_value=False)
 
@@ -410,8 +409,6 @@ def main():
             xvel = 0
             yvel = 0
             print(heading_error)
-            if keyboard.is_pressed('space'):
-                kick(True)
 
             rot = spin_weight * heading_error
             rot = max(min(rot, 1), -1)
