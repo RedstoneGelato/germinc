@@ -192,7 +192,7 @@ class MotorThread(threading.Thread):
         self.motorspeed4 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
-        self.motor1 = PowerfulBLDCDriver(self.i2c, 25)
+        self.motor1 = PowerfulBLDCDriver(self.i2c, 26)
         self.motor1.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
         self.motor1.set_id_pid_constants(1500, 200)
         self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -201,7 +201,7 @@ class MotorThread(threading.Thread):
         self.motor1.set_speed_limit(self.speedlimit)
         self.motor1.configure_operating_mode_and_sensor(3, 1)
         self.motor1.configure_command_mode(12)
-        self.motor2 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 28)
         self.motor2.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
         self.motor2.set_id_pid_constants(1500, 200)
         self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -210,7 +210,7 @@ class MotorThread(threading.Thread):
         self.motor2.set_speed_limit(self.speedlimit)
         self.motor2.configure_operating_mode_and_sensor(3, 1)
         self.motor2.configure_command_mode(12)
-        self.motor3 = PowerfulBLDCDriver(self.i2c, 26)
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 27)
         self.motor3.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
         self.motor3.set_id_pid_constants(1500, 200)
         self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -219,7 +219,7 @@ class MotorThread(threading.Thread):
         self.motor3.set_speed_limit(self.speedlimit)
         self.motor3.configure_operating_mode_and_sensor(3, 1)
         self.motor3.configure_command_mode(12)
-        self.motor4 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 25)
         self.motor4.set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
         self.motor4.set_id_pid_constants(1500, 200)
         self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -405,6 +405,11 @@ def main():
             yvel = 0.7*yvel + 0.3*(desired_pos[1] - 60)
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+
+            xvel = 0
+            yvel = 0
+            print(heading_error)
+
             rot = spin_weight * heading_error
             rot = max(min(rot, 1), -1)
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
