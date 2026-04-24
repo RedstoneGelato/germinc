@@ -10,17 +10,8 @@ from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 from gpiozero import OutputDevice
-import select
-import sys
 
-PIN = 17
-kick_pin = OutputDevice(17)
-kick_pin.off()
-last_kick = 0
-kick_active = False
-kick_start = 0
-kick_duration = 0.05
-kick_cooldown = 0.5
+kick_pin = OutputDevice(17, active_high=True, initial_value=False)
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -29,7 +20,7 @@ class FrameGrabber(threading.Thread):
         self.running = True
 
         self.frame = None
-        self.hsv = None
+        self.hsv = np.zeros((120,160,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
         self.cap.set_controls({"FrameRate": 60})
         config = self.cap.create_preview_configuration(
@@ -42,34 +33,16 @@ class FrameGrabber(threading.Thread):
         })
         self.cap.start()
 
-        self.camera_matrix = np.array([
-            [120, 0, 80],
-            [0, 120, 60],
-            [0, 0, 1]
-        ], dtype=np.float32)
-
-        self.dist_coeffs = np.array([
-            -0.35, 0.12, 0, 0, -0.02
-        ], dtype=np.float32)
-
-        self.map1, self.map2 = cv2.initUndistortRectifyMap(
-            self.camera_matrix,
-            self.dist_coeffs,
-            None,
-            self.camera_matrix,
-            (160,120),
-            cv2.CV_16SC2
-        )
-
-        self.hsv = np.zeros((120,160,3), dtype=np.uint8)
-
     def run(self):
         while self.running:
             frame = self.cap.capture_array("lores")
             bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
-            undistorted = cv2.remap(bgr, self.map1, self.map2, cv2.INTER_LINEAR)
-            self.frame = undistorted
-            self.hsv[:] = cv2.cvtColor(undistorted, cv2.COLOR_BGR2HSV)
+            self.frame = bgr
+            try:
+                self.hsv[:] = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+            except:
+                continue
+            time.sleep(0.01)
 
 class DetectionThread(threading.Thread):
     def __init__(self, grabber):
@@ -101,8 +74,8 @@ class DetectionThread(threading.Thread):
                 time.sleep(0.005)
                 continue
 
-            frame = self.grabber.frame
-            hsv = self.grabber.hsv
+            frame = self.grabber.frame.copy()
+            hsv = self.grabber.hsv.copy()
             self.ready = True
 
             # reset
@@ -212,12 +185,11 @@ class MotorThread(threading.Thread):
         self.daemon = True
         self.running = True
 
-        self.speedlimit = 10000000
+        self.speedlimit = 100000000
         self.motorspeed1 = 0
         self.motorspeed2 = 0
         self.motorspeed3 = 0
         self.motorspeed4 = 0
-        self.motorspeed5 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
         self.motor1 = PowerfulBLDCDriver(self.i2c, 25)
@@ -265,36 +237,16 @@ class MotorThread(threading.Thread):
             self.motor4.set_speed(int(self.motorspeed4))
             time.sleep(0.005)
 
-def trigger_kick():
-    global last_kick, kick_active, kick_start
-
-    now = time.time()
-
-    if now - last_kick < kick_cooldown:
-        return
-
-    kick_pin.on()   # or LOW if inverted
-    kick_active = True
-    kick_start = now
-    last_kick = now
-
-def update_kick():
-    global kick_active
-
-    if kick_active and (time.time() - kick_start > kick_duration):
-        kick_pin.off()
-        kick_active = False
-
 def VelocityToMotor(xvel, yvel, rot, maxspd):
     mag = math.hypot(xvel, yvel)
     if mag > 1:
         xvel /= mag
         yvel /= mag
 
-    motor1 = xvel*math.cos(math.pi/6) + yvel*math.sin(math.pi/6) + rot
-    motor2 = xvel*math.cos(5*math.pi/6) + yvel*math.sin(5*math.pi/6) + rot
-    motor3 = xvel*math.cos(4*math.pi/3) + yvel*math.sin(4*math.pi/3) + rot
-    motor4 = xvel*math.cos(5*math.pi/3) + yvel*math.sin(5*math.pi/3) + rot
+    motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) + rot
+    motor2 = xvel*math.cos(3*math.pi/4) + yvel*math.sin(3*math.pi/4) + rot
+    motor3 = xvel*math.cos(5*math.pi/4) + yvel*math.sin(5*math.pi/4) + rot
+    motor4 = xvel*math.cos(7*math.pi/4) + yvel*math.sin(7*math.pi/4) + rot
 
     scale = maxspd/max(abs(motor1), abs(motor2), abs(motor3), abs(motor4), 1)
     motor1 *= scale
@@ -304,16 +256,30 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
-def enter_pressed():
-    if not sys.stdin.isatty():
-        return False
-    
-    ready, _, _ = select.select((sys.stdin),[],[],0)
-    if not ready:
-        return False
-    
-    sys.stdin.readline()
-    return True
+def kick(trigger=False):
+    # persistent state (stored on the function itself)
+    if not hasattr(kick, "last_kick"):
+        kick.last_kick = 0
+        kick.active = False
+        kick.start = 0
+
+    kick_duration = 0.05
+    kick_cooldown = 0.5
+
+    now = time.time()
+
+    # trigger kick
+    if trigger and not kick.active:
+        if now - kick.last_kick >= kick_cooldown:
+            kick_pin.on()
+            kick.active = True
+            kick.start = now
+            kick.last_kick = now
+
+    # update (turn off after duration)
+    if kick.active and (now - kick.start >= kick_duration):
+        kick_pin.off()
+        kick.active = False
 
 def safe_shutdown(grabber, camera, motors, imu):
     print("Shutting down safely...")
@@ -343,6 +309,7 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.join()
     motors.join()
     imu.join()
+    kick_pin.close()
 
     cv2.destroyAllWindows()
 
@@ -370,6 +337,8 @@ def main():
     heading_offset = imu.heading
     goal_colour = 0 # 0 is yellow, 1 is blue
     HAS_BALL = False
+    xvel = 0
+    yvel = 0
 
     try:
         while True:
@@ -390,7 +359,6 @@ def main():
 
             if HAS_BALL:
                 spin_weight = 0.1
-                motors.motorspeed5 = 1000000
 
                 if goal_colour == 0:
                     if camera.yellow == [0,0,0,0]:
@@ -420,7 +388,7 @@ def main():
                         desired_pos = [goalx,goaly]
 
                 if ir[1] > 1000 and abs(ballpos[0]) < 10: # kick check: very close, center
-                    trigger_kick()
+                    kick(True)
 
             else:
                 spin_weight = 0.05
@@ -433,9 +401,6 @@ def main():
                 else:
                     desired_pos = [ballpos[0] + 10, ballpos[1] - 10] # bottom left
 
-            if enter_pressed():
-                trigger_kick()
-
             xvel = 0.7*xvel + 0.3*(desired_pos[0] - 80)
             yvel = 0.7*yvel + 0.3*(desired_pos[1] - 60)
             heading_error = desired_heading - compass
@@ -443,7 +408,7 @@ def main():
             rot = spin_weight * heading_error
             rot = max(min(rot, 1), -1)
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
-            update_kick()
+            kick()
     
     except KeyboardInterrupt:
         safe_shutdown(grabber,camera,motors,imu)
