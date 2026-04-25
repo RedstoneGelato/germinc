@@ -341,7 +341,7 @@ def main():
             #solenoid
             if key == ord('l'): kick(True)
 
-            ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]] #relative position of ball: x,y
+            ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball: x,y
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
@@ -392,6 +392,8 @@ def main():
                     desired_pos = [ballpos[0] - 10, ballpos[1] - 10] # bot can go to bottom right corner of ball without colliding
                 else:
                     desired_pos = [ballpos[0] + 10, ballpos[1] - 10] # bottom left
+
+                desired_pos = ballpos #testing
 
             xvel = 0.7*xvel + 0.3*(desired_pos[0] - 80)
             yvel = 0.7*yvel + 0.3*(desired_pos[1] - 60)
