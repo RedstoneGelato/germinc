@@ -313,14 +313,13 @@ def main():
     xvel = 0
     yvel = 0
     heading_error = 0
+    maxspd = 2000000 # ideal max speed
+    spin_weight = 1 # bigger number = bot spins more instead of moves more
+    desired_heading = 0
+    ir = [math.pi/2,100] # sub in for actual ir values direction, strength
 
     try:
         while True:
-            maxspd = 2000000 # ideal max speed
-            spin_weight = 1 # bigger number = bot spins more instead of moves more
-            desired_heading = 0
-            ir = [math.pi/2,100] # sub in for actual ir values direction, strength
-
             print(heading_error)
             cv2.imshow("e",camera.frame)
             key = cv2.waitKey(1) & 0xFF
@@ -343,7 +342,6 @@ def main():
             if key == ord('l'): kick(True)
 
             ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]] #relative position of ball: x,y
-
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
