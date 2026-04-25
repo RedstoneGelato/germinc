@@ -312,6 +312,7 @@ def main():
     HAS_BALL = False
     xvel = 0
     yvel = 0
+    heading_error = 0
 
     try:
         while True:
