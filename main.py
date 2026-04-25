@@ -53,9 +53,7 @@ class DetectionThread(threading.Thread):
 
         self.blue = [0,0,0,0]
         self.yellow = [0,0,0,0]
-        self.enemies = []
         self.frame = None
-        self.debug = False
         self.ready = False
 
         # HSV ranges
@@ -63,8 +61,6 @@ class DetectionThread(threading.Thread):
         self.upper_blue = np.array([110, 255, 255])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
-        self.lower_green = np.array([60, 100, 75])
-        self.upper_green = np.array([90, 255, 125])
 
         self.kernel = np.ones((3,3), np.uint8)
 
@@ -81,33 +77,21 @@ class DetectionThread(threading.Thread):
             # reset
             self.blue   = [0,0,0,0]
             self.yellow = [0,0,0,0]
-            self.enemies  = []
 
             masks = {
                 "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
                 "yellow": cv2.morphologyEx(cv2.inRange(hsv, self.lower_yellow, self.upper_yellow), cv2.MORPH_OPEN, self.kernel),
-                "green":  cv2.morphologyEx(cv2.inRange(hsv, self.lower_green, self.upper_green), cv2.MORPH_OPEN, self.kernel)
             }
 
             self.blue = self._merge_blobs(masks["blue"])
             self.yellow = self._merge_blobs(masks["yellow"])
 
-            inv_green = cv2.bitwise_not(masks["green"])
-            inv_green = cv2.bitwise_and(inv_green, cv2.bitwise_not(masks["blue"]))
-            inv_green = cv2.bitwise_and(inv_green, cv2.bitwise_not(masks["yellow"]))
-            inv_green = cv2.morphologyEx(inv_green, cv2.MORPH_OPEN, self.kernel)
-            inv_green = cv2.morphologyEx(inv_green, cv2.MORPH_CLOSE, self.kernel)
-            self.enemies = self.get_enemy_blobs(inv_green)
-
-            if frame is not None and self.debug == True:
+            if frame is not None:
                 for color, bbox in zip(["blue","yellow"], [self.blue,self.yellow]):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
-
-                for x, y, w, h in self.enemies:
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)  # red for enemies
 
             self.frame = frame
             time.sleep(0.005)
@@ -130,22 +114,6 @@ class DetectionThread(threading.Thread):
             return [x_min, y_min, x_max - x_min, y_max - y_min] # coords of top left corner, width, height
         else:
             return [0,0,0,0]
-
-    def get_enemy_blobs(self, mask, min_area=250):
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        blobs = []
-
-        for c in contours:
-            area = cv2.contourArea(c)
-            if area < min_area:
-                continue
-            x, y, w, h = cv2.boundingRect(c)
-            if h > 0 and h < 60 and w < 60:
-                if y < 10 or y + h > 110:   # too close to edges
-                    continue
-            blobs.append([x, y, w, h])
-
-        return blobs
     
 class IMUThread(threading.Thread):
     def __init__(self):
@@ -411,13 +379,29 @@ def main():
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
-
-            print(heading_error)
-
             rot = spin_weight * heading_error
             rot = max(min(rot, 1), -1)
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
             kick()
+
+            print(heading_error)
+            cv2.imshow(camera.frame)
+            key = cv2.waitKey(1) & 0xFF
+            #speed
+            if key == ord('a'): maxspd = 0
+            if key == ord('o'): maxspd = 2000000
+            if key == ord('e'): maxspd = 5000000
+            if key == ord('u'): maxspd = 10000000
+            #direction
+            if key == ord(';'): ir = [math.pi,100]
+            if key == ord('q'): ir = [math.pi/2,100]
+            if key == ord('j'): ir = [3*math.pi/2,100]
+            if key == ord('k'): ir = [0,100]
+            #rotation
+            if key == ord('x'): desired_heading = math.pi
+            if key == ord('b'): desired_heading = math.pi/2
+            if key == ord('m'): desired_heading = 0
+            if key == ord('w'): desired_heading = 3*math.pi/2
     
     except KeyboardInterrupt:
         safe_shutdown(grabber,camera,motors,imu)
