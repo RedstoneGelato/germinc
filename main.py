@@ -310,7 +310,7 @@ def main():
     heading_error = 0
     rot = 0
     maxspd = 2000000 # ideal max speed
-    spin_weight = 1 # bigger number = bot spins more instead of moves more
+    spin_weight = 50 # bigger number = bot spins more instead of moves more
     desired_heading = 0
     ir = [math.pi/2,100] # sub in for actual ir values direction, strength
     ballpos = []
@@ -348,7 +348,7 @@ def main():
                 HAS_BALL = False
 
             if HAS_BALL:
-                spin_weight = 2
+                spin_weight = 100
 
                 if goal_colour == 0:
                     if camera.yellow == [0,0,0,0]:
@@ -381,7 +381,7 @@ def main():
                     kick(True)
 
             else:
-                spin_weight = 1
+                spin_weight = 50
 
                 if ballpos[1] > 10:
                     desired_pos = [ballpos[0], ballpos[1] - 10] # directly behind the ball
@@ -396,12 +396,15 @@ def main():
             yvel = desired_pos[1]
             x_field = -yvel
             y_field = xvel
+            angle = -compass
+            x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
+            y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_field,y_field,rot,maxspd)
+            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
             kick()
     
     except KeyboardInterrupt:
