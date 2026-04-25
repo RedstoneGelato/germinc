@@ -403,7 +403,6 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-            rot = max(min(rot, 1), -1)
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
             kick()
     
