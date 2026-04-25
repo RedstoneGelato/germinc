@@ -163,7 +163,7 @@ class IMUThread(threading.Thread):
 
     def run(self):
         while self.running:
-            quat = self.imu.quaternion  # (x, y, z, w)
+            quat = self.imu.game_quaternion  # (x, y, z, w)
             if quat is not None:
                 self.ready = True
 
@@ -412,8 +412,6 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
 
-            xvel = 0
-            yvel = 0
             print(heading_error)
 
             rot = spin_weight * heading_error
