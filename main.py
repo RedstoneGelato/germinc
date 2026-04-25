@@ -394,8 +394,8 @@ def main():
             xvel = desired_pos[0]
             yvel = desired_pos[1]
             angle = -compass
-            x_field = yvel
-            y_field = -xvel
+            x_field = -yvel
+            y_field = xvel
             x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
