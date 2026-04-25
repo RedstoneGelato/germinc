@@ -317,10 +317,11 @@ def main():
     spin_weight = 1 # bigger number = bot spins more instead of moves more
     desired_heading = 0
     ir = [math.pi/2,100] # sub in for actual ir values direction, strength
+    ballpos = []
 
     try:
         while True:
-            print(heading_error)
+            print(ballpos)
             cv2.imshow("e",camera.frame)
             key = cv2.waitKey(1) & 0xFF
             #speed
