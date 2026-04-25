@@ -243,10 +243,10 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
         xvel /= mag
         yvel /= mag
 
-    motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) + rot
-    motor2 = xvel*math.cos(3*math.pi/4) + yvel*math.sin(3*math.pi/4) + rot
-    motor3 = xvel*math.cos(5*math.pi/4) + yvel*math.sin(5*math.pi/4) + rot
-    motor4 = xvel*math.cos(7*math.pi/4) + yvel*math.sin(7*math.pi/4) + rot
+    motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) - rot
+    motor2 = xvel*math.cos(3*math.pi/4) + yvel*math.sin(3*math.pi/4) - rot
+    motor3 = xvel*math.cos(5*math.pi/4) + yvel*math.sin(5*math.pi/4) - rot
+    motor4 = xvel*math.cos(7*math.pi/4) + yvel*math.sin(7*math.pi/4) - rot
 
     scale = maxspd/max(abs(motor1), abs(motor2), abs(motor3), abs(motor4), 1)
     motor1 *= scale
@@ -343,7 +343,7 @@ def main():
     try:
         while True:
             maxspd = 2000000 # ideal max speed
-            spin_weight = 0.05 # bigger number = bot spins more instead of moves more
+            spin_weight = 0.2 # bigger number = bot spins more instead of moves more
             desired_heading = 0
 
             ir = [math.pi/2,100] # sub in for actual ir values direction, strength
