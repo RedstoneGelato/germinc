@@ -343,7 +343,7 @@ def main():
     try:
         while True:
             maxspd = 2000000 # ideal max speed
-            spin_weight = 0.2 # bigger number = bot spins more instead of moves more
+            spin_weight = 1 # bigger number = bot spins more instead of moves more
             desired_heading = 0
 
             ir = [math.pi/2,100] # sub in for actual ir values direction, strength
@@ -358,7 +358,7 @@ def main():
                 HAS_BALL = False
 
             if HAS_BALL:
-                spin_weight = 0.1
+                spin_weight = 2
 
                 if goal_colour == 0:
                     if camera.yellow == [0,0,0,0]:
@@ -391,7 +391,7 @@ def main():
                     kick(True)
 
             else:
-                spin_weight = 0.05
+                spin_weight = 1
                 desired_heading = 0
 
                 if ballpos[1] > 10:
@@ -405,6 +405,7 @@ def main():
             yvel = 0.7*yvel + 0.3*(desired_pos[1] - 60)
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+            heading_error = round(heading_error, 3)
 
             xvel = 0
             yvel = 0
