@@ -155,7 +155,7 @@ class IMUThread(threading.Thread):
 
         self.i2c = busio.I2C(board.SCL, board.SDA, frequency = 400000)
         self.imu = BNO08X_I2C(self.i2c)
-        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
+        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
 
         self.heading = 0
         self.alpha = 0.2
@@ -331,10 +331,15 @@ def main():
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready):
         time.sleep(0.05)
+    
+    print("Calibrating heading... keep robot still")
+
+    time.sleep(2)  # let fusion settle
+
+    heading_offset = imu.heading
 
     print("running")
 
-    heading_offset = imu.heading
     goal_colour = 0 # 0 is yellow, 1 is blue
     HAS_BALL = False
     xvel = 0
