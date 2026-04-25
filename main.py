@@ -402,6 +402,8 @@ def main():
             if key == ord('b'): desired_heading = math.pi/2
             if key == ord('m'): desired_heading = 0
             if key == ord('w'): desired_heading = 3*math.pi/2
+            #solenoid
+            if key == ord('l'): kick(True)
     
     except KeyboardInterrupt:
         safe_shutdown(grabber,camera,motors,imu)
