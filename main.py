@@ -318,8 +318,29 @@ def main():
             maxspd = 2000000 # ideal max speed
             spin_weight = 1 # bigger number = bot spins more instead of moves more
             desired_heading = 0
-
             ir = [math.pi/2,100] # sub in for actual ir values direction, strength
+
+            print(heading_error)
+            cv2.imshow("e",camera.frame)
+            key = cv2.waitKey(1) & 0xFF
+            #speed
+            if key == ord('a'): maxspd = 0
+            if key == ord('o'): maxspd = 2000000
+            if key == ord('e'): maxspd = 5000000
+            if key == ord('u'): maxspd = 10000000
+            #direction
+            if key == ord(';'): ir = [math.pi,100]
+            if key == ord('q'): ir = [math.pi/2,100]
+            if key == ord('j'): ir = [3*math.pi/2,100]
+            if key == ord('k'): ir = [0,100]
+            #rotation
+            if key == ord('x'): desired_heading = math.pi
+            if key == ord('b'): desired_heading = math.pi/2
+            if key == ord('m'): desired_heading = 0
+            if key == ord('w'): desired_heading = 3*math.pi/2
+            #solenoid
+            if key == ord('l'): kick(True)
+
             ballpos = [math.cos(ir[0]) * ir[1], math.sin(ir[0]) * ir[1]] #relative position of ball: x,y
 
             compass = imu.heading - heading_offset
@@ -365,7 +386,6 @@ def main():
 
             else:
                 spin_weight = 1
-                desired_heading = 0
 
                 if ballpos[1] > 10:
                     desired_pos = [ballpos[0], ballpos[1] - 10] # directly behind the ball
@@ -383,27 +403,6 @@ def main():
             rot = max(min(rot, 1), -1)
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(xvel,yvel,rot,maxspd)
             kick()
-
-            print(heading_error)
-            cv2.imshow(camera.frame)
-            key = cv2.waitKey(1) & 0xFF
-            #speed
-            if key == ord('a'): maxspd = 0
-            if key == ord('o'): maxspd = 2000000
-            if key == ord('e'): maxspd = 5000000
-            if key == ord('u'): maxspd = 10000000
-            #direction
-            if key == ord(';'): ir = [math.pi,100]
-            if key == ord('q'): ir = [math.pi/2,100]
-            if key == ord('j'): ir = [3*math.pi/2,100]
-            if key == ord('k'): ir = [0,100]
-            #rotation
-            if key == ord('x'): desired_heading = math.pi
-            if key == ord('b'): desired_heading = math.pi/2
-            if key == ord('m'): desired_heading = 0
-            if key == ord('w'): desired_heading = 3*math.pi/2
-            #solenoid
-            if key == ord('l'): kick(True)
     
     except KeyboardInterrupt:
         safe_shutdown(grabber,camera,motors,imu)
