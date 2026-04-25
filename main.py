@@ -396,14 +396,12 @@ def main():
             angle = -compass
             x_field = -yvel
             y_field = xvel
-            x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
-            y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_field,y_field,rot,maxspd)
             kick()
     
     except KeyboardInterrupt:
