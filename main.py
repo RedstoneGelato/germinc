@@ -308,6 +308,7 @@ def main():
     xvel = 0
     yvel = 0
     heading_error = 0
+    rot = 0
     maxspd = 2000000 # ideal max speed
     spin_weight = 1 # bigger number = bot spins more instead of moves more
     desired_heading = 0
@@ -316,7 +317,7 @@ def main():
 
     try:
         while True:
-            print(ballpos)
+            print(rot,desired_heading,heading_error)
             cv2.imshow("e",camera.frame)
             key = cv2.waitKey(1) & 0xFF
             #speed
@@ -393,7 +394,6 @@ def main():
 
             xvel = desired_pos[0]
             yvel = desired_pos[1]
-            angle = -compass
             x_field = -yvel
             y_field = xvel
 
