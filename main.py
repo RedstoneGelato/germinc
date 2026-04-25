@@ -206,11 +206,6 @@ class MotorThread(threading.Thread):
             time.sleep(0.005)
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
-    mag = math.hypot(xvel, yvel)
-    if mag > 1:
-        xvel /= mag
-        yvel /= mag
-
     motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) - rot
     motor2 = xvel*math.cos(3*math.pi/4) + yvel*math.sin(3*math.pi/4) - rot
     motor3 = xvel*math.cos(5*math.pi/4) + yvel*math.sin(5*math.pi/4) - rot
@@ -396,8 +391,8 @@ def main():
 
                 desired_pos = ballpos #testing
 
-            xvel = 0.7*xvel + 0.3*(desired_pos[0] - 80)
-            yvel = 0.7*yvel + 0.3*(desired_pos[1] - 60)
+            xvel = desired_pos[0]
+            yvel = desired_pos[1]
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
