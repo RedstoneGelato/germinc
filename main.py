@@ -320,7 +320,7 @@ def main():
             print(rot,desired_heading,heading_error)
             cv2.imshow("e",camera.frame)
             key = cv2.waitKey(1) & 0xFF
-            #speed
+            # TESTING speed
             if key == ord('a'): maxspd = 0
             if key == ord('o'): maxspd = 2000000
             if key == ord('e'): maxspd = 5000000
@@ -338,7 +338,7 @@ def main():
             #solenoid
             if key == ord('l'): kick(True)
 
-            ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball: x,y
+            ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
