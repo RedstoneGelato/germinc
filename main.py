@@ -4,6 +4,8 @@ import cv2
 import picamera2
 import numpy as np
 import time
+import sys
+import select
 import board
 import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
@@ -248,6 +250,11 @@ def kick(trigger=False):
         kick_pin.off()
         kick.active = False
 
+def read_input():
+    if select.select([sys.stdin], [], [], 0)[0]:
+        return sys.stdin.readline().strip()
+    return None
+
 def safe_shutdown(grabber, camera, motors, imu):
     print("Shutting down safely...")
 
@@ -256,6 +263,10 @@ def safe_shutdown(grabber, camera, motors, imu):
     motors.motorspeed2 = 0
     motors.motorspeed3 = 0
     motors.motorspeed4 = 0
+    motors.motor1.clear_faults()
+    motors.motor2.clear_faults()
+    motors.motor3.clear_faults()
+    motors.motor4.clear_faults()
 
     # allow motor thread to send stop command
     time.sleep(0.05)
@@ -285,13 +296,10 @@ def safe_shutdown(grabber, camera, motors, imu):
 def main():
     grabber = FrameGrabber()
     grabber.start()
-
     camera = DetectionThread(grabber)
     camera.start()
-
     motors = MotorThread()
     motors.start()
-
     imu = IMUThread()
     imu.start()
 
@@ -300,9 +308,7 @@ def main():
         time.sleep(0.05)
     
     print("Calibrating heading... keep robot still")
-
     time.sleep(2)  # let fusion settle
-
     heading_offset = imu.heading
 
     print("running")
@@ -322,25 +328,24 @@ def main():
     try:
         while True:
             print(rot,desired_heading,heading_error)
-            cv2.imshow("e",camera.frame)
-            key = cv2.waitKey(1) & 0xFF
+            user_input = read_input()
             # TESTING speed
-            if key == ord('a'): maxspd = 0
-            if key == ord('o'): maxspd = 2000000
-            if key == ord('e'): maxspd = 5000000
-            if key == ord('u'): maxspd = 10000000
+            if user_input == "a": maxspd = 0
+            if user_input == "o": maxspd = 2000000
+            if user_input == "e": maxspd = 5000000
+            if user_input == "u": maxspd = 10000000
             #direction
-            if key == ord(';'): ir = [math.pi,100]
-            if key == ord('q'): ir = [math.pi/2,100]
-            if key == ord('j'): ir = [3*math.pi/2,100]
-            if key == ord('k'): ir = [0,100]
+            if user_input == ";": ir = [math.pi,100]
+            if user_input == "q": ir = [math.pi/2,100]
+            if user_input == "j": ir = [3*math.pi/2,100]
+            if user_input == "k": ir = [0,100]
             #rotation
-            if key == ord('x'): desired_heading = math.pi
-            if key == ord('b'): desired_heading = math.pi/2
-            if key == ord('m'): desired_heading = 0
-            if key == ord('w'): desired_heading = 3*math.pi/2
+            if user_input == "x": desired_heading = math.pi
+            if user_input == "b": desired_heading = math.pi/2
+            if user_input == "m": desired_heading = 0
+            if user_input == "w": desired_heading = 3*math.pi/2
             #solenoid
-            if key == ord('l'): kick(True)
+            if user_input == "l": kick(True)
 
             ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
