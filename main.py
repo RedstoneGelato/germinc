@@ -330,20 +330,20 @@ def main():
             print(rot,desired_heading,heading_error)
             user_input = read_input()
             # TESTING speed
-            if user_input == "a": maxspd = 0
-            if user_input == "o": maxspd = 2000000
-            if user_input == "e": maxspd = 5000000
-            if user_input == "u": maxspd = 10000000
+            if user_input == "1": maxspd = 0
+            if user_input == "2": maxspd = 2000000
+            if user_input == "3": maxspd = 5000000
+            if user_input == "4": maxspd = 10000000
             #direction
-            if user_input == ";": ir = [math.pi,100]
-            if user_input == "q": ir = [math.pi/2,100]
-            if user_input == "j": ir = [3*math.pi/2,100]
-            if user_input == "k": ir = [0,100]
+            if user_input == "a": ir = [math.pi,100]
+            if user_input == ",": ir = [math.pi/2,100]
+            if user_input == "o": ir = [3*math.pi/2,100]
+            if user_input == "e": ir = [0,100]
             #rotation
-            if user_input == "x": desired_heading = math.pi
-            if user_input == "b": desired_heading = math.pi/2
-            if user_input == "m": desired_heading = 0
-            if user_input == "w": desired_heading = 3*math.pi/2
+            if user_input == "h": desired_heading = math.pi
+            if user_input == "c": desired_heading = math.pi/2
+            if user_input == "n": desired_heading = 0
+            if user_input == "t": desired_heading = 3*math.pi/2
             #solenoid
             if user_input == "l": kick(True)
 
@@ -351,7 +351,7 @@ def main():
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
-            if ir[1] > 800 and ballpos[1] > 0 and abs(compass) < math.pi/4: # ball is in ball capture zone check: close enough, infront of bot, facing forwards
+            if ir[1] > 800 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot, facing forwards
                 HAS_BALL = True
             else:
                 HAS_BALL = False
