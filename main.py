@@ -331,9 +331,13 @@ def main():
             user_input = read_input()
             # TESTING speed
             if user_input == "1": maxspd = 0
-            if user_input == "2": maxspd = 2000000
-            if user_input == "3": maxspd = 5000000
-            if user_input == "4": maxspd = 10000000
+            if user_input == "2": maxspd = 500000
+            if user_input == "3": maxspd = 2000000
+            if user_input == "4": maxspd = 5000000
+            if user_input == "5": maxspd = 10000000
+            if user_input == "6": maxspd = 15000000
+            if user_input == "7": maxspd = 20000000
+            if user_input == "8": maxspd = 25000000
             #direction
             if user_input == "a": ir = [math.pi,100]
             if user_input == ",": ir = [math.pi/2,100]
