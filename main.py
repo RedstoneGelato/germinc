@@ -332,22 +332,24 @@ def main():
             # TESTING speed
             if user_input == "1": maxspd = 0
             if user_input == "2": maxspd = 500000
-            if user_input == "3": maxspd = 2000000
-            if user_input == "4": maxspd = 5000000
-            if user_input == "5": maxspd = 10000000
-            if user_input == "6": maxspd = 15000000
-            if user_input == "7": maxspd = 20000000
-            if user_input == "8": maxspd = 25000000
+            if user_input == "3": maxspd = 5000000
+            if user_input == "4": maxspd = 20000000
+            if user_input == "5": maxspd = 50000000
+            if user_input == "6": maxspd = 100000000
+            if user_input == "7": maxspd = 150000000
+            if user_input == "8": maxspd = 200000000
+            if user_input == "9": maxspd = 250000000
+            if user_input == "0": maxspd = 300000000
             #direction
             if user_input == "a": ir = [math.pi,100]
             if user_input == ",": ir = [math.pi/2,100]
             if user_input == "o": ir = [3*math.pi/2,100]
             if user_input == "e": ir = [0,100]
             #rotation
-            if user_input == "h": desired_heading = math.pi
-            if user_input == "c": desired_heading = math.pi/2
-            if user_input == "n": desired_heading = 0
-            if user_input == "t": desired_heading = 3*math.pi/2
+            if user_input == "h": desired_heading = math.pi/-2
+            if user_input == "c": desired_heading = 0
+            if user_input == "n": desired_heading = math.pi
+            if user_input == "t": desired_heading = math.pi/2
             #solenoid
             if user_input == "l": kick(True)
 
