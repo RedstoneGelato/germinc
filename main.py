@@ -354,8 +354,6 @@ def main():
             if user_input == "t": desired_heading = math.pi
             #others
             if user_input == "l": kick(True)
-            if user_input == ";": ballpos = [0,0]
-            if user_input == "q": ballpos = [0,200]
 
             ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
@@ -411,13 +409,8 @@ def main():
 
                 desired_pos = ballpos #testing
 
-            if ballpos == [0,0]:
-                xvel = 0
-                yvel = 0
-            else:
-                xvel = desired_pos[0]
-                yvel = desired_pos[1]
-
+            xvel = desired_pos[0]
+            yvel = desired_pos[1]
             x_field = -yvel
             y_field = xvel
             angle = -compass
@@ -427,7 +420,10 @@ def main():
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
-            rot = spin_weight * heading_error
+            if heading_error < 0.01:
+                rot = 0
+            else:
+                rot = spin_weight * heading_error
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
             kick()
     
