@@ -140,13 +140,10 @@ class IMUThread(threading.Thread):
                 x, y, z, w = quat
 
                 # convert quaternion → yaw (heading)
-                heading = math.atan2(
+                self.heading = math.atan2(
                     2*(w*z + x*y),
                     1 - 2*(y*y + z*z)
                 )
-
-                # smooth
-                self.heading = (self.heading * (1 - self.alpha)) + (heading * self.alpha)
             time.sleep(0.01)
 
 class MotorThread(threading.Thread):
@@ -329,7 +326,7 @@ def main():
 
     try:
         while True:
-            print(compass)
+            print(desired_heading,compass,heading_error)
             user_input = read_input()
             # TESTING speed
             if user_input == "1": maxspd = 0
@@ -420,10 +417,7 @@ def main():
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
-            if heading_error < 0.01:
-                rot = 0
-            else:
-                rot = spin_weight * heading_error
+            rot = spin_weight * heading_error
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
             kick()
     
