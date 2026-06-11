@@ -327,7 +327,7 @@ def main():
 
     try:
         while True:
-            print(rot,desired_heading,heading_error)
+            print(compass)
             user_input = read_input()
             # TESTING speed
             if user_input == "1": maxspd = 0
@@ -346,12 +346,14 @@ def main():
             if user_input == "o": ir = [3*math.pi/2,100]
             if user_input == "e": ir = [0,100]
             #rotation
-            if user_input == "h": desired_heading = math.pi/-2
+            if user_input == "h": desired_heading = math.pi/2
             if user_input == "c": desired_heading = 0
-            if user_input == "n": desired_heading = math.pi
-            if user_input == "t": desired_heading = math.pi/2
-            #solenoid
+            if user_input == "n": desired_heading = math.pi/-2
+            if user_input == "t": desired_heading = math.pi
+            #others
             if user_input == "l": kick(True)
+            if user_input == ";": ballpos = [0,0]
+            if user_input == "q": ballpos = [0,200]
 
             ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
@@ -407,8 +409,13 @@ def main():
 
                 desired_pos = ballpos #testing
 
-            xvel = desired_pos[0]
-            yvel = desired_pos[1]
+            if ballpos == [0,0]:
+                xvel = 0
+                yvel = 0
+            else:
+                xvel = desired_pos[0]
+                yvel = desired_pos[1]
+
             x_field = -yvel
             y_field = xvel
             angle = -compass
