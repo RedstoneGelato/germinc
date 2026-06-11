@@ -315,6 +315,8 @@ def main():
 
     goal_colour = 0 # 0 is yellow, 1 is blue
     HAS_BALL = False
+
+    compass = 0
     xvel = 0
     yvel = 0
     heading_error = 0
