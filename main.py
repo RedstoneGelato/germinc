@@ -55,6 +55,7 @@ class DetectionThread(threading.Thread):
 
         self.blue = [0,0,0,0]
         self.yellow = [0,0,0,0]
+        self.white = [0,0,0,0]
         self.frame = None
         self.ready = False
 
@@ -63,6 +64,8 @@ class DetectionThread(threading.Thread):
         self.upper_blue = np.array([110, 255, 255])
         self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
+        self.lower_white = np.array([0, 0, 180])
+        self.upper_white = np.array([180, 40, 255])
 
         self.kernel = np.ones((3,3), np.uint8)
 
@@ -83,17 +86,20 @@ class DetectionThread(threading.Thread):
             masks = {
                 "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
                 "yellow": cv2.morphologyEx(cv2.inRange(hsv, self.lower_yellow, self.upper_yellow), cv2.MORPH_OPEN, self.kernel),
+                "white": cv2.morphologyEx(cv2.inRange(hsv, self.lower_white, self.upper_white), cv2.MORPH_OPEN, self.kernel),
             }
 
             self.blue = self._merge_blobs(masks["blue"])
             self.yellow = self._merge_blobs(masks["yellow"])
+            self.white = self._merge_blobs(masks["white"])
 
             if frame is not None:
-                for color, bbox in zip(["blue","yellow"], [self.blue,self.yellow]):
+                for color, bbox in zip(["blue","yellow","white"], [self.blue,self.yellow,self.white]):
                     x, y, w, h = bbox
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
+                        if color=="white": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
 
             self.frame = frame
             time.sleep(0.005)
@@ -362,8 +368,6 @@ def main():
                 HAS_BALL = False
 
             if HAS_BALL:
-                spin_weight = 100
-
                 if goal_colour == 0:
                     if camera.yellow == [0,0,0,0]:
                         desired_heading = 0
@@ -395,8 +399,6 @@ def main():
                     kick(True)
 
             else:
-                spin_weight = 50
-
                 if ballpos[1] > 10:
                     desired_pos = [ballpos[0], ballpos[1] - 10] # directly behind the ball
                 elif ballpos[0] > 0:
@@ -410,12 +412,22 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-
-            xvel = desired_pos[0] * (1 + (rot / 160))
-            yvel = desired_pos[1] * (1 + (rot / 160))
+            xvel = desired_pos[0] * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000))
+            yvel = desired_pos[1] * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000))
             x_field = -yvel
             y_field = xvel
             angle = -compass
+
+            if camera.white[2] * camera.white[3] > 10000: #line detection
+                if camera.white[0] > 70:
+                    x_field = min(x_field,0)
+                if camera.white[0] + camera.white[2] < 90:
+                    x_field = max(x_field,0)
+                if camera.white[1] > 55:
+                    y_field = min(y_field,0)
+                if camera.white[1] + camera.white[3] < 65:
+                    y_field = max(y_field,0)
+
             x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
