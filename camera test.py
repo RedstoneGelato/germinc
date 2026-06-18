@@ -3,7 +3,6 @@ import numpy as np
 import picamera2
 import time
 
-frame = None
 hsv = np.zeros((120,160,3), dtype=np.uint8)
 cap = picamera2.Picamera2()
 cap.set_controls({"FrameRate": 60})
@@ -19,14 +18,16 @@ cap.start()
 
 blue = [0,0,0,0]
 yellow = [0,0,0,0]
+white = [0,0,0,0]
 frame = None
-ready = False
 
 # HSV ranges
 lower_blue = np.array([90, 200, 100])
 upper_blue = np.array([110, 255, 255])
 lower_yellow = np.array([0, 180, 180])
 upper_yellow = np.array([40, 255, 255])
+lower_white = np.array([0, 0, 180])
+upper_white = np.array([180, 40, 255])
 
 kernel = np.ones((3,3), np.uint8)
 
@@ -61,30 +62,32 @@ while True:
     if hsv is None or frame is None:
         time.sleep(0.005)
         continue
-
-    frame = frame.copy()
-    hsv = hsv.copy()
-
+    
     # reset
-    blue   = [0,0,0,0]
+    blue = [0,0,0,0]
     yellow = [0,0,0,0]
+    white = [0,0,0,0]
 
     masks = {
         "blue":   cv2.morphologyEx(cv2.inRange(hsv, lower_blue, upper_blue), cv2.MORPH_OPEN, kernel),
         "yellow": cv2.morphologyEx(cv2.inRange(hsv, lower_yellow, upper_yellow), cv2.MORPH_OPEN, kernel),
+        "white": cv2.morphologyEx(cv2.inRange(hsv, lower_white, upper_white), cv2.MORPH_OPEN, kernel)
     }
 
     blue = merge_blobs(masks["blue"])
     yellow = merge_blobs(masks["yellow"])
+    white = merge_blobs(masks["white"])
 
     if frame is not None:
-        for color, bbox in zip(["blue","yellow"], [blue,yellow]):
+        for color, bbox in zip(["blue","yellow","white"], [blue,yellow,white]):
             x, y, w, h = bbox
             if w > 0 and h > 0:
                 if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
                 if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
+                if color=="white": cv2.rectangle(frame, (x,y), (x+w,y+h), (255,255,255), 2)
 
     cv2.imshow("Debug", frame)
+    cv2.imshow("white", masks["white"])
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break

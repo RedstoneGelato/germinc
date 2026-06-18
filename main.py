@@ -80,8 +80,9 @@ class DetectionThread(threading.Thread):
             self.ready = True
 
             # reset
-            self.blue   = [0,0,0,0]
+            self.blue = [0,0,0,0]
             self.yellow = [0,0,0,0]
+            self.white = [0,0,0,0]
 
             masks = {
                 "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
@@ -99,7 +100,7 @@ class DetectionThread(threading.Thread):
                     if w > 0 and h > 0:
                         if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
                         if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
-                        if color=="white": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
+                        if color=="white": cv2.rectangle(frame, (x,y), (x+w,y+h), (255,255,255), 2)
 
             self.frame = frame
             time.sleep(0.005)
@@ -145,7 +146,7 @@ class IMUThread(threading.Thread):
 
                 x, y, z, w = quat
 
-                # convert quaternion → yaw (heading)
+                # convert quaternion -> yaw (heading)
                 self.heading = math.atan2(
                     2*(w*z + x*y),
                     1 - 2*(y*y + z*z)
@@ -311,7 +312,7 @@ def main():
         time.sleep(0.05)
     
     print("Calibrating heading... keep robot still")
-    time.sleep(2)  # let fusion settle
+    time.sleep(2)  # let imu settle
     heading_offset = imu.heading
 
     print("running")
