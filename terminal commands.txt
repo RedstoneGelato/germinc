@@ -7,8 +7,8 @@ GitHub commands:
 	git pull -> pull and download stuff from github
 
 PI commands:
-	SSH germinc1@germinc.local -> remote access to pi
-	source env/bin/activate -> activates virtual environment
+	SSH germinc1@germinc1 -> remote access to pi
+	source env/bin/activate -> activates virtual environment (do this in the folder /~ everytime)
 	htop -> see performance stats
 
 	ls -> list all files in the current directory (-a for hidden files)
@@ -16,7 +16,7 @@ PI commands:
 	touch -> make a file in the current directory
 	mkdir -> make a folder or new directory under the current directory
 
-	python3 "script name" -> runs script with python3
+	python3 "script name" -> runs script with python
 	sudo nano "script name" -> opens the script with the nano script editor
 
 NANO commands:
