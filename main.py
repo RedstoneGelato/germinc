@@ -418,6 +418,9 @@ def main():
 
     try:
         while True:
+            irx = 0
+            iry = 0
+
             print(desired_heading,compass,heading_error)
             user_input = read_input()
             # TESTING speed
@@ -443,6 +446,17 @@ def main():
             if user_input == "t": desired_heading = math.pi
             #others
             if user_input == "l": kick(True)
+
+            for i, val in enumerate(pcb.ir):
+                if val:
+                    angle = i * math.pi / 6 + math.pi/2
+
+                    # Forward is +y, right is +x
+                    irx += math.cos(angle)
+                    iry += math.sin(angle)
+
+            if irx != 0 or iry != 0:
+                ir[0] = math.atan2(irx, iry)
 
             ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
@@ -498,8 +512,9 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-            xvel = desired_pos[0] * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000))
-            yvel = desired_pos[1] * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000))
+            maxspd = round(maxspd * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000)))
+            xvel = desired_pos[0]
+            yvel = desired_pos[1]
             x_field = -yvel
             y_field = xvel
             angle = -compass
