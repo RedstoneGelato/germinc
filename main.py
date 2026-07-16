@@ -5,6 +5,7 @@ import picamera2
 import numpy as np
 import time
 import sys
+from smbus2 import SMBus, i2c_msg
 import select
 import board
 import busio
@@ -153,6 +154,82 @@ class IMUThread(threading.Thread):
                 )
             time.sleep(0.01)
 
+class PCBThread(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+
+        self.ready = False
+        self.I2C_BUS = 1
+        self.I2C_ADDR = 0x64
+        self.CMD_READ_COLOURS = 0x01
+        self.CMD_READ_IR = 0x02
+        self.COLOUR_SENSOR_COUNT = 32
+        self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
+        self.IR_SENSOR_COUNT = 12
+        self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT
+        self.CMD_TO_RESPONSE_DELAY = 0.05
+        self.READ_RETRIES = 3
+        self.RETRY_DELAY = 0.02
+        self.bus = SMBus(self.I2C_BUS)
+
+    def _send_command(self, cmd):
+        self.bus.write_byte(self.I2C_ADDR, cmd)
+
+    def _read_raw(self, length):
+        msg = i2c_msg.read(self.I2C_ADDR, length)
+        self.bus.i2c_rdwr(msg)
+        return bytes(msg)
+
+    def _read_packet(self, cmd, length):
+        last_err = None
+
+        for _ in range(self.READ_RETRIES):
+            try:
+                self._send_command(cmd)
+                time.sleep(self.CMD_TO_RESPONSE_DELAY)
+
+                data = self._read_raw(length)
+                if len(data) == length:
+                    return data
+
+            except OSError as e:
+                last_err = e
+                time.sleep(self.RETRY_DELAY)
+
+        raise IOError(f"Failed to read packet: {last_err}")
+
+    def _read_ir(self):
+        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
+        return list(data)
+
+    def _read_colours(self):
+        data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
+
+        values = []
+        for i in range(self.COLOUR_SENSOR_COUNT):
+            lo = data[2*i]
+            hi = data[2*i + 1]
+            values.append(lo | (hi << 8))
+
+        return values
+
+    def run(self):
+        while self.running:
+            try:
+                self.ir = self._read_ir()
+                self.colours = self._read_colours()
+                self.ready = True
+
+            except IOError as e:
+                print(f"PCB I2C error: {e}")
+                self.ready = False
+
+            time.sleep(0.01)
+
+        self.bus.close()
+
 class MotorThread(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -263,7 +340,7 @@ def read_input():
         return sys.stdin.readline().strip()
     return None
 
-def safe_shutdown(grabber, camera, motors, imu):
+def safe_shutdown(grabber, camera, motors, imu, pcb):
     print("Shutting down safely...")
 
     # stop motors first
@@ -284,6 +361,7 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.running = False
     motors.running = False
     imu.running = False
+    pcb.running = False
 
     try:
         grabber.cap.stop()
@@ -295,6 +373,7 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.join()
     motors.join()
     imu.join()
+    pcb.join()
     kick_pin.close()
 
     cv2.destroyAllWindows()
@@ -310,9 +389,11 @@ def main():
     motors.start()
     imu = IMUThread()
     imu.start()
+    pcb = PCBThread()
+    pcb.start()
 
     print("Waiting for sensors...")
-    while not (imu.ready and camera.ready):
+    while not (imu.ready and camera.ready and pcb.ready):
         time.sleep(0.05)
     
     print("Calibrating heading... keep robot still")
@@ -440,6 +521,6 @@ def main():
             kick()
     
     except KeyboardInterrupt:
-        safe_shutdown(grabber,camera,motors,imu)
+        safe_shutdown(grabber,camera,motors,imu,pcb)
 
 main()
