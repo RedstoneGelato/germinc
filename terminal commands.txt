@@ -11,6 +11,8 @@ PI commands:
 	source env/bin/activate -> activates virtual environment (do this in the folder /~ everytime)
 	htop -> see performance stats
 
+	cd Documents
+	cd Code
 	ls -> list all files in the current directory (-a for hidden files)
 	cd -> change directories
 	touch -> make a file in the current directory
