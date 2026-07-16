@@ -10,6 +10,7 @@ PI commands:
 	SSH germinc1@germinc1 -> remote access to pi
 	source env/bin/activate -> activates virtual environment (do this in the folder /~ everytime)
 	htop -> see performance stats
+	i2cdetect -y 1 -> view i2c connections
 
 	cd Documents
 	cd Code
@@ -24,6 +25,10 @@ PI commands:
 NANO commands:
 	ctrl + O, enter -> save
 	ctrl + X -> quit
+
+OTHER stuff:
+	Teamviewer ID: 1 276 215 774
+	Teamviewer PWD: GermInc1!
 
 github token
 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
