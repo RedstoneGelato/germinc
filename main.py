@@ -421,7 +421,6 @@ def main():
             irx = 0
             iry = 0
 
-            print(desired_heading,compass,heading_error)
             user_input = read_input()
             # TESTING speed
             if user_input == "1": maxspd = 0
@@ -457,12 +456,13 @@ def main():
 
             if irx != 0 or iry != 0:
                 ir[0] = math.atan2(irx, iry)
+            print(ir[0])
 
             ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
-            if ir[1] > 800 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot, facing forwards
+            if ir[1] > 800 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
                 HAS_BALL = True
             else:
                 HAS_BALL = False
@@ -499,14 +499,8 @@ def main():
                     kick(True)
 
             else:
-                if ballpos[1] > 10:
-                    desired_pos = [ballpos[0], ballpos[1] - 10] # directly behind the ball
-                elif ballpos[0] > 0:
-                    desired_pos = [ballpos[0] - 10, ballpos[1] - 10] # bot can go to bottom right corner of ball without colliding
-                else:
-                    desired_pos = [ballpos[0] + 10, ballpos[1] - 10] # bottom left
-
-                desired_pos = ballpos #testing
+                desired_heading = ir[0]
+                desired_pos = ballpos
 
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
