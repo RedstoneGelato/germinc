@@ -52,7 +52,7 @@ def merge_blobs(mask):
 while True:
     frame = cap.capture_array("lores")
     try:
-        hsv[:] = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+        hsv[:] = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     except:
         continue
 
