@@ -200,6 +200,10 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
+    def read_ir_activity(self):
+        data = self._read_packet(self.bus, 0x04, 24)
+        return [data[i*2] | (data[i*2+1] << 8) for i in range(12)]
+
     def _read_ir(self):
         data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
         return list(data)
@@ -220,6 +224,7 @@ class PCBThread(threading.Thread):
             try:
                 self.ir = self._read_ir()
                 self.colours = self._read_colours()
+                self.strength = self.read_ir_activity()
                 self.ready = True
 
             except IOError as e:
@@ -413,8 +418,9 @@ def main():
     basespd = 2000000 # ideal max speed
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     desired_heading = 0
-    ir = [math.pi/2,100] # sub in for actual ir values direction, strength
+    ir = [math.pi/2,100]
     ballpos = [0,0]
+    irstrengthlist = []
 
     try:
         while True:
@@ -457,6 +463,12 @@ def main():
             if irx != 0 or iry != 0:
                 ir[0] = math.atan2(irx, iry)
             print(ir[0])
+
+            average = sum(pcb.strength) // len(pcb.strength)
+            irstrengthlist.append(average)
+            if len(irstrengthlist) > 10:
+                irstrengthlist.pop(0)
+            ir[1] = sum(irstrengthlist) // len(irstrengthlist)
 
             ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
