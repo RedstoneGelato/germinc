@@ -33,16 +33,18 @@ I2C_BUS = 1        # /dev/i2c-1 on Raspberry Pi 40-pin header
 # I2C_SLAVE_ADDRESS macro (0x42) and the actual configured HAL address
 # (hi2c1.Init.OwnAddress1 = 200, which is 0x64 in real 7-bit terms).
 # Set this to whichever one your board actually responds to.
-# I2C_ADDR = 0x42
-I2C_ADDR = 0x64   # <- use this instead if OwnAddress1 hasn't been fixed to 0x42<<1
+I2C_ADDR = 0x42
+# I2C_ADDR = 0x64   # <- use this instead if OwnAddress1 hasn't been fixed to 0x42<<1
 
 CMD_READ_COLOURS = 0x01
 CMD_READ_IR = 0x02
+CMD_READ_BALL = 0x03
 
 COLOUR_SENSOR_COUNT = 32
 COLOUR_PACKET_SIZE = COLOUR_SENSOR_COUNT * 2   # 64 bytes, uint16 LE each
 IR_SENSOR_COUNT = 12
 IR_PACKET_SIZE = IR_SENSOR_COUNT               # 12 bytes, uint8 each
+BALL_PACKET_SIZE = 2                           # {direction (1-12, 0=none), strength (0-10)}
 
 # Time to let the STM32 main loop pick up the command and fill the buffer
 # before we issue the read transaction. The STM32 loop also does a full
@@ -97,6 +99,13 @@ def read_ir(bus: SMBus) -> list[int]:
     return list(data)
 
 
+def read_ball(bus: SMBus) -> tuple[int, int]:
+    """Returns (direction, strength). direction is 1-12 (clock position) or
+    0 if no ball is currently detected. strength is 0-10."""
+    data = _read_packet(bus, CMD_READ_BALL, BALL_PACKET_SIZE)
+    return data[0], data[1]
+
+
 def read_colours(bus: SMBus) -> list[int]:
     """Returns a list of 32 ints (0-4095 ADC counts), COLOUR1..COLOUR32 in order."""
     data = _read_packet(bus, CMD_READ_COLOURS, COLOUR_PACKET_SIZE)
@@ -128,6 +137,7 @@ def main():
             try:
                 ir = read_ir(bus)
                 colours = read_colours(bus)
+                direction, strength = read_ball(bus)
             except IOError as e:
                 print(f"I2C read error: {e}")
                 time.sleep(0.2)
@@ -138,6 +148,11 @@ def main():
 
             colour_str = " ".join(f"C{i+1}:{v:4d}" for i, v in enumerate(colours))
             print(colour_str)
+
+            if direction == 0:
+                print("Ball: not detected")
+            else:
+                print(f"Ball: direction {direction} o'clock, strength {strength}/10")
             print("-" * 60)
 
             time.sleep(0.1)
