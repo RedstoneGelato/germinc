@@ -7,13 +7,12 @@ hsv = np.zeros((120,160,3), dtype=np.uint8)
 cap = picamera2.Picamera2()
 config = cap.create_preview_configuration(
     main={"size": (320, 240), "format": "RGB888"},
-    lores={"size": (160, 120), "format": "YUV420"})
+    lores={"size": (160, 120), "format": "RGB888"})
 cap.configure(config)
 cap.set_controls({
     "AwbEnable": False,
     "ColourGains": (2.1, 2.7)   # blue, red tweak when needed
 })
-cap.set_controls({"FrameRate": 60})
 cap.start()
 
 blue = [0,0,0,0]
@@ -52,10 +51,8 @@ def merge_blobs(mask):
 
 while True:
     frame = cap.capture_array("lores")
-    bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
-    frame = bgr
     try:
-        hsv[:] = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        hsv[:] = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
     except:
         continue
 
