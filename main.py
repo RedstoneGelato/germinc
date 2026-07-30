@@ -414,7 +414,7 @@ def main():
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     desired_heading = 0
     ir = [math.pi/2,100] # sub in for actual ir values direction, strength
-    ballpos = []
+    ballpos = [0,0]
 
     try:
         while True:
