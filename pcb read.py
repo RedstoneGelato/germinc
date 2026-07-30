@@ -116,6 +116,10 @@ def read_colours(bus: SMBus) -> list[int]:
         values.append(lo | (hi << 8))
     return values
 
+def read_ir_activity(bus):
+    data = _read_packet(bus, 0x04, 24)
+    return [data[i*2] | (data[i*2+1] << 8) for i in range(12)]
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -131,6 +135,13 @@ def main():
 
     print(f"Reading from STM32 at 0x{I2C_ADDR:02X} on I2C bus {I2C_BUS}. "
           f"Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            activity = read_ir_activity(bus)
+            print(activity)
+            time.sleep(0.2)
+
 
     try:
         while True:
