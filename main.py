@@ -410,7 +410,7 @@ def main():
     yvel = 0
     heading_error = 0
     rot = 0
-    maxspd = 2000000 # ideal max speed
+    basespd = 2000000 # ideal max speed
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     desired_heading = 0
     ir = [math.pi/2,100] # sub in for actual ir values direction, strength
@@ -423,16 +423,16 @@ def main():
 
             user_input = read_input()
             # TESTING speed
-            if user_input == "1": maxspd = 0
-            if user_input == "2": maxspd = 500000
-            if user_input == "3": maxspd = 5000000
-            if user_input == "4": maxspd = 20000000
-            if user_input == "5": maxspd = 50000000
-            if user_input == "6": maxspd = 100000000
-            if user_input == "7": maxspd = 150000000
-            if user_input == "8": maxspd = 200000000
-            if user_input == "9": maxspd = 250000000
-            if user_input == "0": maxspd = 300000000
+            if user_input == "1": basespd = 0
+            if user_input == "2": basespd = 500000
+            if user_input == "3": basespd = 5000000
+            if user_input == "4": basespd = 20000000
+            if user_input == "5": basespd = 50000000
+            if user_input == "6": basespd = 100000000
+            if user_input == "7": basespd = 150000000
+            if user_input == "8": basespd = 200000000
+            if user_input == "9": basespd = 250000000
+            if user_input == "0": basespd = 300000000
             #direction
             if user_input == "a": ir = [math.pi,100]
             if user_input == ",": ir = [math.pi/2,100]
@@ -506,7 +506,7 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-            maxspd = round(maxspd * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000)))
             xvel = desired_pos[0]
             yvel = desired_pos[1]
             x_field = -yvel
