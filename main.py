@@ -5,6 +5,7 @@ import picamera2
 import numpy as np
 import time
 import sys
+from smbus2 import SMBus, i2c_msg
 import select
 import board
 import busio
@@ -153,6 +154,82 @@ class IMUThread(threading.Thread):
                 )
             time.sleep(0.01)
 
+class PCBThread(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+
+        self.ready = False
+        self.I2C_BUS = 1
+        self.I2C_ADDR = 0x64
+        self.CMD_READ_COLOURS = 0x01
+        self.CMD_READ_IR = 0x02
+        self.COLOUR_SENSOR_COUNT = 32
+        self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
+        self.IR_SENSOR_COUNT = 12
+        self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT
+        self.CMD_TO_RESPONSE_DELAY = 0.05
+        self.READ_RETRIES = 3
+        self.RETRY_DELAY = 0.02
+        self.bus = SMBus(self.I2C_BUS)
+
+    def _send_command(self, cmd):
+        self.bus.write_byte(self.I2C_ADDR, cmd)
+
+    def _read_raw(self, length):
+        msg = i2c_msg.read(self.I2C_ADDR, length)
+        self.bus.i2c_rdwr(msg)
+        return bytes(msg)
+
+    def _read_packet(self, cmd, length):
+        last_err = None
+
+        for _ in range(self.READ_RETRIES):
+            try:
+                self._send_command(cmd)
+                time.sleep(self.CMD_TO_RESPONSE_DELAY)
+
+                data = self._read_raw(length)
+                if len(data) == length:
+                    return data
+
+            except OSError as e:
+                last_err = e
+                time.sleep(self.RETRY_DELAY)
+
+        raise IOError(f"Failed to read packet: {last_err}")
+
+    def _read_ir(self):
+        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
+        return list(data)
+
+    def _read_colours(self):
+        data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
+
+        values = []
+        for i in range(self.COLOUR_SENSOR_COUNT):
+            lo = data[2*i]
+            hi = data[2*i + 1]
+            values.append(lo | (hi << 8))
+
+        return values
+
+    def run(self):
+        while self.running:
+            try:
+                self.ir = self._read_ir()
+                self.colours = self._read_colours()
+                self.ready = True
+
+            except IOError as e:
+                print(f"PCB I2C error: {e}")
+                self.ready = False
+
+            time.sleep(0.01)
+
+        self.bus.close()
+
 class MotorThread(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -263,7 +340,7 @@ def read_input():
         return sys.stdin.readline().strip()
     return None
 
-def safe_shutdown(grabber, camera, motors, imu):
+def safe_shutdown(grabber, camera, motors, imu, pcb):
     print("Shutting down safely...")
 
     # stop motors first
@@ -284,6 +361,7 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.running = False
     motors.running = False
     imu.running = False
+    pcb.running = False
 
     try:
         grabber.cap.stop()
@@ -295,6 +373,7 @@ def safe_shutdown(grabber, camera, motors, imu):
     camera.join()
     motors.join()
     imu.join()
+    pcb.join()
     kick_pin.close()
 
     cv2.destroyAllWindows()
@@ -310,9 +389,11 @@ def main():
     motors.start()
     imu = IMUThread()
     imu.start()
+    pcb = PCBThread()
+    pcb.start()
 
     print("Waiting for sensors...")
-    while not (imu.ready and camera.ready):
+    while not (imu.ready and camera.ready and pcb.ready):
         time.sleep(0.05)
     
     print("Calibrating heading... keep robot still")
@@ -329,27 +410,29 @@ def main():
     yvel = 0
     heading_error = 0
     rot = 0
-    maxspd = 2000000 # ideal max speed
+    basespd = 2000000 # ideal max speed
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     desired_heading = 0
     ir = [math.pi/2,100] # sub in for actual ir values direction, strength
-    ballpos = []
+    ballpos = [0,0]
 
     try:
         while True:
-            print(desired_heading,compass,heading_error)
+            irx = 0
+            iry = 0
+
             user_input = read_input()
             # TESTING speed
-            if user_input == "1": maxspd = 0
-            if user_input == "2": maxspd = 500000
-            if user_input == "3": maxspd = 5000000
-            if user_input == "4": maxspd = 20000000
-            if user_input == "5": maxspd = 50000000
-            if user_input == "6": maxspd = 100000000
-            if user_input == "7": maxspd = 150000000
-            if user_input == "8": maxspd = 200000000
-            if user_input == "9": maxspd = 250000000
-            if user_input == "0": maxspd = 300000000
+            if user_input == "1": basespd = 0
+            if user_input == "2": basespd = 500000
+            if user_input == "3": basespd = 5000000
+            if user_input == "4": basespd = 20000000
+            if user_input == "5": basespd = 50000000
+            if user_input == "6": basespd = 100000000
+            if user_input == "7": basespd = 150000000
+            if user_input == "8": basespd = 200000000
+            if user_input == "9": basespd = 250000000
+            if user_input == "0": basespd = 300000000
             #direction
             if user_input == "a": ir = [math.pi,100]
             if user_input == ",": ir = [math.pi/2,100]
@@ -363,11 +446,23 @@ def main():
             #others
             if user_input == "l": kick(True)
 
+            for i, val in enumerate(pcb.ir):
+                if val:
+                    angle = i * math.pi / 6 + math.pi/2
+
+                    # Forward is +y, right is +x
+                    irx += math.cos(angle)
+                    iry += math.sin(angle)
+
+            if irx != 0 or iry != 0:
+                ir[0] = math.atan2(irx, iry)
+            print(ir[0])
+
             ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
-            if ir[1] > 800 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot, facing forwards
+            if ir[1] > 800 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
                 HAS_BALL = True
             else:
                 HAS_BALL = False
@@ -404,21 +499,16 @@ def main():
                     kick(True)
 
             else:
-                if ballpos[1] > 10:
-                    desired_pos = [ballpos[0], ballpos[1] - 10] # directly behind the ball
-                elif ballpos[0] > 0:
-                    desired_pos = [ballpos[0] - 10, ballpos[1] - 10] # bot can go to bottom right corner of ball without colliding
-                else:
-                    desired_pos = [ballpos[0] + 10, ballpos[1] - 10] # bottom left
-
-                desired_pos = ballpos #testing
+                desired_heading = ir[0]
+                desired_pos = ballpos
 
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-            xvel = desired_pos[0] * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000))
-            yvel = desired_pos[1] * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
+            xvel = desired_pos[0]
+            yvel = desired_pos[1]
             x_field = -yvel
             y_field = xvel
             angle = -compass
@@ -440,6 +530,6 @@ def main():
             kick()
     
     except KeyboardInterrupt:
-        safe_shutdown(grabber,camera,motors,imu)
+        safe_shutdown(grabber,camera,motors,imu,pcb)
 
 main()
