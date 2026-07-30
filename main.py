@@ -506,7 +506,7 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (ballpos[1] / 1000)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
             xvel = desired_pos[0]
             yvel = desired_pos[1]
             x_field = -yvel
