@@ -25,10 +25,9 @@ class FrameGrabber(threading.Thread):
         self.frame = None
         self.hsv = np.zeros((120,160,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
-        self.cap.set_controls({"FrameRate": 60})
         config = self.cap.create_preview_configuration(
             main={"size": (320, 240), "format": "RGB888"},
-	        lores={"size": (160, 120), "format": "YUV420"})
+	        lores={"size": (160, 120), "format": "RGB888"})
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
@@ -39,10 +38,8 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             frame = self.cap.capture_array("lores")
-            bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
-            self.frame = bgr
             try:
-                self.hsv[:] = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+                self.hsv[:] = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             except:
                 continue
             time.sleep(0.01)
