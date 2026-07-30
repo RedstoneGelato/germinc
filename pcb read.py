@@ -33,7 +33,7 @@ I2C_BUS = 1        # /dev/i2c-1 on Raspberry Pi 40-pin header
 # I2C_SLAVE_ADDRESS macro (0x42) and the actual configured HAL address
 # (hi2c1.Init.OwnAddress1 = 200, which is 0x64 in real 7-bit terms).
 # Set this to whichever one your board actually responds to.
-I2C_ADDR = 0x42
+I2C_ADDR = 0x64
 # I2C_ADDR = 0x64   # <- use this instead if OwnAddress1 hasn't been fixed to 0x42<<1
 
 CMD_READ_COLOURS = 0x01
