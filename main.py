@@ -117,7 +117,6 @@ class IMUThread(threading.Thread):
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
 
         self.heading = 0
-        self.alpha = 0.2
         self.ready = False
 
     def run(self):
@@ -362,8 +361,6 @@ def safe_shutdown(grabber, camera, motors, imu, pcb):
     pcb.join()
     kick_pin.close()
 
-    cv2.destroyAllWindows()
-
     print("Robot stopped.")
 
 def main():
@@ -383,16 +380,11 @@ def main():
         time.sleep(0.05)
     
     print("Calibrating heading... keep robot still")
-    time.sleep(2)  # let imu settle
+    time.sleep(1)  # let imu settle
     heading_offset = imu.heading
 
     print("Waiting for signal")
-    script_activate_pin.wait_for_active()
-
-    print("running")
-
     #initialise variables
-    goal_colour = 0 # 0 is yellow, 1 is blue, write program later to auto determine
     compass = 0
     xvel = 0
     yvel = 0
@@ -400,16 +392,29 @@ def main():
     rot = 0
     basespd = 2000000 # ideal speed
     spin_weight = 50 # bigger number = bot spins more instead of moves more
+    line_threshold = 3000 # tune for colour sensor readings
+    line_escape_speed = 50000000
     desired_heading = 0
     ir = [math.pi/2,100]
     ballpos = [0,0]
     goalpos = [0,200]
     irstrengthlist = []
 
+    while not script_activate_pin.value:
+        if camera.yellow[1] > 60:
+            goal_colour = 1
+        else:
+            goal_colour = 0
+        time.sleep(0.01)
+
+    print("running")
+
     try:
         while True:
             irx = 0
             iry = 0
+            linex = 0
+            liney = 0
 
             user_input = read_input()
             # TESTING speed
@@ -426,6 +431,31 @@ def main():
             #others
             if user_input == "l": kick(True)
 
+#----------------------------------------------------------------------
+#            convert camera readings into goal position
+#----------------------------------------------------------------------
+            if goal_colour == 0: #shoot in yellow
+                if camera.yellow == [0,0,0,0]:
+                    goalpos= [0,200]
+                else:
+                    goalx = camera.yellow[0] + camera.yellow[2]/2
+                    goaly = camera.yellow[1] + camera.yellow[3]/2
+                    dx = goalx - 80
+                    dy = 60 - goaly
+                    goalpos =[dx,dy]
+            else: #shoot in blue
+                if camera.blue == [0,0,0,0]:
+                    goalpos = [0,200]
+                else:
+                    goalx = camera.blue[0] + camera.blue[2]/2
+                    goaly = camera.blue[1] + camera.blue[3]/2
+                    dx = goalx - 80
+                    dy = 60 - goaly
+                    goalpos = [dx,dy]
+
+#----------------------------------------------------------------------
+#            read ir then convert into ball position
+#----------------------------------------------------------------------
             for i, active in enumerate(pcb.ir):
                 if active:
                     w = pcb.strength[i]
@@ -452,32 +482,19 @@ def main():
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
+#----------------------------------------------------------------------
+#            determine states
+#----------------------------------------------------------------------
             if ir is None or ir[1] > 99: #doesnt see ball
                 botstate = 0
-            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
+            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot #TUNE: ir25 distance
                 botstate = 1 #try to shoot
             else:
                 botstate = 2 #try to get possession of ball
 
-            if goal_colour == 0: #shoot in yellow
-                if camera.yellow == [0,0,0,0]:
-                    goalpos= [0,200]
-                else:
-                    goalx = camera.yellow[0] + camera.yellow[2]/2
-                    goaly = camera.yellow[1] + camera.yellow[3]/2
-                    dx = goalx - 80
-                    dy = 60 - goaly
-                    goalpos =[dx,dy]
-            else: #shoot in blue
-                if camera.blue == [0,0,0,0]:
-                    goalpos = [0,200]
-                else:
-                    goalx = camera.blue[0] + camera.blue[2]/2
-                    goaly = camera.blue[1] + camera.blue[3]/2
-                    dx = goalx - 80
-                    dy = 60 - goaly
-                    goalpos = [dx,dy]
-
+#----------------------------------------------------------------------
+#            state machine
+#----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
                 desired_pos = [goalpos[0], -200] # align middle and go backwards
@@ -486,12 +503,12 @@ def main():
                     desired_heading = math.atan2(goalpos[1],goalpos[0])
                     desired_pos = goalpos
 
-                    if ir[1] < 10 and abs(ballpos[0]) < 10: # kick check: very close, center
+                    if ir[1] < 10 and abs(heading_error) < 0.3: # kick check: very close, facing the right way #TUNE: ir10 distance
                         kick(True)
 
                 elif botstate == 2: # go for ball
                     if ballpos[1] < 0: # ball behind bot
-                        if abs(ballpos[0]) < 25 and ballpos[1] < 25:
+                        if abs(ballpos[0]) < 25 and ballpos[1] < 25: #TUNE: ir 25 distance, same as above, corner of the bot without colliding the bot
                             if goalpos[0] > 0:
                                 desired_pos = [200, -200]
                             else:
@@ -503,11 +520,34 @@ def main():
                         desired_heading = math.atan2(goalpos[1],goalpos[0])
                         angle_dif = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
                         desired_pos = [ballpos[0] + math.cos(angle_dif) * 10, ballpos[1] + math.sin(angle_dif) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
+                        #TUNE: *10 makes it behind the ball without colliding with the ball
 
+#----------------------------------------------------------------------
+#            line detection
+#----------------------------------------------------------------------
+            for i, value in enumerate(pcb.colours):
+                if value > line_threshold:
+                    angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
+                    excess = value - line_threshold
+                    linex += math.cos(angle) * excess
+                    liney += math.sin(angle) * excess
+
+            on_line = (linex != 0 or liney != 0)
+            if on_line:
+                mag = math.hypot(linex, liney)
+                desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+
+#----------------------------------------------------------------------
+#            translate all variables into motor movement
+#----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             rot = spin_weight * heading_error
+
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
+            if on_line:
+                maxspd = line_escape_speed
+
             xvel = desired_pos[0]
             yvel = desired_pos[1]
             x_field = -yvel
