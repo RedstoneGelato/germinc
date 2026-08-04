@@ -12,9 +12,10 @@ import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-from gpiozero import OutputDevice
+from gpiozero import OutputDevice, DigitalInputDevice
 
 kick_pin = OutputDevice(17, active_high=True, initial_value=False)
+script_activate_pin = DigitalInputDevice(25, pull_up = False)
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -26,7 +27,6 @@ class FrameGrabber(threading.Thread):
         self.hsv = np.zeros((120,160,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
         config = self.cap.create_preview_configuration(
-            main={"size": (320, 240), "format": "RGB888"},
 	        lores={"size": (160, 120), "format": "RGB888"})
         self.cap.configure(config)
         self.cap.set_controls({
@@ -38,8 +38,9 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             frame = self.cap.capture_array("lores")
+            self.frame = frame
             try:
-                self.hsv[:] = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             except:
                 continue
             time.sleep(0.01)
@@ -70,7 +71,6 @@ class DetectionThread(threading.Thread):
                 time.sleep(0.005)
                 continue
 
-            frame = self.grabber.frame.copy()
             hsv = self.grabber.hsv.copy()
             self.ready = True
 
@@ -85,15 +85,6 @@ class DetectionThread(threading.Thread):
 
             self.blue = self._merge_blobs(masks["blue"])
             self.yellow = self._merge_blobs(masks["yellow"])
-
-            if frame is not None:
-                for color, bbox in zip(["blue","yellow"], [self.blue,self.yellow]):
-                    x, y, w, h = bbox
-                    if w > 0 and h > 0:
-                        if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
-                        if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
-
-            self.frame = frame
             time.sleep(0.005)
 
     def _merge_blobs(self, mask):
@@ -191,7 +182,7 @@ class PCBThread(threading.Thread):
         raise IOError(f"Failed to read packet: {last_err}")
 
     def read_ir_activity(self):
-        data = self._read_packet(self.bus, 0x04, 24)
+        data = self._read_packet(0x04, 24)
         return [data[i*2] | (data[i*2+1] << 8) for i in range(12)]
 
     def _read_ir(self):
@@ -395,21 +386,24 @@ def main():
     time.sleep(2)  # let imu settle
     heading_offset = imu.heading
 
+    print("Waiting for signal")
+    script_activate_pin.wait_for_active()
+
     print("running")
 
     #initialise variables
-    goal_colour = 0 # 0 is yellow, 1 is blue
-    HAS_BALL = False
+    goal_colour = 0 # 0 is yellow, 1 is blue, write program later to auto determine
     compass = 0
     xvel = 0
     yvel = 0
     heading_error = 0
     rot = 0
-    basespd = 2000000 # ideal max speed
+    basespd = 2000000 # ideal speed
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     desired_heading = 0
     ir = [math.pi/2,100]
     ballpos = [0,0]
+    goalpos = [0,200]
     irstrengthlist = []
 
     try:
@@ -429,84 +423,89 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
-            #direction
-            if user_input == "a": ir = [math.pi,100]
-            if user_input == ",": ir = [math.pi/2,100]
-            if user_input == "o": ir = [3*math.pi/2,100]
-            if user_input == "e": ir = [0,100]
-            #rotation
-            if user_input == "h": desired_heading = math.pi/2
-            if user_input == "c": desired_heading = 0
-            if user_input == "n": desired_heading = math.pi/-2
-            if user_input == "t": desired_heading = math.pi
             #others
             if user_input == "l": kick(True)
 
-            for i, val in enumerate(pcb.ir):
-                if val:
+            for i, active in enumerate(pcb.ir):
+                if active:
+                    w = pcb.strength[i]
                     angle = i * math.pi / 6 + math.pi/2
-
-                    # Forward is +y, right is +x
-                    irx += math.cos(angle)
-                    iry += math.sin(angle)
+                    irx += math.cos(angle) * w
+                    iry += math.sin(angle) * w
 
             if irx != 0 or iry != 0:
-                ir[0] = math.atan2(irx, iry)
-            print(ir[0])
+                ir[0] = math.atan2(iry, irx)
+                average = sum(pcb.strength) // len(pcb.strength)
+                irstrengthlist.append(average)
+                if len(irstrengthlist) > 10:
+                    irstrengthlist.pop(0)
+                strength = sum(irstrengthlist) // len(irstrengthlist)
+                strength = max(0, min(strength, 10000))
+                ir[1] = 100 - math.sqrt(strength)
+            else:
+                ir = None
 
-            average = sum(pcb.strength) // len(pcb.strength)
-            irstrengthlist.append(average)
-            if len(irstrengthlist) > 10:
-                irstrengthlist.pop(0)
-            ir[1] = sum(irstrengthlist) // len(irstrengthlist)
-
-            ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
+            if ir is None:
+                ballpos = [0,0]
+            else:
+                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
-            if ir[1] > 800 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
-                HAS_BALL = True
+            if ir is None or ir[1] > 99: #doesnt see ball
+                botstate = 0
+            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
+                botstate = 1 #try to shoot
             else:
-                HAS_BALL = False
+                botstate = 2 #try to get possession of ball
 
-            if HAS_BALL:
-                if goal_colour == 0:
-                    if camera.yellow == [0,0,0,0]:
-                        desired_heading = 0
-                        desired_pos= [0,200]
-                    else:
-                        goalx = camera.yellow[0] + camera.yellow[2]/2
-                        goaly = camera.yellow[1] + camera.yellow[3]/2
-
-                        dx = goalx - 80
-                        dy = 60 - goaly
-
-                        desired_heading = math.atan2(dx, dy)
-                        desired_pos = [goalx,goaly]
+            if goal_colour == 0: #shoot in yellow
+                if camera.yellow == [0,0,0,0]:
+                    goalpos= [0,200]
                 else:
-                    if camera.blue == [0,0,0,0]:
-                        desired_heading = 0
-                        desired_pos = [0,200]
-                    else:
-                        goalx = camera.blue[0] + camera.blue[2]/2
-                        goaly = camera.blue[1] + camera.blue[3]/2
+                    goalx = camera.yellow[0] + camera.yellow[2]/2
+                    goaly = camera.yellow[1] + camera.yellow[3]/2
+                    dx = goalx - 80
+                    dy = 60 - goaly
+                    goalpos =[dx,dy]
+            else: #shoot in blue
+                if camera.blue == [0,0,0,0]:
+                    goalpos = [0,200]
+                else:
+                    goalx = camera.blue[0] + camera.blue[2]/2
+                    goaly = camera.blue[1] + camera.blue[3]/2
+                    dx = goalx - 80
+                    dy = 60 - goaly
+                    goalpos = [dx,dy]
 
-                        dx = goalx - 80
-                        dy = 60 - goaly
-
-                        desired_heading = math.atan2(dx, dy)
-                        desired_pos = [goalx,goaly]
-
-                if ir[1] > 1000 and abs(ballpos[0]) < 10: # kick check: very close, center
-                    kick(True)
-
+            if botstate == 0: # do not see ball
+                desired_heading = 0
+                desired_pos = [goalpos[0], -200] # align middle and go backwards
             else:
-                desired_heading = ir[0]
-                desired_pos = ballpos
+                if botstate == 1:
+                    desired_heading = math.atan2(goalpos[1],goalpos[0])
+                    desired_pos = goalpos
+
+                    if ir[1] < 10 and abs(ballpos[0]) < 10: # kick check: very close, center
+                        kick(True)
+
+                elif botstate == 2: # go for ball
+                    if ballpos[1] < 0: # ball behind bot
+                        if abs(ballpos[0]) < 25 and ballpos[1] < 25:
+                            if goalpos[0] > 0:
+                                desired_pos = [200, -200]
+                            else:
+                                desired_pos = [-200, -200]
+                        else:
+                            desired_pos = [0,-200] # go straight backwards
+                        desired_heading = 0
+                    else:
+                        desired_heading = math.atan2(goalpos[1],goalpos[0])
+                        angle_dif = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
+                        desired_pos = [ballpos[0] + math.cos(angle_dif) * 10, ballpos[1] + math.sin(angle_dif) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
 
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            heading_error = round(heading_error, 3)
             rot = spin_weight * heading_error
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
             xvel = desired_pos[0]
@@ -521,6 +520,10 @@ def main():
             kick()
     
     except KeyboardInterrupt:
+        print("User stopped.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    finally:
         safe_shutdown(grabber,camera,motors,imu,pcb)
 
 main()
