@@ -15,7 +15,7 @@ from adafruit_bno08x.i2c import BNO08X_I2C
 from gpiozero import OutputDevice, DigitalInputDevice
 
 kick_pin = OutputDevice(17, active_high=True, initial_value=False)
-script_activate_pin = DigitalInputDevice(25, pull_up = False)
+script_activate_pin = DigitalInputDevice(25, pull_up = True)
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -447,7 +447,7 @@ def main():
     irstrengthlist = []
     botstate_hyst = Hysteresis(hold_time=0.15)
 
-    while not script_activate_pin.value:
+    while script_activate_pin.is_active:
         if camera.yellow[1] > 60:
             goal_colour = 1
         else:
@@ -479,7 +479,7 @@ def main():
             #others
             if user_input == "l": kick(True)
 
-            if not script_activate_pin.is_active:
+            if script_activate_pin.is_active:
                 if robot_active:
                     print("Paused")
                     robot_active = False
