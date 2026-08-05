@@ -320,6 +320,51 @@ def kick(trigger=False):
         kick_pin.off()
         kick.active = False
 
+class Hysteresis:
+    """
+    Holds a value steady across brief flickers around a sensor threshold.
+    A new value only overwrites the current one once it's been the
+    requested value continuously for `hold_time` seconds
+
+    instant_enter (optional): a function taking the raw value, returning
+    True if that value should commit with no delay. Use this for safety
+    states you want to react to immediately, while still debouncing how
+    quickly you're willing to leave that state again.
+    """
+    def __init__(self, hold_time, instant_enter=None):
+        self.hold_time = hold_time
+        self.instant_enter = instant_enter
+        self.current = None
+        self._pending = None
+        self._pending_since = None
+
+    def update(self, raw_value):
+        now = time.time()
+
+        if self.current is None:                          # first call - nothing to debounce yet
+            self.current = raw_value
+            return self.current
+
+        if raw_value == self.current:                       # still agrees - clear any pending change
+            self._pending = None
+            return self.current
+
+        if self.instant_enter and self.instant_enter(raw_value):
+            self.current = raw_value                         # safety case - commit with no delay
+            self._pending = None
+            return self.current
+
+        if raw_value != self._pending:                        # new candidate - start timing it
+            self._pending = raw_value
+            self._pending_since = now
+            return self.current
+
+        if now - self._pending_since >= self.hold_time:         # held long enough - commit it
+            self.current = raw_value
+            self._pending = None
+
+        return self.current
+
 def read_input():
     if select.select([sys.stdin], [], [], 0)[0]:
         return sys.stdin.readline().strip()
@@ -398,7 +443,9 @@ def main():
     ir = [math.pi/2,100]
     ballpos = [0,0]
     goalpos = [0,200]
+    goal_colour = 0
     irstrengthlist = []
+    botstate_hyst = Hysteresis(hold_time=0.15)
 
     while not script_activate_pin.value:
         if camera.yellow[1] > 60:
@@ -408,6 +455,7 @@ def main():
         time.sleep(0.01)
 
     print("running")
+    robot_active = True
 
     try:
         while True:
@@ -430,6 +478,21 @@ def main():
             if user_input == "0": basespd = 300000000
             #others
             if user_input == "l": kick(True)
+
+            if not script_activate_pin.is_active:
+                if robot_active:
+                    print("Paused")
+                    robot_active = False
+                motors.motorspeed1 = 0
+                motors.motorspeed2 = 0
+                motors.motorspeed3 = 0
+                motors.motorspeed4 = 0
+                kick()  # let an in-progress kick still finish and release the solenoid
+                time.sleep(0.02)
+                continue
+            elif not robot_active:
+                print("Resumed")
+                robot_active = True
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
@@ -486,11 +549,13 @@ def main():
 #            determine states
 #----------------------------------------------------------------------
             if ir is None or ir[1] > 99: #doesnt see ball
-                botstate = 0
-            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot #TUNE: ir25 distance
-                botstate = 1 #try to shoot
+                raw_botstate = 0
+            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
+                raw_botstate = 1 #try to shoot
             else:
-                botstate = 2 #try to get possession of ball
+                raw_botstate = 2 #try to get possession of ball
+
+            botstate = botstate_hyst.update(raw_botstate)
 
 #----------------------------------------------------------------------
 #            state machine
