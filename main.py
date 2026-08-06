@@ -180,11 +180,13 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def read_ball(self, bus: SMBus) -> tuple[int, int]:
-        """Returns (direction, strength). direction is 1-12 (clock position) or
-        0 if no ball is currently detected. strength is 0-10."""
-        data = self._read_packet(bus, self.CMD_READ_BALL, self.BALL_PACKET_SIZE)
-        return data[0], data[1]
+    def read_ir_activity(self):
+        data = self._read_packet(0x04, 24)
+        return [data[i*2] | (data[i*2+1] << 8) for i in range(12)]
+
+    def _read_ir(self):
+        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
+        return list(data)
 
     def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
