@@ -136,13 +136,6 @@ def main():
     print(f"Reading from STM32 at 0x{I2C_ADDR:02X} on I2C bus {I2C_BUS}. "
           f"Ctrl+C to stop.\n")
 
-    
-    while True:
-        activity = read_ir_activity(bus)
-        print(activity)
-        time.sleep(0.2)
-
-
     try:
         while True:
             try:
