@@ -14,6 +14,7 @@ import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 from gpiozero import OutputDevice, DigitalInputDevice
 
+kick_pin = OutputDevice(17, active_high=True, initial_value=False)
 script_activate_pin = DigitalInputDevice(25, pull_up = True)
 
 class FrameGrabber(threading.Thread):
@@ -294,6 +295,31 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
+def kick(trigger=False):
+    # persistent state (stored on the function itself)
+    if not hasattr(kick, "last_kick"):
+        kick.last_kick = 0
+        kick.active = False
+        kick.start = 0
+
+    kick_duration = 0.05
+    kick_cooldown = 0.5
+
+    now = time.time()
+
+    # trigger kick
+    if trigger and not kick.active:
+        if now - kick.last_kick >= kick_cooldown:
+            kick_pin.on()
+            kick.active = True
+            kick.start = now
+            kick.last_kick = now
+
+    # update (turn off after duration)
+    if kick.active and (now - kick.start >= kick_duration):
+        kick_pin.off()
+        kick.active = False
+
 class Hysteresis:
     """
     Holds a value steady across brief flickers around a sensor threshold.
@@ -378,6 +404,7 @@ def safe_shutdown(grabber, camera, motors, imu, pcb):
     motors.join()
     imu.join()
     pcb.join()
+    kick_pin.close()
 
     print("Robot stopped.")
 
@@ -416,7 +443,7 @@ def main():
     ir = [math.pi/2,100]
     ballpos = [0,0]
     goalpos = [0,200]
-    goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
+    goal_colour = 0
     irstrengthlist = []
     botstate_hyst = Hysteresis(hold_time=0.15)
 
@@ -449,6 +476,8 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
+            #others
+            if user_input == "l": kick(True)
 
             if script_activate_pin.is_active:
                 if robot_active:
@@ -458,6 +487,7 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
+                kick()  # let an in-progress kick still finish and release the solenoid
                 time.sleep(0.02)
                 continue
             elif not robot_active:
@@ -487,7 +517,7 @@ def main():
                     goalpos = [dx,dy]
 
 #----------------------------------------------------------------------
-#            read ir then convert into ball position, compass
+#            read ir then convert into ball position
 #----------------------------------------------------------------------
             for i, active in enumerate(pcb.ir):
                 if active:
@@ -511,8 +541,7 @@ def main():
             if ir is None:
                 ballpos = [0,0]
             else:
-                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right, +y is front
-
+                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
@@ -523,8 +552,10 @@ def main():
                 raw_botstate = 0
             elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
                 raw_botstate = 1 #try to shoot
-            else:
-                raw_botstate = 2 #try to get possession of ball
+            elif ir[1] < 50: # ball close to goal
+                raw_botstate = 2 # go for ball
+            else: # chill in goal
+                raw_botstate = 3
 
             botstate = botstate_hyst.update(raw_botstate)
 
@@ -533,23 +564,16 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [goalpos[0], -200] # align middle and go backwards
-                no_ball_time = time.time()
+                desired_pos = [goalpos[0] + 10, -200] # align middle and go backwards, TUNE +10 to be slightly infront of goal
 
-            elif botstate == 1: # shoot
+            elif botstate == 1:
                 desired_heading = math.atan2(goalpos[1],goalpos[0])
                 desired_pos = goalpos
-                held_ball_time = time.time() - no_ball_time
-                if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
-                    basespd = 300000000
-                else:
-                    basespd = 5000000
-                # turn on dribbler
+                kick(True)
 
             elif botstate == 2: # go for ball
-                no_ball_time = time.time()
                 if ballpos[1] < 0: # ball behind bot
-                    if abs(ballpos[0]) < 25 and ballpos[1] < 25: #TUNE: ir 25 distance: corner of the bot without colliding the bot
+                    if abs(ballpos[0]) < 25 and ballpos[1] < 25: #TUNE: ir 25 distance, same as above, corner of the bot without colliding the bot
                         if goalpos[0] > 0:
                             desired_pos = [200, -200]
                         else:
@@ -558,10 +582,12 @@ def main():
                         desired_pos = [0,-200] # go straight backwards
                     desired_heading = 0
                 else:
-                    desired_heading = math.atan2(goalpos[1],goalpos[0])
-                    angle_dif = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
-                    desired_pos = [ballpos[0] + math.cos(angle_dif) * 10, ballpos[1] + math.sin(angle_dif) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
-                    #TUNE: *10 makes it behind the ball without colliding with the ball
+                    desired_heading = math.atan2(ballpos[1], ballpos[0])
+                    desired_pos = ballpos
+
+            elif botstate == 3: #chill in goal
+                desired_heading = 0
+                desired_pos = [goalpos[0] + 10, -200] # align middle and go backwards, TUNE +10 to be slightly infront of goal
 
 #----------------------------------------------------------------------
 #            line detection
@@ -598,6 +624,7 @@ def main():
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+            kick()
     
     except KeyboardInterrupt:
         print("User stopped.")
