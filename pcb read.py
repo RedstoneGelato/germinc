@@ -22,6 +22,7 @@ Enable I2C on the Pi first: sudo raspi-config -> Interface Options -> I2C
 import time
 import sys
 from smbus2 import SMBus, i2c_msg
+import math
 
 # ---------------------------------------------------------------------------
 # Config
@@ -138,28 +139,38 @@ def main():
 
     try:
         while True:
-            try:
-                ir = read_ir(bus)
-                colours = read_colours(bus)
-                direction, strength = read_ball(bus)
-            except IOError as e:
-                print(f"I2C read error: {e}")
-                time.sleep(0.2)
-                continue
+            ir = read_ir()
+            colours = read_colours()
+            strength = read_ir_activity()
+            irstrengthlist = []
+            ballpos = []
 
-            ir_str = " ".join(f"IR{i+1}:{v}" for i, v in enumerate(ir))
-            print(ir_str)
+            for i, active in enumerate(ir):
+                if active:
+                    w = strength[i]
+                    angle = i * math.pi / 6 + math.pi/2
+                    irx += math.cos(angle) * w
+                    iry += math.sin(angle) * w
 
-            colour_str = " ".join(f"C{i+1}:{v:4d}" for i, v in enumerate(colours))
-            print(colour_str)
-
-            if direction == 0:
-                print("Ball: not detected")
+            if irx != 0 or iry != 0:
+                ir[0] = math.atan2(iry, irx)
+                average = sum(strength) // len(strength)
+                irstrengthlist.append(average)
+                if len(irstrengthlist) > 10:
+                    irstrengthlist.pop(0)
+                strength = sum(irstrengthlist) // len(irstrengthlist)
+                strength = max(0, min(strength, 10000))
+                ir[1] = 100 - math.sqrt(strength)
             else:
-                print(f"Ball: direction {direction} o'clock, strength {strength}/10")
-            print("-" * 60)
+                ir = None
 
-            time.sleep(0.1)
+            if ir is None:
+                ballpos = [0,0]
+            else:
+                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right, +y is front
+
+            print(ballpos)
+
 
     except KeyboardInterrupt:
         print("\nStopped.")
