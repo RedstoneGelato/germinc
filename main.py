@@ -408,7 +408,7 @@ def main():
     yvel = 0
     heading_error = 0
     rot = 0
-    basespd = 2000000 # ideal speed
+    basespd = 200000 # ideal speed
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
