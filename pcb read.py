@@ -118,8 +118,10 @@ def read_colours(bus: SMBus) -> list[int]:
     return values
 
 def read_ir_activity(bus):
-    data = _read_packet(bus, 0x04, 24)
+    data = _read_packet(bus, 0x02, 24)
     return [data[i*2] | (data[i*2+1] << 8) for i in range(12)]
+
+
 
 
 # ---------------------------------------------------------------------------
