@@ -145,6 +145,8 @@ def main():
             irstrengthlist = []
             ballpos = []
             line_threshold = 3000
+            irx = 0
+            iry = 0
 
             for i, active in enumerate(ir):
                 if active:
