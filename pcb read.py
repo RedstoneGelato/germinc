@@ -147,6 +147,8 @@ def main():
             line_threshold = 3000
             irx = 0
             iry = 0
+            linex = 0
+            liney = 0
 
             for i, active in enumerate(ir):
                 if active:
