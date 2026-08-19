@@ -174,7 +174,7 @@ def main():
             else:
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right, +y is front
 
-            print(ballpos)
+            print("Ballpos" + ballpos)
 
             for i, value in enumerate(colours):
                 if value > line_threshold:
@@ -190,7 +190,7 @@ def main():
             else:
                 desired_pos = [0,0]
 
-            print(desired_pos)
+            print("colour sensor" + desired_pos)
 
 
     except KeyboardInterrupt:
