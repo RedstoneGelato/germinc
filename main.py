@@ -9,6 +9,7 @@ from smbus2 import SMBus, i2c_msg
 import select
 import board
 import busio
+import struct
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
@@ -197,6 +198,16 @@ class PCBThread(threading.Thread):
             values.append(lo | (hi << 8))
 
         return values
+
+    def set_brightness(self, value: float):
+        """
+        Send brightness value (float) to STM32.
+        Valid range matches your TIM3 period: 0.0 to 65535.0
+        """
+        value = max(0.0, min(65535.0, value))
+        float_bytes = list(struct.pack('<f', value))  # little-endian float
+        # Write command byte + 4 float bytes in one transaction
+        self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, float_bytes)
 
     def run(self):
         while self.running:
@@ -418,6 +429,8 @@ def main():
     goalpos = [0,200]
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
     irstrengthlist = []
+    brightness_float = 10000  # Convert percentage to float value, 0 - 65535
+    pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15)
 
     while script_activate_pin.is_active:
@@ -425,6 +438,11 @@ def main():
             goal_colour = 1
         else:
             goal_colour = 0
+
+        if max(pcb.colours) > line_threshold:
+            line_threshold = max(pcb.colours)
+            brightness_float += 200
+            pcb.set_brightness(brightness_float)
         time.sleep(0.01)
 
     print("running")
