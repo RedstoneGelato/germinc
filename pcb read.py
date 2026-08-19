@@ -139,11 +139,12 @@ def main():
 
     try:
         while True:
-            ir = read_ir()
-            colours = read_colours()
-            strength = read_ir_activity()
+            ir = read_ir(bus)
+            colours = read_colours(bus)
+            strength = read_ir_activity(bus)
             irstrengthlist = []
             ballpos = []
+            line_threshold = 3000
 
             for i, active in enumerate(ir):
                 if active:
@@ -170,6 +171,22 @@ def main():
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right, +y is front
 
             print(ballpos)
+
+            for i, value in enumerate(colours):
+                if value > line_threshold:
+                    angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
+                    excess = value - line_threshold
+                    linex += math.cos(angle) * excess
+                    liney += math.sin(angle) * excess
+
+            on_line = (linex != 0 or liney != 0)
+            if on_line:
+                mag = math.hypot(linex, liney)
+                desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+            else:
+                desired_pos = [0,0]
+
+            print(desired_pos)
 
 
     except KeyboardInterrupt:
