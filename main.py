@@ -201,13 +201,18 @@ class PCBThread(threading.Thread):
 
     def set_brightness(self, value: float):
         """
-        Send brightness value (float) to STM32.
-        Valid range matches your TIM3 period: 0.0 to 65535.0
+        Send brightness value to STM32.
+        Valid range: 0.0 to 65535.0 (matches TIM3 period).
+        Sends command 0x03 followed by 2 bytes (uint16, little-endian).
+        This matches the STM32 SlaveRxCpltCallback which expects
+        exactly 2 data bytes after the 0x03 command byte.
         """
-        value = max(0.0, min(65535.0, value))
-        float_bytes = list(struct.pack('<f', value))  # little-endian float
-        # Write command byte + 4 float bytes in one transaction
-        self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, float_bytes)
+        val = int(max(0.0, min(65535.0, value)))
+        lo  = val & 0xFF
+        hi  = (val >> 8) & 0xFF
+        # write_i2c_block_data sends: START, ADDR+W, 0x03 (reg), lo, hi, STOP
+        # STM32 receives 0x03 first (1 byte), then queues receive of 2 more bytes
+        self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
 
     def run(self):
         while self.running:
