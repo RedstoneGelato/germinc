@@ -483,8 +483,7 @@ def main():
                 motors.motorspeed4 = 0
                 time.sleep(0.02)
                 continue
-            elif not robot_active:
-                print("Resumed")
+            else:
                 robot_active = True
 
 #----------------------------------------------------------------------
@@ -600,6 +599,9 @@ def main():
             if on_line:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+
+            #DEBUG
+            print(botstate)
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
