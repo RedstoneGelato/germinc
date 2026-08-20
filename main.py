@@ -9,7 +9,6 @@ from smbus2 import SMBus, i2c_msg
 import select
 import board
 import busio
-import struct
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
@@ -65,6 +64,13 @@ class DetectionThread(threading.Thread):
 
         self.kernel = np.ones((3,3), np.uint8)
 
+        # pixel region to ignore (center, ignore bot)
+        # TUNE
+        self.ignore_x1 = 55
+        self.ignore_x2 = 105
+        self.ignore_y1 = 70
+        self.ignore_y2 = 120
+
     def run(self):
         while self.running:
             if self.grabber.hsv is None or self.grabber.frame is None:
@@ -78,9 +84,15 @@ class DetectionThread(threading.Thread):
             self.blue = [0,0,0,0]
             self.yellow = [0,0,0,0]
 
+            blue_raw = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
+            yellow_raw = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
+
+            blue_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
+            yellow_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
+
             masks = {
-                "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
-                "yellow": cv2.morphologyEx(cv2.inRange(hsv, self.lower_yellow, self.upper_yellow), cv2.MORPH_OPEN, self.kernel),
+                "blue":   cv2.morphologyEx(blue_raw, cv2.MORPH_OPEN, self.kernel),
+                "yellow": cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, self.kernel),
             }
 
             self.blue = self._merge_blobs(masks["blue"])
@@ -415,7 +427,6 @@ def main():
     
     print("Calibrating heading... keep robot still")
     time.sleep(1)  # let imu settle
-    heading_offset = imu.heading
 
     print("Waiting for signal")
     #initialise variables
@@ -444,10 +455,14 @@ def main():
         else:
             goal_colour = 0
 
-        if max(pcb.colours) > line_threshold:
-            line_threshold = max(pcb.colours)
+        if max(pcb.colours) > line_threshold: # calibrate pcb leds
+            brightness_float -= 200
+            pcb.set_brightness(brightness_float)
+        elif max(pcb.colours) + 500 < line_threshold:
             brightness_float += 200
             pcb.set_brightness(brightness_float)
+
+        heading_offset = imu.heading
         time.sleep(0.01)
 
     print("running")
@@ -473,7 +488,7 @@ def main():
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
 
-            if script_activate_pin.is_active:
+            if script_activate_pin.is_active: #paused bot
                 if robot_active:
                     print("Paused")
                     robot_active = False
@@ -481,10 +496,25 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
+
+                if camera.yellow[1] > 60:
+                    goal_colour = 1
+                else:
+                    goal_colour = 0
+
+                if max(pcb.colours) > line_threshold: # calibrate pcb leds
+                    brightness_float -= 200
+                    pcb.set_brightness(brightness_float)
+                elif max(pcb.colours) + 500 < line_threshold:
+                    brightness_float += 200
+                    pcb.set_brightness(brightness_float)
+
+                heading_offset = imu.heading
+
                 time.sleep(0.02)
                 continue
             else:
-                robot_active = True
+                robot_active = True #running bot
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
