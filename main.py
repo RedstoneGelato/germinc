@@ -233,12 +233,11 @@ class PCBThread(threading.Thread):
                 self.colours = self._read_colours()
                 self.strength = self.read_ir_activity()
                 self.ready = True
-
             except IOError as e:
                 print(f"PCB I2C error: {e}")
                 self.ready = False
 
-            time.sleep(0.01)
+            time.sleep(0.004) #4ms, time inbetween report of pcb ir
 
         self.bus.close()
 
@@ -440,12 +439,15 @@ def main():
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
     desired_heading = 0
-    ir = [math.pi/2,100]
-    ballpos = [0,0]
-    goalpos = [0,200]
+    ir = [math.pi/2,50] # direction, distance
+    ballpos = [0,0] #cartesian plane coord relative of bot
+    goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
     irstrengthlist = []
-    brightness_float = 10000  # Convert percentage to float value, 0 - 65535
+    directionlist = []
+    irdirection = 0
+    unconcordantdirection = 0
+    brightness_float = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15)
 
@@ -549,12 +551,30 @@ def main():
                     iry += math.sin(angle) * w
 
             if irx != 0 or iry != 0:
-                ir[0] = math.atan2(iry, irx)
-                average = sum(pcb.strength) // len(pcb.strength)
+                irdirection = math.atan2(iry, irx) # direction
+    
+                if len(directionlist) > 10: # smoothing
+                    if unconcordantdirection > 10: # 40ms
+                        directionlist.clear()
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                    elif abs(np.mean(directionlist) - irdirection) > 1:
+                        unconcordantdirection += 1
+                    else:
+                        directionlist.pop(0)
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                else:
+                    directionlist.append(irdirection)
+                    unconcordantdirection = 0
+                ir[0] = np.mean(directionlist)
+
+
+                average = np.mean(pcb.strength) # strength
                 irstrengthlist.append(average)
                 if len(irstrengthlist) > 10:
                     irstrengthlist.pop(0)
-                strength = sum(irstrengthlist) // len(irstrengthlist)
+                strength = np.mean(irstrengthlist)
                 strength = max(0, min(strength, 10000))
                 ir[1] = 100 - math.sqrt(strength)
             else:
@@ -563,7 +583,7 @@ def main():
             if ir is None:
                 ballpos = [0,0]
             else:
-                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right, +y is front
+                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -585,7 +605,7 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [goalpos[0], -200] # align middle and go backwards
+                desired_pos = [goalpos[0], goalpos[1] + 30] # align middle and go backwards #TUNE +30 to be infront of goals
                 no_ball_time = time.time()
 
             elif botstate == 1: # shoot
@@ -632,6 +652,9 @@ def main():
 
             #DEBUG
             print(botstate)
+            print(pcb.strength)
+            print(goalpos)
+            print("================")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
