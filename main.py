@@ -585,7 +585,7 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [goalpos[0], -200] # align middle and go backwards
+                desired_pos = [goalpos[0], goalpos[1] + 30] # align middle and go backwards #TUNE +30 to be infront of goals
                 no_ball_time = time.time()
 
             elif botstate == 1: # shoot
