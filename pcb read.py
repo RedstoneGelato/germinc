@@ -4,20 +4,20 @@ import sys
 from smbus2 import SMBus, i2c_msg
 import math
 
-I2C_BUS          = 1
-I2C_ADDR         = 0x64
+I2C_BUS = 1
+I2C_ADDR = 0x64
 CMD_READ_COLOURS = 0x01
-CMD_READ_IR      = 0x02
+CMD_READ_IR = 0x02
 CMD_SET_BRIGHTNESS = 0x03
 
-COLOUR_SENSOR_COUNT  = 32
-COLOUR_PACKET_SIZE   = COLOUR_SENSOR_COUNT * 2
-IR_SENSOR_COUNT      = 12
-IR_PACKET_SIZE       = IR_SENSOR_COUNT
+COLOUR_SENSOR_COUNT = 32
+COLOUR_PACKET_SIZE = COLOUR_SENSOR_COUNT * 2
+IR_SENSOR_COUNT = 12
+IR_PACKET_SIZE = IR_SENSOR_COUNT
 
 CMD_TO_RESPONSE_DELAY_S = 0.05
-READ_RETRIES            = 3
-RETRY_DELAY_S           = 0.02
+READ_RETRIES = 3
+RETRY_DELAY_S = 0.02
 
 
 def _send_command(bus: SMBus, cmd: int) -> None:
@@ -55,7 +55,6 @@ def read_ir(bus: SMBus) -> list:
     """Returns list of 12 ints: 1 = IR detected, 0 = clear."""
     data = _read_packet(bus, CMD_READ_IR, IR_PACKET_SIZE)
     return [data[i] for i in range(IR_SENSOR_COUNT)]
-
 
 def main():
     try:
