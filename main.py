@@ -23,7 +23,7 @@ class FrameGrabber(threading.Thread):
         self.running = True
 
         self.frame = None
-        self.hsv = np.zeros((120,160,3), dtype=np.uint8)
+        self.hsv = np.zeros((160,120,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
         config = self.cap.create_preview_configuration(
 	        lores={"size": (160, 120), "format": "RGB888"})
@@ -37,6 +37,7 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             frame = self.cap.capture_array("lores")
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE) #FIND WHICH WAY THIS IS CW OR CCW
             self.frame = frame
             try:
                 self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -536,8 +537,8 @@ def main():
                 else:
                     goalx = camera.yellow[0] + camera.yellow[2]/2
                     goaly = camera.yellow[1] + camera.yellow[3]/2
-                    dx = goalx - 80
-                    dy = 60 - goaly
+                    dx = goalx - 60
+                    dy = 80 - goaly
                     goalpos =[dx,dy]
             else: #shoot in blue
                 if camera.blue == [0,0,0,0]:
@@ -545,8 +546,8 @@ def main():
                 else:
                     goalx = camera.blue[0] + camera.blue[2]/2
                     goaly = camera.blue[1] + camera.blue[3]/2
-                    dx = goalx - 80
-                    dy = 60 - goaly
+                    dx = goalx - 60
+                    dy = 80 - goaly
                     goalpos = [dx,dy]
 
 #----------------------------------------------------------------------
@@ -663,6 +664,7 @@ def main():
             print(botstate)
             print(pcb.strength)
             print(goalpos)
+            cv2.imshow("debug", camera.blue)
             print("================")
 
 #----------------------------------------------------------------------
