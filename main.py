@@ -321,6 +321,12 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
+def circular_mean(angles):
+    return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
+
+def angdiff(a, b):
+    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through ±pi
+
 class Hysteresis:
     """
     Holds a value steady across brief flickers around a sensor threshold.
@@ -438,11 +444,14 @@ def main():
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
+    shoot_spd = 5000000
     desired_heading = 0
     ir = [math.pi/2,50] # direction, distance
     ballpos = [0,0] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
+    heading_offset = imu.heading
+    no_ball_time = time.time()
     irstrengthlist = []
     directionlist = []
     irdirection = 0
@@ -558,7 +567,7 @@ def main():
                         directionlist.clear()
                         directionlist.append(irdirection)
                         unconcordantdirection = 0
-                    elif abs(np.mean(directionlist) - irdirection) > 1:
+                    elif abs(angdiff(circular_mean(directionlist), irdirection)) > 1:
                         unconcordantdirection += 1
                     else:
                         directionlist.pop(0)
@@ -567,7 +576,7 @@ def main():
                 else:
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
-                ir[0] = np.mean(directionlist)
+                ir[0] = circular_mean(directionlist)
 
 
                 average = np.mean(pcb.strength) # strength
@@ -613,9 +622,9 @@ def main():
                 desired_pos = goalpos
                 held_ball_time = time.time() - no_ball_time
                 if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
-                    basespd = 300000000
+                    shoot_spd = 300000000
                 else:
-                    basespd = 5000000
+                    shoot_spd = 5000000
                 # turn on dribbler
 
             elif botstate == 2: # go for ball
@@ -631,8 +640,8 @@ def main():
                     desired_heading = 0
                 else:
                     desired_heading = math.atan2(goalpos[1],goalpos[0])
-                    angle_dif = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
-                    desired_pos = [ballpos[0] + math.cos(angle_dif) * 10, ballpos[1] + math.sin(angle_dif) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
+                    goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
+                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 10, ballpos[1] + math.sin(goal_to_ball_angle) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
                     #TUNE: *10 makes it behind the ball without colliding with the ball
 
 #----------------------------------------------------------------------
@@ -663,7 +672,8 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
+            current_basespd = shoot_spd if botstate == 1 else basespd
+            maxspd = round(current_basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
             if on_line:
                 maxspd = line_escape_speed
 
