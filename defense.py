@@ -12,9 +12,8 @@ import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-from gpiozero import OutputDevice, DigitalInputDevice
+from gpiozero import DigitalInputDevice
 
-kick_pin = OutputDevice(17, active_high=True, initial_value=False)
 script_activate_pin = DigitalInputDevice(25, pull_up = True)
 
 class FrameGrabber(threading.Thread):
@@ -24,7 +23,7 @@ class FrameGrabber(threading.Thread):
         self.running = True
 
         self.frame = None
-        self.hsv = np.zeros((120,160,3), dtype=np.uint8)
+        self.hsv = np.zeros((160,120,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
         config = self.cap.create_preview_configuration(
 	        lores={"size": (160, 120), "format": "RGB888"})
@@ -38,6 +37,7 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             frame = self.cap.capture_array("lores")
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE) #FIND WHICH WAY THIS IS CW OR CCW
             self.frame = frame
             try:
                 self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -65,6 +65,13 @@ class DetectionThread(threading.Thread):
 
         self.kernel = np.ones((3,3), np.uint8)
 
+        # pixel region to ignore (center, ignore bot)
+        # TUNE
+        self.ignore_x1 = 55
+        self.ignore_x2 = 105
+        self.ignore_y1 = 70
+        self.ignore_y2 = 120
+
     def run(self):
         while self.running:
             if self.grabber.hsv is None or self.grabber.frame is None:
@@ -78,9 +85,15 @@ class DetectionThread(threading.Thread):
             self.blue = [0,0,0,0]
             self.yellow = [0,0,0,0]
 
+            blue_raw = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
+            yellow_raw = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
+
+            blue_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
+            yellow_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
+
             masks = {
-                "blue":   cv2.morphologyEx(cv2.inRange(hsv, self.lower_blue, self.upper_blue), cv2.MORPH_OPEN, self.kernel),
-                "yellow": cv2.morphologyEx(cv2.inRange(hsv, self.lower_yellow, self.upper_yellow), cv2.MORPH_OPEN, self.kernel),
+                "blue":   cv2.morphologyEx(blue_raw, cv2.MORPH_OPEN, self.kernel),
+                "yellow": cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, self.kernel),
             }
 
             self.blue = self._merge_blobs(masks["blue"])
@@ -180,10 +193,6 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def read_ir_activity(self):
-        data = self._read_packet(0x04, 24)
-        return [data[i*2] | (data[i*2+1] << 8) for i in range(12)]
-
     def _read_ir(self):
         data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
         return list(data)
@@ -199,19 +208,32 @@ class PCBThread(threading.Thread):
 
         return values
 
+    def set_brightness(self, value: float):
+        """
+        Send brightness value to STM32.
+        Valid range: 0.0 to 65535.0 (matches TIM3 period).
+        Sends command 0x03 followed by 2 bytes (uint16, little-endian).
+        This matches the STM32 SlaveRxCpltCallback which expects
+        exactly 2 data bytes after the 0x03 command byte.
+        """
+        val = int(max(0.0, min(65535.0, value)))
+        lo  = val & 0xFF
+        hi  = (val >> 8) & 0xFF
+        # write_i2c_block_data sends: START, ADDR+W, 0x03 (reg), lo, hi, STOP
+        # STM32 receives 0x03 first (1 byte), then queues receive of 2 more bytes
+        self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
+
     def run(self):
         while self.running:
             try:
                 self.ir = self._read_ir()
                 self.colours = self._read_colours()
-                self.strength = self.read_ir_activity()
                 self.ready = True
-
             except IOError as e:
                 print(f"PCB I2C error: {e}")
                 self.ready = False
 
-            time.sleep(0.01)
+            time.sleep(0.004) #4ms, time inbetween report of pcb ir
 
         self.bus.close()
 
@@ -239,7 +261,7 @@ class MotorThread(threading.Thread):
         self.motor1.set_speed_limit(self.speedlimit)
         self.motor1.configure_operating_mode_and_sensor(3, 1)
         self.motor1.configure_command_mode(12)
-        self.motor2 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 32)
         self.motor2.set_current_limit_foc(262144)  # 4 amps
         self.motor2.set_id_pid_constants(1500, 200)
         self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -250,7 +272,7 @@ class MotorThread(threading.Thread):
         self.motor2.set_speed_limit(self.speedlimit)
         self.motor2.configure_operating_mode_and_sensor(3, 1)
         self.motor2.configure_command_mode(12)
-        self.motor3 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 28)
         self.motor3.set_current_limit_foc(262144)
         self.motor3.set_id_pid_constants(1500, 200)
         self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -261,7 +283,7 @@ class MotorThread(threading.Thread):
         self.motor3.set_speed_limit(self.speedlimit)
         self.motor3.configure_operating_mode_and_sensor(3, 1)
         self.motor3.configure_command_mode(12)
-        self.motor4 = PowerfulBLDCDriver(self.i2c, 25)
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 27)
         self.motor4.set_current_limit_foc(262144)
         self.motor4.set_id_pid_constants(1500, 200)
         self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -295,30 +317,11 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
-def kick(trigger=False):
-    # persistent state (stored on the function itself)
-    if not hasattr(kick, "last_kick"):
-        kick.last_kick = 0
-        kick.active = False
-        kick.start = 0
+def circular_mean(angles):
+    return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
 
-    kick_duration = 0.05
-    kick_cooldown = 0.5
-
-    now = time.time()
-
-    # trigger kick
-    if trigger and not kick.active:
-        if now - kick.last_kick >= kick_cooldown:
-            kick_pin.on()
-            kick.active = True
-            kick.start = now
-            kick.last_kick = now
-
-    # update (turn off after duration)
-    if kick.active and (now - kick.start >= kick_duration):
-        kick_pin.off()
-        kick.active = False
+def angdiff(a, b):
+    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through ±pi
 
 class Hysteresis:
     """
@@ -404,7 +407,6 @@ def safe_shutdown(grabber, camera, motors, imu, pcb):
     motors.join()
     imu.join()
     pcb.join()
-    kick_pin.close()
 
     print("Robot stopped.")
 
@@ -426,7 +428,6 @@ def main():
     
     print("Calibrating heading... keep robot still")
     time.sleep(1)  # let imu settle
-    heading_offset = imu.heading
 
     print("Waiting for signal")
     #initialise variables
@@ -435,16 +436,24 @@ def main():
     yvel = 0
     heading_error = 0
     rot = 0
-    basespd = 2000000 # ideal speed
+    basespd = 200000 # ideal speed
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
+    shoot_spd = 5000000
     desired_heading = 0
-    ir = [math.pi/2,100]
-    ballpos = [0,0]
-    goalpos = [0,200]
-    goal_colour = 0
+    ir = [math.pi/2,50] # direction, distance
+    ballpos = [0,0] #cartesian plane coord relative of bot
+    goalpos = [0,200] # cartesian plane coord relative of bot
+    goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
+    heading_offset = imu.heading
+    no_ball_time = time.time()
     irstrengthlist = []
+    directionlist = []
+    irdirection = 0
+    unconcordantdirection = 0
+    brightness_float = 10000  # pcb led brightness: 0 - 65535
+    pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15)
 
     while script_activate_pin.is_active:
@@ -452,6 +461,15 @@ def main():
             goal_colour = 1
         else:
             goal_colour = 0
+
+        if max(pcb.colours) > line_threshold: # calibrate pcb leds
+            brightness_float -= 200
+            pcb.set_brightness(brightness_float)
+        elif max(pcb.colours) + 500 < line_threshold:
+            brightness_float += 200
+            pcb.set_brightness(brightness_float)
+
+        heading_offset = imu.heading
         time.sleep(0.01)
 
     print("running")
@@ -476,10 +494,8 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
-            #others
-            if user_input == "l": kick(True)
 
-            if script_activate_pin.is_active:
+            if script_activate_pin.is_active: #paused bot
                 if robot_active:
                     print("Paused")
                     robot_active = False
@@ -487,12 +503,25 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                kick()  # let an in-progress kick still finish and release the solenoid
+
+                if camera.yellow[1] > 60:
+                    goal_colour = 1
+                else:
+                    goal_colour = 0
+
+                if max(pcb.colours) > line_threshold: # calibrate pcb leds
+                    brightness_float -= 200
+                    pcb.set_brightness(brightness_float)
+                elif max(pcb.colours) + 500 < line_threshold:
+                    brightness_float += 200
+                    pcb.set_brightness(brightness_float)
+
+                heading_offset = imu.heading
+
                 time.sleep(0.02)
                 continue
-            elif not robot_active:
-                print("Resumed")
-                robot_active = True
+            else:
+                robot_active = True #running bot
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
@@ -503,8 +532,8 @@ def main():
                 else:
                     goalx = camera.yellow[0] + camera.yellow[2]/2
                     goaly = camera.yellow[1] + camera.yellow[3]/2
-                    dx = goalx - 80
-                    dy = 60 - goaly
+                    dx = goalx - 60
+                    dy = 80 - goaly
                     goalpos =[dx,dy]
             else: #shoot in blue
                 if camera.blue == [0,0,0,0]:
@@ -512,49 +541,60 @@ def main():
                 else:
                     goalx = camera.blue[0] + camera.blue[2]/2
                     goaly = camera.blue[1] + camera.blue[3]/2
-                    dx = goalx - 80
-                    dy = 60 - goaly
+                    dx = goalx - 60
+                    dy = 80 - goaly
                     goalpos = [dx,dy]
 
 #----------------------------------------------------------------------
-#            read ir then convert into ball position
+#            read ir then convert into ball position, compass
 #----------------------------------------------------------------------
             for i, active in enumerate(pcb.ir):
                 if active:
-                    w = pcb.strength[i]
                     angle = i * math.pi / 6 + math.pi/2
-                    irx += math.cos(angle) * w
-                    iry += math.sin(angle) * w
+                    irx += math.cos(angle)
+                    iry += math.sin(angle)
 
             if irx != 0 or iry != 0:
-                ir[0] = math.atan2(iry, irx)
-                average = sum(pcb.strength) // len(pcb.strength)
-                irstrengthlist.append(average)
-                if len(irstrengthlist) > 10:
-                    irstrengthlist.pop(0)
-                strength = sum(irstrengthlist) // len(irstrengthlist)
-                strength = max(0, min(strength, 10000))
-                ir[1] = 100 - math.sqrt(strength)
+                irdirection = math.atan2(iry, irx) # direction
+    
+                if len(directionlist) > 10: # smoothing
+                    if unconcordantdirection > 10: # 40ms
+                        directionlist.clear()
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                    elif abs(angdiff(circular_mean(directionlist), irdirection)) > 1:
+                        unconcordantdirection += 1
+                    else:
+                        directionlist.pop(0)
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                else:
+                    directionlist.append(irdirection)
+                    unconcordantdirection = 0
+                ir[0] = circular_mean(directionlist)
+
+                ir[1] = 100
             else:
                 ir = None
 
             if ir is None:
                 ballpos = [0,0]
             else:
-                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])] #relative position of ball to the bot: +x is right,+y is front
+                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
+
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ir is None or ir[1] > 99: #doesnt see ball
+            if ir is None: #doesnt see ball
                 raw_botstate = 0
-            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
+            elif pcb.ir.count(1) > 3: # ball is in ball capture zone check: please implement laser gate OR put ir1 in a place where it only sees if its in bcz idk
                 raw_botstate = 1 #try to shoot
-            elif ir[1] < 50: # ball close to goal
-                raw_botstate = 2 # go for ball
-            else: # chill in goal
+            elif True: #signal from other bot
+                raw_botstate = 2 #try to get possession of ball
+            else:
                 raw_botstate = 3
 
             botstate = botstate_hyst.update(raw_botstate)
@@ -564,30 +604,28 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [goalpos[0] + 10, -200] # align middle and go backwards, TUNE +10 to be slightly infront of goal
+                desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
+                no_ball_time = time.time()
 
-            elif botstate == 1:
-                desired_heading = math.atan2(goalpos[1],goalpos[0])
+            elif botstate == 1: # pass
+                desired_heading = 0
                 desired_pos = goalpos
-                kick(True)
+                held_ball_time = time.time() - no_ball_time
+                if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
+                    shoot_spd = 300000000
+                else:
+                    shoot_spd = 5000000
+                # turn on dribbler
 
             elif botstate == 2: # go for ball
-                if ballpos[1] < 0: # ball behind bot
-                    if abs(ballpos[0]) < 25 and ballpos[1] < 25: #TUNE: ir 25 distance, same as above, corner of the bot without colliding the bot
-                        if goalpos[0] > 0:
-                            desired_pos = [200, -200]
-                        else:
-                            desired_pos = [-200, -200]
-                    else:
-                        desired_pos = [0,-200] # go straight backwards
-                    desired_heading = 0
-                else:
-                    desired_heading = math.atan2(ballpos[1], ballpos[0])
-                    desired_pos = ballpos
+                no_ball_time = time.time()
+                desired_heading = math.atan2(ballpos[1],ballpos[0])
+                desired_pos = ballpos
 
-            elif botstate == 3: #chill in goal
+            elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [goalpos[0] + 10, -200] # align middle and go backwards, TUNE +10 to be slightly infront of goal
+                desired_pos = [goalpos[0], goalpos[1] - 100] # align middle and go backwards #TUNE -100 to be inside goals
+                no_ball_time = time.time()
 
 #----------------------------------------------------------------------
 #            line detection
@@ -604,6 +642,13 @@ def main():
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
+            #DEBUG
+            print(botstate)
+            print(pcb.strength)
+            print(goalpos)
+            cv2.imshow("debug", camera.blue)
+            print("================")
+
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
@@ -611,7 +656,8 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
+            current_basespd = shoot_spd if botstate == 1 else basespd
+            maxspd = round(current_basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
             if on_line:
                 maxspd = line_escape_speed
 
@@ -624,7 +670,6 @@ def main():
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
-            kick()
     
     except KeyboardInterrupt:
         print("User stopped.")

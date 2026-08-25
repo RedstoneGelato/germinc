@@ -14,6 +14,7 @@ import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 from gpiozero import OutputDevice, DigitalInputDevice
 
+kick_pin = OutputDevice(17, active_high=True, initial_value=False)
 script_activate_pin = DigitalInputDevice(25, pull_up = True)
 
 class FrameGrabber(threading.Thread):
@@ -322,6 +323,31 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
+def kick(trigger=False):
+    # persistent state (stored on the function itself)
+    if not hasattr(kick, "last_kick"):
+        kick.last_kick = 0
+        kick.active = False
+        kick.start = 0
+
+    kick_duration = 0.05
+    kick_cooldown = 0.5
+
+    now = time.time()
+
+    # trigger kick
+    if trigger and not kick.active:
+        if now - kick.last_kick >= kick_cooldown:
+            kick_pin.on()
+            kick.active = True
+            kick.start = now
+            kick.last_kick = now
+
+    # update (turn off after duration)
+    if kick.active and (now - kick.start >= kick_duration):
+        kick_pin.off()
+        kick.active = False
+
 def circular_mean(angles):
     return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
 
@@ -412,6 +438,7 @@ def safe_shutdown(grabber, camera, motors, imu, pcb):
     motors.join()
     imu.join()
     pcb.join()
+    kick_pin.close()
 
     print("Robot stopped.")
 
@@ -499,6 +526,8 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
+            #others
+            if user_input == "l": kick(True)
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
@@ -508,6 +537,7 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
+                kick()
 
                 if camera.yellow[1] > 60:
                     goal_colour = 1
@@ -603,7 +633,7 @@ def main():
 #----------------------------------------------------------------------
             if ir is None or ir[1] > 99: #doesnt see ball
                 raw_botstate = 0
-            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot
+            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot TUNE: 25 to be in bcz
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -615,7 +645,7 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [goalpos[0], goalpos[1] + 30] # align middle and go backwards #TUNE +30 to be infront of goals
+                desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
                 no_ball_time = time.time()
 
             elif botstate == 1: # shoot
@@ -624,6 +654,7 @@ def main():
                 held_ball_time = time.time() - no_ball_time
                 if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
                     shoot_spd = 300000000
+                    kick(True)
                 else:
                     shoot_spd = 5000000
                 # turn on dribbler
@@ -631,13 +662,8 @@ def main():
             elif botstate == 2: # go for ball
                 no_ball_time = time.time()
                 if ballpos[1] < 0: # ball behind bot
-                    if abs(ballpos[0]) < 25 and ballpos[1] < 25: #TUNE: ir 25 distance: corner of the bot without colliding the bot
-                        if goalpos[0] > 0:
-                            desired_pos = [200, -200]
-                        else:
-                            desired_pos = [-200, -200]
-                    else:
-                        desired_pos = [0,-200] # go straight backwards
+                    #send message to defense
+                    desired_pos = [goalpos[0],goalpos[1] - 50] #TUNE: -50 to be about center field
                     desired_heading = 0
                 else:
                     desired_heading = math.atan2(goalpos[1],goalpos[0])
@@ -688,6 +714,7 @@ def main():
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+            kick()
     
     except KeyboardInterrupt:
         print("User stopped.")
