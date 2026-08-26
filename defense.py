@@ -19,6 +19,7 @@ from gpiozero import DigitalInputDevice
 script_activate_pin = DigitalInputDevice(25, pull_up = True)
 
 TEAM_ID = "GERM_INC"
+ROBOT_ID = 2 #goalie bot
 COMMS_PORT = 5555
 
 class FrameGrabber(threading.Thread):
@@ -308,9 +309,7 @@ class MotorThread(threading.Thread):
             self.motor4.set_speed(int(-self.motorspeed4))
             time.sleep(0.005)
 
-class TeammateLinkThread(threading.Thread):
-    #Exchanges small state updates with the teammate robot over UDP broadcast
-
+class TeammateLinkThread(threading.Thread): #comms between bots
     def __init__(self, send_interval=0.05):
         super().__init__()
         self.daemon = True
@@ -325,16 +324,29 @@ class TeammateLinkThread(threading.Thread):
         self.sock.bind(("", COMMS_PORT))
         self.sock.settimeout(0.02)
 
-        self.teammate_state = None
+        self.teammate_state = None      # most recent info FROM the teammate
         self.teammate_last_seen = 0
+        self.my_state = {}              # what THIS robot wants to tell its teammate - main loop writes here
 
     def run(self):
+        last_send = 0
         while self.running:
             now = time.time()
+
+            if self.enabled and now - last_send >= self.send_interval:
+                try:
+                    msg = {"team": TEAM_ID, "robot": ROBOT_ID, **self.my_state}
+                    self.sock.sendto(json.dumps(msg).encode("utf-8"), ("255.255.255.255", COMMS_PORT))
+                except OSError as e:
+                    print(f"Comms send error: {e}")
+                last_send = now
+
             try:
                 data, _ = self.sock.recvfrom(1024)
                 msg = json.loads(data.decode("utf-8"))
-                if self.enabled and isinstance(msg, dict) and msg.get("team") == TEAM_ID:
+                if (self.enabled and isinstance(msg, dict)
+                        and msg.get("team") == TEAM_ID
+                        and msg.get("robot") != ROBOT_ID):   # ignore a possible echo of our own broadcast
                     self.teammate_state = msg
                     self.teammate_last_seen = now
             except socket.timeout:
@@ -548,6 +560,7 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
+                comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 if camera.yellow[1] > 60:
                     goal_colour = 1
@@ -567,13 +580,18 @@ def main():
                 continue
             else:
                 robot_active = True #running bot
+                comms.my_state.update({"bot active": 1})
 
 #----------------------------------------------------------------------
 #            comms from and to other bot
 #----------------------------------------------------------------------
             teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
             if isinstance(comms.teammate_state, dict) and teammate_fresh:
-                comms_command = comms.teammate_state.get("command") # 1 for go get ball
+                comms_command = comms.teammate_state.get("command") # 1 for go get ball, 0 for chill
+                attack_bot_state = comms.teammate_state.get("bot active") # 0 for bot off, 1 for bot on
+            else:
+                comms_command = None
+                attack_bot_state = None
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
@@ -642,10 +660,10 @@ def main():
 #----------------------------------------------------------------------
             if ir is None: #doesnt see ball
                 raw_botstate = 0
-            elif pcb.ir.count(1) > 3: # ball is in ball capture zone check: please implement laser gate OR put ir1 in a place where it only sees if its in bcz idk
-                raw_botstate = 1 #pass ball to attack
+            elif attack_bot_state == 0: # attack bot is off
+                raw_botstate = 1
             elif comms_command == 1: #signal from other bot to go get ball
-                raw_botstate = 2 #try to get possession of ball
+                raw_botstate = 2
             else: #chill in goals
                 raw_botstate = 3
 
@@ -659,15 +677,17 @@ def main():
                 desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
                 #turn off dribbler
 
-            elif botstate == 1: # pass
-                desired_heading = 0
-                desired_pos = goalpos
-                # turn on dribbler
-
-            elif botstate == 2: # go for ball
+            elif botstate == 1: # go for ball then score
                 desired_heading = math.atan2(ballpos[1],ballpos[0])
                 desired_pos = ballpos
                 # turn on dribbler
+                # if ball in ball capture zone: face goal go towards goal
+
+            elif botstate == 2: # go for ball then pass
+                desired_heading = math.atan2(ballpos[1],ballpos[0])
+                desired_pos = ballpos
+                # turn on dribbler
+                # if ball in ball capture zone: face forwards go fowards 
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0

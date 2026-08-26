@@ -21,13 +21,8 @@ script_activate_pin = DigitalInputDevice(25, pull_up = True)
 
 #comms stuff
 TEAM_ID = "GERM_INC"
+ROBOT_ID = 1 #attack bot
 COMMS_PORT = 5555
-COMMS_SEND_INTERVAL = 0.05
-
-comms_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-comms_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-comms_enabled = True  # set False to satisfy rule 4.2.6 (referee-requested disable)
-last_comms_send = 0
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -255,6 +250,55 @@ class PCBThread(threading.Thread):
 
         self.bus.close()
 
+class TeammateLinkThread(threading.Thread): #comms between bots
+    def __init__(self, send_interval=0.05):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+        self.enabled = True  # set False to satisfy rule 4.2.6 (referee-requested disable)
+
+        self.send_interval = send_interval
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.sock.bind(("", COMMS_PORT))
+        self.sock.settimeout(0.02)
+
+        self.teammate_state = None      # most recent info FROM the teammate
+        self.teammate_last_seen = 0
+        self.my_state = {}              # what THIS robot wants to tell its teammate - main loop writes here
+
+    def run(self):
+        last_send = 0
+        while self.running:
+            now = time.time()
+
+            if self.enabled and now - last_send >= self.send_interval:
+                try:
+                    msg = {"team": TEAM_ID, "robot": ROBOT_ID, **self.my_state}
+                    self.sock.sendto(json.dumps(msg).encode("utf-8"), ("255.255.255.255", COMMS_PORT))
+                except OSError as e:
+                    print(f"Comms send error: {e}")
+                last_send = now
+
+            try:
+                data, _ = self.sock.recvfrom(1024)
+                msg = json.loads(data.decode("utf-8"))
+                if (self.enabled and isinstance(msg, dict)
+                        and msg.get("team") == TEAM_ID
+                        and msg.get("robot") != ROBOT_ID):   # ignore a possible echo of our own broadcast
+                    self.teammate_state = msg
+                    self.teammate_last_seen = now
+            except socket.timeout:
+                pass
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    def stop(self):
+        self.running = False
+        self.sock.close()
+
 class MotorThread(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -360,20 +404,6 @@ def kick(trigger=False):
         kick_pin.off()
         kick.active = False
 
-def send_to_teammate(state): #comms
-    global last_comms_send
-    if not comms_enabled:
-        return
-    now = time.time()
-    if now - last_comms_send < COMMS_SEND_INTERVAL:
-        return
-    try:
-        msg = {"team": TEAM_ID, **state}
-        comms_sock.sendto(json.dumps(msg).encode("utf-8"), ("255.255.255.255", COMMS_PORT))
-        last_comms_send = now
-    except OSError as e:
-        print(f"Comms send error: {e}")
-
 def circular_mean(angles):
     return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
 
@@ -430,7 +460,7 @@ def read_input():
         return sys.stdin.readline().strip()
     return None
 
-def safe_shutdown(grabber, camera, motors, imu, pcb):
+def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
 
     # stop motors first
@@ -452,6 +482,7 @@ def safe_shutdown(grabber, camera, motors, imu, pcb):
     motors.running = False
     imu.running = False
     pcb.running = False
+    comms.stop()
 
     try:
         grabber.cap.stop()
@@ -479,6 +510,8 @@ def main():
     imu.start()
     pcb = PCBThread()
     pcb.start()
+    comms = TeammateLinkThread()
+    comms.start()
 
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready and pcb.ready):
@@ -564,6 +597,8 @@ def main():
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
                 kick()
+                comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
+                
 
                 if camera.yellow[1] > 60:
                     goal_colour = 1
@@ -583,6 +618,16 @@ def main():
                 continue
             else:
                 robot_active = True #running bot
+                comms.my_state.update({"bot active": 1})
+
+#----------------------------------------------------------------------
+#            comms from and to other bot
+#----------------------------------------------------------------------
+            teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
+            if isinstance(comms.teammate_state, dict) and teammate_fresh:
+                goalie_bot_state = comms.teammate_state.get("bot active") # 0 for bot off, 1 for bot on
+            else:
+                goalie_bot_state = None
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
@@ -670,13 +715,13 @@ def main():
 #            state machine
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
-                send_to_teammate({"command": 1})
+                comms.my_state.update({"command": 1})
                 desired_heading = 0
                 desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
                 no_ball_time = time.time()
 
             elif botstate == 1: # shoot
-                send_to_teammate({"command": 0})
+                comms.my_state.update({"command": 0})
                 desired_heading = math.atan2(goalpos[1],goalpos[0])
                 desired_pos = goalpos
                 held_ball_time = time.time() - no_ball_time
@@ -690,11 +735,21 @@ def main():
             elif botstate == 2: # go for ball
                 no_ball_time = time.time()
                 if ballpos[1] < 0: # ball behind bot
-                    send_to_teammate({"command": 1}) #send goalie to get ball
-                    desired_pos = [goalpos[0],goalpos[1] - 50] #TUNE: -50 to be about center field
-                    desired_heading = 0
+                    comms.my_state.update({"command": 1}) #send goalie to get ball
+                    if goalie_bot_state == 0: #goalie off
+                        if abs(ballpos[0]) < 25 and ballpos[1] < 25: #TUNE: ir 25 distance: corner of the bot without colliding the bot
+                            if goalpos[0] > 0:
+                                desired_pos = [200, -200]
+                            else:
+                                desired_pos = [-200, -200]
+                        else:
+                            desired_pos = [0,-200] # go straight backwards
+                        desired_heading = 0
+                    else:
+                        desired_pos = [goalpos[0],goalpos[1] - 50] #TUNE: -50 to be about center field
+                        desired_heading = 0
                 else:
-                    send_to_teammate({"command": 0})
+                    comms.my_state.update({"command": 0})
                     desired_heading = math.atan2(goalpos[1],goalpos[0])
                     goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
                     desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 10, ballpos[1] + math.sin(goal_to_ball_angle) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
@@ -749,6 +804,6 @@ def main():
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        safe_shutdown(grabber,camera,motors,imu,pcb)
+        safe_shutdown(grabber,camera,motors,imu,pcb, comms)
 
 main()
