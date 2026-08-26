@@ -327,25 +327,14 @@ class TeammateLinkThread(threading.Thread):
 
         self.teammate_state = None
         self.teammate_last_seen = 0
-        self.my_state = {}   # message to other pi
 
     def run(self):
-        last_send = 0
         while self.running:
             now = time.time()
-
-            if self.enabled and now - last_send >= self.send_interval:
-                try:
-                    msg = {"team": TEAM_ID, **self.my_state}
-                    self.sock.sendto(json.dumps(msg).encode("utf-8"), ("255.255.255.255", COMMS_PORT))
-                except OSError as e:
-                    print(f"Comms send error: {e}")
-                last_send = now
-
             try:
                 data, _ = self.sock.recvfrom(1024)
                 msg = json.loads(data.decode("utf-8"))
-                if self.enabled and msg.get("team") == TEAM_ID:
+                if self.enabled and isinstance(msg, dict) and msg.get("team") == TEAM_ID:
                     self.teammate_state = msg
                     self.teammate_last_seen = now
             except socket.timeout:
@@ -498,15 +487,13 @@ def main():
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
-    shoot_spd = 5000000
     desired_heading = 0
     ir = [math.pi/2,50] # direction, distance
     ballpos = [0,0] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
     heading_offset = imu.heading
-    no_ball_time = time.time()
-    irstrengthlist = []
+    comms_command = None
     directionlist = []
     irdirection = 0
     unconcordantdirection = 0
@@ -585,7 +572,8 @@ def main():
 #            comms from and to other bot
 #----------------------------------------------------------------------
             teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
-
+            if isinstance(comms.teammate_state, dict) and teammate_fresh:
+                comms_command = comms.teammate_state.get("command") # 1 for go get ball
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
@@ -655,10 +643,10 @@ def main():
             if ir is None: #doesnt see ball
                 raw_botstate = 0
             elif pcb.ir.count(1) > 3: # ball is in ball capture zone check: please implement laser gate OR put ir1 in a place where it only sees if its in bcz idk
-                raw_botstate = 1 #try to shoot
-            elif True: #signal from other bot
+                raw_botstate = 1 #pass ball to attack
+            elif comms_command == 1: #signal from other bot to go get ball
                 raw_botstate = 2 #try to get possession of ball
-            else:
+            else: #chill in goals
                 raw_botstate = 3
 
             botstate = botstate_hyst.update(raw_botstate)
@@ -669,27 +657,22 @@ def main():
             if botstate == 0: # do not see ball
                 desired_heading = 0
                 desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
-                no_ball_time = time.time()
+                #turn off dribbler
 
             elif botstate == 1: # pass
                 desired_heading = 0
                 desired_pos = goalpos
-                held_ball_time = time.time() - no_ball_time
-                if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
-                    shoot_spd = 300000000
-                else:
-                    shoot_spd = 5000000
                 # turn on dribbler
 
             elif botstate == 2: # go for ball
-                no_ball_time = time.time()
                 desired_heading = math.atan2(ballpos[1],ballpos[0])
                 desired_pos = ballpos
+                # turn on dribbler
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
                 desired_pos = [goalpos[0], goalpos[1] - 100] # align middle and go backwards #TUNE -100 to be inside goals
-                no_ball_time = time.time()
+                #turn off dribbler
 
 #----------------------------------------------------------------------
 #            line detection
@@ -709,6 +692,7 @@ def main():
             #DEBUG
             print(botstate)
             print(goalpos)
+            print(comms_command)
             cv2.imshow("debug", camera.frame)
             cv2.waitKey(1)
             print("================")
@@ -720,8 +704,7 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             rot = spin_weight * heading_error
 
-            current_basespd = shoot_spd if botstate == 1 else basespd
-            maxspd = round(current_basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
             if on_line:
                 maxspd = line_escape_speed
 

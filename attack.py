@@ -9,6 +9,8 @@ from smbus2 import SMBus, i2c_msg
 import select
 import board
 import busio
+import socket
+import json
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
@@ -16,6 +18,16 @@ from gpiozero import OutputDevice, DigitalInputDevice
 
 kick_pin = OutputDevice(17, active_high=True, initial_value=False)
 script_activate_pin = DigitalInputDevice(25, pull_up = True)
+
+#comms stuff
+TEAM_ID = "GERM_INC"
+COMMS_PORT = 5555
+COMMS_SEND_INTERVAL = 0.05
+
+comms_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+comms_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+comms_enabled = True  # set False to satisfy rule 4.2.6 (referee-requested disable)
+last_comms_send = 0
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -348,6 +360,20 @@ def kick(trigger=False):
         kick_pin.off()
         kick.active = False
 
+def send_to_teammate(state): #comms
+    global last_comms_send
+    if not comms_enabled:
+        return
+    now = time.time()
+    if now - last_comms_send < COMMS_SEND_INTERVAL:
+        return
+    try:
+        msg = {"team": TEAM_ID, **state}
+        comms_sock.sendto(json.dumps(msg).encode("utf-8"), ("255.255.255.255", COMMS_PORT))
+        last_comms_send = now
+    except OSError as e:
+        print(f"Comms send error: {e}")
+
 def circular_mean(angles):
     return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
 
@@ -644,11 +670,13 @@ def main():
 #            state machine
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
+                send_to_teammate({"command": 1})
                 desired_heading = 0
                 desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
                 no_ball_time = time.time()
 
             elif botstate == 1: # shoot
+                send_to_teammate({"command": 0})
                 desired_heading = math.atan2(goalpos[1],goalpos[0])
                 desired_pos = goalpos
                 held_ball_time = time.time() - no_ball_time
@@ -662,10 +690,11 @@ def main():
             elif botstate == 2: # go for ball
                 no_ball_time = time.time()
                 if ballpos[1] < 0: # ball behind bot
-                    #send message to defense
+                    send_to_teammate({"command": 1}) #send goalie to get ball
                     desired_pos = [goalpos[0],goalpos[1] - 50] #TUNE: -50 to be about center field
                     desired_heading = 0
                 else:
+                    send_to_teammate({"command": 0})
                     desired_heading = math.atan2(goalpos[1],goalpos[0])
                     goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
                     desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 10, ballpos[1] + math.sin(goal_to_ball_angle) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
@@ -690,7 +719,6 @@ def main():
             print(botstate)
             print(pcb.strength)
             print(goalpos)
-            cv2.imshow("debug", camera.blue)
             print("================")
 
 #----------------------------------------------------------------------
