@@ -1,0 +1,22 @@
+Yet to add or implement or do
+    Confirm read_ir_activity() for distance
+    motor driver i2c numbers for attack
+    motor calibration numbers for attack
+    some reliable way to detect ball in bcz (more important for goalie, but also good to have on attack)
+
+Test numbers or other already implemented thingys
+    camera is rotated the correct way
+    ignore box size and position
+
+    brightness calibration works
+    line threshold numbers
+
+    goalie idle spot
+
+    bot hyst time
+
+    attack approach offset (*10 vector behind the ball)
+    attack centre field spot
+    attack held ball shoot timing
+
+    comms
