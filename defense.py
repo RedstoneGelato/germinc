@@ -5,6 +5,8 @@ import picamera2
 import numpy as np
 import time
 import sys
+import socket
+import json
 from smbus2 import SMBus, i2c_msg
 import select
 import board
@@ -15,6 +17,9 @@ from adafruit_bno08x.i2c import BNO08X_I2C
 from gpiozero import DigitalInputDevice
 
 script_activate_pin = DigitalInputDevice(25, pull_up = True)
+
+TEAM_ID = "GERM_INC"
+COMMS_PORT = 5555
 
 class FrameGrabber(threading.Thread):
     def __init__(self):
@@ -303,6 +308,55 @@ class MotorThread(threading.Thread):
             self.motor4.set_speed(int(-self.motorspeed4))
             time.sleep(0.005)
 
+class TeammateLinkThread(threading.Thread):
+    #Exchanges small state updates with the teammate robot over UDP broadcast
+
+    def __init__(self, send_interval=0.05):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+        self.enabled = True  # set False to satisfy rule 4.2.6 (referee-requested disable)
+
+        self.send_interval = send_interval
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.sock.bind(("", COMMS_PORT))
+        self.sock.settimeout(0.02)
+
+        self.teammate_state = None
+        self.teammate_last_seen = 0
+        self.my_state = {}   # message to other pi
+
+    def run(self):
+        last_send = 0
+        while self.running:
+            now = time.time()
+
+            if self.enabled and now - last_send >= self.send_interval:
+                try:
+                    msg = {"team": TEAM_ID, **self.my_state}
+                    self.sock.sendto(json.dumps(msg).encode("utf-8"), ("255.255.255.255", COMMS_PORT))
+                except OSError as e:
+                    print(f"Comms send error: {e}")
+                last_send = now
+
+            try:
+                data, _ = self.sock.recvfrom(1024)
+                msg = json.loads(data.decode("utf-8"))
+                if self.enabled and msg.get("team") == TEAM_ID:
+                    self.teammate_state = msg
+                    self.teammate_last_seen = now
+            except socket.timeout:
+                pass
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    def stop(self):
+        self.running = False
+        self.sock.close()
+
 def VelocityToMotor(xvel, yvel, rot, maxspd):
     motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) - rot
     motor2 = xvel*math.cos(3*math.pi/4) + yvel*math.sin(3*math.pi/4) - rot
@@ -373,7 +427,7 @@ def read_input():
         return sys.stdin.readline().strip()
     return None
 
-def safe_shutdown(grabber, camera, motors, imu, pcb):
+def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
 
     # stop motors first
@@ -395,6 +449,7 @@ def safe_shutdown(grabber, camera, motors, imu, pcb):
     motors.running = False
     imu.running = False
     pcb.running = False
+    comms.stop()
 
     try:
         grabber.cap.stop()
@@ -407,6 +462,7 @@ def safe_shutdown(grabber, camera, motors, imu, pcb):
     motors.join()
     imu.join()
     pcb.join()
+    comms.join()
 
     print("Robot stopped.")
 
@@ -421,6 +477,8 @@ def main():
     imu.start()
     pcb = PCBThread()
     pcb.start()
+    comms = TeammateLinkThread()
+    comms.start()
 
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready and pcb.ready):
@@ -522,6 +580,12 @@ def main():
                 continue
             else:
                 robot_active = True #running bot
+
+#----------------------------------------------------------------------
+#            comms from and to other bot
+#----------------------------------------------------------------------
+            teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
+
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
@@ -644,9 +708,9 @@ def main():
 
             #DEBUG
             print(botstate)
-            print(pcb.strength)
             print(goalpos)
-            cv2.imshow("debug", camera.blue)
+            cv2.imshow("debug", camera.frame)
+            cv2.waitKey(1)
             print("================")
 
 #----------------------------------------------------------------------
@@ -676,6 +740,6 @@ def main():
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        safe_shutdown(grabber,camera,motors,imu,pcb)
+        safe_shutdown(grabber,camera,motors,imu,pcb,comms)
 
 main()
