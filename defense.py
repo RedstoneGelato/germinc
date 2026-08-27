@@ -43,7 +43,7 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             frame = self.cap.capture_array("lores")
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE) #FIND WHICH WAY THIS IS CW OR CCW
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             self.frame = frame
             try:
                 self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -73,10 +73,10 @@ class DetectionThread(threading.Thread):
 
         # pixel region to ignore (center, ignore bot)
         # TUNE
-        self.ignore_x1 = 55
-        self.ignore_x2 = 105
-        self.ignore_y1 = 70
-        self.ignore_y2 = 120
+        self.ignore_x1 = 20
+        self.ignore_x2 = 85
+        self.ignore_y1 = 50
+        self.ignore_y2 = 110
 
     def run(self):
         while self.running:

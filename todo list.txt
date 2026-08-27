@@ -5,9 +5,6 @@ Yet to add or implement or do
     some reliable way to detect ball in bcz (more important for goalie, but also good to have on attack)
 
 Test numbers or other already implemented thingys
-    camera is rotated the correct way
-    ignore box size and position
-
     brightness calibration works
     line threshold numbers
 
