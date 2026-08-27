@@ -521,7 +521,7 @@ def main():
     heading_error = 0
     rot = 0
     basespd = 200000 # ideal speed
-    dribblerspd = -5000000
+    dribblerspd = -500000
     base_spin = 30 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
@@ -748,7 +748,7 @@ def main():
                     desired_pos = [ballpos[0], ballpos[1] - 50]
 
             elif botstate == 2: # go for ball then pass
-                if ir[1] > 74 and ballpos[1] > 30 and abs(ballpos[0]) < 50: #ball in bcz
+                if ir[1] > 49 and ballpos[1] > 30 and abs(ballpos[0]) < 30: #ball in bcz
                     motors.motorspeed5 = dribblerspd
                     desired_heading = 0
                     desired_pos = [0, 200]
@@ -767,7 +767,7 @@ def main():
                 else: #pathfind to ball
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 50]
+                    desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
