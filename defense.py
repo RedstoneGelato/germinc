@@ -522,7 +522,7 @@ def main():
     rot = 0
     basespd = 200000 # ideal speed
     dribblerspd = -5000000
-    spin_weight = 10 # bigger number = bot spins more instead of moves more
+    spin_weight = 30 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
     desired_heading = 0
@@ -800,7 +800,7 @@ def main():
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight *= abs(heading_error)
+            spin_weight *= 1 + abs(heading_error)
             rot = spin_weight * heading_error
 
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (1 / (ir[1] + 1))))
