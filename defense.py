@@ -748,7 +748,7 @@ def main():
                 else:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = ballpos
+                    desired_pos = [ballpos[0] * 5, ballpos[1]]
 
             elif botstate == 3: # go for ball then pass
                 if ir[1] > 74: #ball in bcz
