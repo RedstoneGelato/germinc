@@ -669,9 +669,7 @@ def main():
                 else:
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
-                ir[0] = circular_mean(directionlist)
-
-                ir[1] = 100
+                ir = [circular_mean(directionlist), 100]
             else:
                 ir = None
 
