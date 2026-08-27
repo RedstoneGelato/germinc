@@ -342,7 +342,7 @@ class TeammateLinkThread(threading.Thread): #comms between bots
         self.sock.bind(("", COMMS_PORT))
         self.sock.settimeout(0.02)
 
-        self.teammate_state = None      # most recent info FROM the teammate
+        self.teammate_state = {}      # most recent info FROM the teammate
         self.teammate_last_seen = 0
         self.my_state = {}              # what THIS robot wants to tell its teammate - main loop writes here
 
@@ -618,8 +618,8 @@ def main():
                 comms_command = comms.teammate_state.get("command") # 1 for go get ball, 0 for chill
                 attack_bot_state = comms.teammate_state.get("bot active") # 0 for bot off, 1 for bot on
             else:
-                comms_command = None
-                attack_bot_state = None
+                comms_command = {}
+                attack_bot_state = {}
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
