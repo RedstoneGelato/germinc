@@ -523,7 +523,7 @@ def main():
     basespd = 200000 # ideal speed
     dribblerspd = -5000000
     spin_weight = 50 # bigger number = bot spins more instead of moves more
-    line_threshold = 4000 # tune for colour sensor readings
+    line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
     desired_heading = 0
     ir = [math.pi/2,50] # direction, distance
@@ -705,6 +705,9 @@ def main():
                 raw_botstate = 4
 
             botstate = botstate_hyst.update(raw_botstate)
+
+            #DEBUG
+            botstate = 2
 
 #----------------------------------------------------------------------
 #            state machine
