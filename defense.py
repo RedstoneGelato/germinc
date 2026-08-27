@@ -688,14 +688,9 @@ def main():
                 ball_distance = ball_distance_total / ball_distance_count
 
                 ir = [circular_mean(directionlist), ball_distance * 25]
-            else:
-                ir = None
-
-
-            if ir is None:
-                ballpos = [0,0]
-            else:
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
+            else:
+                ballpos = [0,0]
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
