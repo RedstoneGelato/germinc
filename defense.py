@@ -715,7 +715,7 @@ def main():
             botstate = botstate_hyst.update(raw_botstate)
 
             #DEBUG
-            botstate = 2
+            botstate = 1
 
 #----------------------------------------------------------------------
 #            state machine
@@ -724,19 +724,6 @@ def main():
                 desired_heading = 0
                 desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
                 motors.motorspeed5 = 0
-
-            elif botstate == 1: #go backwards
-                desired_heading = 0
-                if ir[1] < 75: #not close
-                    desired_pos = [0, -200]
-                else:
-                    if abs(ballpos[0]) < 10: #right behind ball
-                        if goalpos[0] < 0: #bot right of goals
-                            desired_pos = [-200, -200]
-                        else:
-                            desired_pos = [200, -200]
-                    else:
-                        desired_pos = [0, -200]
 
             elif botstate == 1: # go for ball then score
                 if ir[1] > 74 and ballpos[1] > 30 and abs(ballpos[0]) < 50: #ball in bcz
@@ -804,7 +791,7 @@ def main():
 
             #DEBUG
             print(ballpos)
-            print(goalpos)
+            print(ir)
             print(botstate)
             print("================")
 
