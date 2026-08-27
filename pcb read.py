@@ -62,7 +62,7 @@ def read_ir(bus: SMBus) -> list:
     return [
         {
             'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
-            'distance': data[i * 2 + 1] if data[i * 2] == 1 else 0
+            'distance': data[i * 2 + 1]
         }
         for i in range(12)
     ]
