@@ -72,7 +72,6 @@ class DetectionThread(threading.Thread):
         self.kernel = np.ones((3,3), np.uint8)
 
         # pixel region to ignore (center, ignore bot)
-        # TUNE
         self.ignore_x1 = 20
         self.ignore_x2 = 85
         self.ignore_y1 = 50
@@ -167,7 +166,7 @@ class PCBThread(threading.Thread):
         self.COLOUR_SENSOR_COUNT = 32
         self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
         self.IR_SENSOR_COUNT = 12
-        self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT
+        self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT * 2
         self.CMD_TO_RESPONSE_DELAY = 0.05
         self.READ_RETRIES = 3
         self.RETRY_DELAY = 0.02
@@ -201,7 +200,14 @@ class PCBThread(threading.Thread):
 
     def _read_ir(self):
         data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
-        return list(data)
+
+        return [
+            {
+                "detected": data[i * 2],
+                "distance": data[i * 2 + 1]
+            }
+            for i in range(self.IR_SENSOR_COUNT)
+        ]
 
     def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
@@ -233,14 +239,13 @@ class PCBThread(threading.Thread):
         while self.running:
             try:
                 self.ir = self._read_ir()
-                self.ir[0] = 0 #DEBUG TEST
                 self.colours = self._read_colours()
                 self.ready = True
             except IOError as e:
                 print(f"PCB I2C error: {e}")
                 self.ready = False
 
-            time.sleep(0.004) #4ms, time inbetween report of pcb ir
+            time.sleep(0.004)
 
         self.bus.close()
 
@@ -345,8 +350,7 @@ class TeammateLinkThread(threading.Thread): #comms between bots
 
         self.teammate_state = {}      # most recent info FROM the teammate
         self.teammate_last_seen = 0
-        self.my_state = {}              # what THIS robot wants to tell its teammate - main loop writes here
-
+        self.my_state = {}              # what THIS robot wants to tell its teammate
     def run(self):
         last_send = 0
         while self.running:
@@ -364,7 +368,7 @@ class TeammateLinkThread(threading.Thread): #comms between bots
                 data, _ = self.sock.recvfrom(1024)
                 msg = json.loads(data.decode("utf-8"))
                 if (self.enabled and isinstance(msg, dict)
-                        and msg.get("team") == TEAM_ID
+                        and msg.get("team") == TEAM_ID # message from bot of the same team
                         and msg.get("robot") != ROBOT_ID):   # ignore a possible echo of our own broadcast
                     self.teammate_state = msg
                     self.teammate_last_seen = now
@@ -395,7 +399,7 @@ def circular_mean(angles):
     return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
 
 def angdiff(a, b):
-    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through ±pi
+    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
 
 class Hysteresis:
     """
@@ -517,7 +521,7 @@ def main():
     heading_error = 0
     rot = 0
     basespd = 200000 # ideal speed
-    dribblerspd = -50000000
+    dribblerspd = -5000000
     spin_weight = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 4000 # tune for colour sensor readings
     line_escape_speed = 50000000
@@ -647,9 +651,10 @@ def main():
 #----------------------------------------------------------------------
 #            read ir then convert into ball position, compass
 #----------------------------------------------------------------------
-            for i, active in enumerate(pcb.ir):
-                if active:
-                    angle = i * math.pi / 6 + math.pi/2
+            for i, sensor in enumerate(pcb.ir):
+                if sensor["detected"]:
+                    angle = i * math.pi / 6 + math.pi / 2
+
                     irx += math.cos(angle)
                     iry += math.sin(angle)
 
@@ -670,9 +675,12 @@ def main():
                 else:
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
-                ir = [circular_mean(directionlist), 100]
+
+                ball_distance = max(sensor["distance"] for sensor in pcb.ir if sensor["detected"]) * 25
+                ir = [circular_mean(directionlist), ball_distance]
             else:
                 ir = None
+
 
             if ir is None:
                 ballpos = [0,0]
@@ -687,17 +695,16 @@ def main():
 #----------------------------------------------------------------------
             if ir is None: #doesnt see ball
                 raw_botstate = 0
-            elif attack_bot_state == 0: # attack bot is off
+            elif ballpos[1] < 0: #ball behind bot
                 raw_botstate = 1
-            elif comms_command == 1: #signal from other bot to go get ball
+            elif attack_bot_state == 0: # attack bot is off
                 raw_botstate = 2
-            else: #chill in goals
+            elif comms_command == 1: #signal from other bot to go get ball
                 raw_botstate = 3
+            else: #chill in goals
+                raw_botstate = 4
 
             botstate = botstate_hyst.update(raw_botstate)
-
-            #DEBUG
-            botstate = 1
 
 #----------------------------------------------------------------------
 #            state machine
@@ -707,19 +714,40 @@ def main():
                 desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
                 motors.motorspeed5 = 0
 
-            elif botstate == 1: # go for ball then score
+            elif botstate == 1: #go backwards
                 desired_heading = 0
-                desired_pos = ballpos
-                motors.motorspeed5 = dribblerspd
-                # if ball in ball capture zone: face goal go towards goal
+                if ir[1] < 75: #not close
+                    desired_pos = [0, -200]
+                else:
+                    if abs(ballpos[0]) < 10: #right behind ball
+                        if goalpos[0] < 0: #bot right of goals
+                            desired_pos = [-200, -200]
+                        else:
+                            desired_pos = [200, -200]
+                    else:
+                        desired_pos = [0, -200]
 
-            elif botstate == 2: # go for ball then pass
-                desired_heading = 0
-                desired_pos = ballpos
-                motors.motorspeed5 = dribblerspd
-                # if ball in ball capture zone: face forwards go fowards 
+            elif botstate == 2: # go for ball then score
+                if ir[1] > 74: #ball in bcz
+                    motors.motorspeed5 = dribblerspd
+                    desired_heading = math.atan2(goalpos[1], goalpos[0])
+                    desired_pos = goalpos
+                else:
+                    motors.motorspeed5 = 0
+                    desired_heading = 0
+                    desired_pos = ballpos
 
-            elif botstate == 3: #chill in goals
+            elif botstate == 3: # go for ball then pass
+                if ir[1] > 74: #ball in bcz
+                    motors.motorspeed5 = dribblerspd
+                    desired_heading = 0
+                    desired_pos = [0,200]
+                else:
+                    motors.motorspeed5 = 0
+                    desired_heading = 0
+                    desired_pos = ballpos
+
+            elif botstate == 4: #chill in goals
                 desired_heading = 0
                 desired_pos = [goalpos[0], goalpos[1] - 100] # align middle and go backwards #TUNE -100 to be inside goals
                 motors.motorspeed5 = 0
@@ -742,7 +770,7 @@ def main():
             #DEBUG
             print(ballpos)
             print(goalpos)
-            print(comms_command)
+            print(botstate)
             print("================")
 
 #----------------------------------------------------------------------
@@ -752,7 +780,7 @@ def main():
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (1 + (1 / (ir[1] + 1))))
             if on_line:
                 maxspd = line_escape_speed
 
