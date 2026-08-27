@@ -741,7 +741,7 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(botstate)
+            print(ballpos)
             print(goalpos)
             print(comms_command)
             print("================")
