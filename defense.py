@@ -735,8 +735,6 @@ def main():
             print(botstate)
             print(goalpos)
             print(comms_command)
-            cv2.imshow("debug", camera.frame)
-            cv2.waitKey(1)
             print("================")
 
 #----------------------------------------------------------------------
