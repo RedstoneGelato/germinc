@@ -535,6 +535,9 @@ def main():
     directionlist = []
     irdirection = 0
     unconcordantdirection = 0
+    ball_distance = 0
+    ball_distance_count = 0
+    ball_distance_total = 0
     brightness_float = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15)
@@ -562,6 +565,9 @@ def main():
         while True:
             irx = 0
             iry = 0
+            ball_distance_total = 0
+            ball_distance_count = 0
+            ball_distance = 0
             linex = 0
             liney = 0
 
@@ -658,6 +664,9 @@ def main():
                     irx += math.cos(angle)
                     iry += math.sin(angle)
 
+                    ball_distance_total += sensor["distance"]
+                    ball_distance_count += 1
+
             if irx != 0 or iry != 0:
                 irdirection = math.atan2(iry, irx) # direction
     
@@ -676,7 +685,8 @@ def main():
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
 
-                ball_distance = max(sensor["distance"] for sensor in pcb.ir if sensor["detected"]) * 25
+                ball_distance = ball_distance_total / ball_distance_count
+
                 ir = [circular_mean(directionlist), ball_distance]
             else:
                 ir = None
