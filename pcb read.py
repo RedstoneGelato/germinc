@@ -61,7 +61,7 @@ def read_ir(bus: SMBus) -> list:
     data = _read_packet(bus, CMD_READ_IR, IR_PACKET_SIZE)
     return [
         {
-            'detected': data[i * 2],
+            'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
             'distance': data[i * 2 + 1]
         }
         for i in range(12)
