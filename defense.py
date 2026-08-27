@@ -572,6 +572,12 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
+            #dribbler
+            if user_input == "'": dribblerspd = 0
+            if user_input == ",": dribblerspd = -5000000
+            if user_input == ".": dribblerspd = -20000000
+            if user_input == "p": dribblerspd = -100000000
+            if user_input == "y": dribblerspd = -500000000
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
