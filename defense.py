@@ -654,7 +654,23 @@ def main():
                     iry += math.sin(angle)
 
             if irx != 0 or iry != 0:
-                ir = [math.atan2(iry, irx), 100]
+                irdirection = math.atan2(iry, irx) # direction
+    
+                if len(directionlist) > 10: # smoothing
+                    if unconcordantdirection > 10: # 40ms
+                        directionlist.clear()
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                    elif abs(angdiff(circular_mean(directionlist), irdirection)) > 1:
+                        unconcordantdirection += 1
+                    else:
+                        directionlist.pop(0)
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                else:
+                    directionlist.append(irdirection)
+                    unconcordantdirection = 0
+                ir = [circular_mean(directionlist), 100]
             else:
                 ir = None
 
