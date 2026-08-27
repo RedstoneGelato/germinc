@@ -721,13 +721,13 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
-                if ir[1] > 74 and ballpos[1] > 30 and abs(ballpos[0]) < 50: #ball in bcz
+                if ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30: #ball in bcz
                     motors.motorspeed5 = dribblerspd
                     desired_heading = math.atan2(goalpos[1], goalpos[0])
                     desired_pos = goalpos
-                elif ballpos[1] < 30: # go backwards
+                elif ballpos[1] < 20: # go backwards
                     desired_heading = 0
-                    if ir[1] < 75: #not close
+                    if ir[1] < 50: #not close
                         desired_pos = [0, -200]
                     else:
                         if abs(ballpos[0]) < 10: #right behind ball
@@ -740,16 +740,16 @@ def main():
                 else: #pathfind to ball
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 50]
+                    desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 2: # go for ball then pass
-                if ir[1] > 49 and ballpos[1] > 30 and abs(ballpos[0]) < 30: #ball in bcz
+                if ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30: #ball in bcz
                     motors.motorspeed5 = dribblerspd
                     desired_heading = 0
                     desired_pos = [0, 200]
-                elif ballpos[1] < 30: # go backwards
+                elif ballpos[1] < 20: # go backwards
                     desired_heading = 0
-                    if ir[1] < 75: #not close
+                    if ir[1] < 50: #not close
                         desired_pos = [0, -200]
                     else:
                         if abs(ballpos[0]) < 10: #right behind ball
