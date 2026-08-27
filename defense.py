@@ -526,7 +526,7 @@ def main():
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
     heading_offset = imu.heading
-    comms_command = None
+    comms_command = {}
     directionlist = []
     irdirection = 0
     unconcordantdirection = 0
@@ -709,13 +709,13 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
-                desired_heading = math.atan2(ballpos[1],ballpos[0])
+                desired_heading = 0
                 desired_pos = ballpos
                 motors.motorspeed5 = dribblerspd
                 # if ball in ball capture zone: face goal go towards goal
 
             elif botstate == 2: # go for ball then pass
-                desired_heading = math.atan2(ballpos[1],ballpos[0])
+                desired_heading = 0
                 desired_pos = ballpos
                 motors.motorspeed5 = dribblerspd
                 # if ball in ball capture zone: face forwards go fowards 
