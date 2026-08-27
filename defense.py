@@ -695,9 +695,9 @@ def main():
 #----------------------------------------------------------------------
             if ir is None: #doesnt see ball
                 raw_botstate = 0
-            elif ballpos[1] < 20: #ball behind bot
+            elif ballpos[1] < 30: #ball behind bot
                 raw_botstate = 1
-            elif attack_bot_state == 0: # attack bot is off
+            elif attack_bot_state == 0 or attack_bot_state == None: # attack bot is off
                 raw_botstate = 2
             elif comms_command == 1: #signal from other bot to go get ball
                 raw_botstate = 3
