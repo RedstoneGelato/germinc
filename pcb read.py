@@ -77,57 +77,13 @@ def main():
     print(f"Reading from STM32 at 0x{I2C_ADDR:02X} on I2C bus {I2C_BUS}. "
           f"Ctrl+C to stop.\n")
 
-    line_threshold  = 3000
-    irstrengthlist  = []  # moved outside loop so history accumulates
-
     try:
         while True:
             ir_raw  = read_ir(bus)
             colours = read_colours(bus)
 
-            irx = 0
-            iry = 0
-
-            for i, active in enumerate(ir_raw):
-                if active:
-                    angle = i * math.pi / 6 + math.pi / 2
-                    irx += math.cos(angle)
-                    iry += math.sin(angle)
-
-            if irx != 0 or iry != 0:
-                ball_angle = math.atan2(iry, irx)
-                active_count = sum(ir_raw)
-                irstrengthlist.append(active_count)
-                if len(irstrengthlist) > 10:
-                    irstrengthlist.pop(0)
-                avg_strength = sum(irstrengthlist) / len(irstrengthlist)
-                avg_strength = max(0, min(avg_strength, 10000))
-                ball_dist = 100 - math.sqrt(avg_strength)
-                ballpos = [round(math.cos(ball_angle) * ball_dist),
-                           round(math.sin(ball_angle) * ball_dist)]
-            else:
-                ballpos = [0, 0]
-
-            print("Ball position")
-            print(ballpos)
-
-            linex = 0
-            liney = 0
-            for i, value in enumerate(colours):
-                if value > line_threshold:
-                    angle = i * (math.pi / 16) + math.pi / 2
-                    excess = value - line_threshold
-                    linex += math.cos(angle) * excess
-                    liney += math.sin(angle) * excess
-
-            if linex != 0 or liney != 0:
-                mag = math.hypot(linex, liney)
-                desired_pos = [-linex / mag * 200, -liney / mag * 200]
-            else:
-                desired_pos = [0, 0]
-
-            print("Colour sensors")
-            print(desired_pos)
+            print(ir_raw)
+            print(colours)
             print("------------------------------")
 
     except KeyboardInterrupt:
