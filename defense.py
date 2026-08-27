@@ -705,14 +705,12 @@ def main():
 #----------------------------------------------------------------------
             if ir is None: #doesnt see ball
                 raw_botstate = 0
-            elif ballpos[1] < 30: #ball behind bot
-                raw_botstate = 1
             elif attack_bot_state == 0 or attack_bot_state == None: # attack bot is off
-                raw_botstate = 2
+                raw_botstate = 1
             elif comms_command == 1: #signal from other bot to go get ball
-                raw_botstate = 3
+                raw_botstate = 2
             else: #chill in goals
-                raw_botstate = 4
+                raw_botstate = 3
 
             botstate = botstate_hyst.update(raw_botstate)
 
@@ -740,27 +738,51 @@ def main():
                     else:
                         desired_pos = [0, -200]
 
-            elif botstate == 2: # go for ball then score
-                if ir[1] > 74: #ball in bcz
+            elif botstate == 1: # go for ball then score
+                if ir[1] > 74 and ballpos[1] > 30 and abs(ballpos[0]) < 50: #ball in bcz
                     motors.motorspeed5 = dribblerspd
                     desired_heading = math.atan2(goalpos[1], goalpos[0])
                     desired_pos = goalpos
-                else:
+                elif ballpos[1] < 30: # go backwards
+                    desired_heading = 0
+                    if ir[1] < 75: #not close
+                        desired_pos = [0, -200]
+                    else:
+                        if abs(ballpos[0]) < 10: #right behind ball
+                            if goalpos[0] < 0: #bot right of goals
+                                desired_pos = [-200, -200]
+                            else:
+                                desired_pos = [200, -200]
+                        else:
+                            desired_pos = [0, -200]
+                else: #pathfind to ball
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0] * 5, ballpos[1]]
+                    desired_pos = [ballpos[0], ballpos[1] - 50]
 
-            elif botstate == 3: # go for ball then pass
-                if ir[1] > 74: #ball in bcz
+            elif botstate == 2: # go for ball then pass
+                if ir[1] > 74 and ballpos[1] > 30 and abs(ballpos[0]) < 50: #ball in bcz
                     motors.motorspeed5 = dribblerspd
                     desired_heading = 0
-                    desired_pos = [0,200]
-                else:
+                    desired_pos = [0, 200]
+                elif ballpos[1] < 30: # go backwards
+                    desired_heading = 0
+                    if ir[1] < 75: #not close
+                        desired_pos = [0, -200]
+                    else:
+                        if abs(ballpos[0]) < 10: #right behind ball
+                            if goalpos[0] < 0: #bot right of goals
+                                desired_pos = [-200, -200]
+                            else:
+                                desired_pos = [200, -200]
+                        else:
+                            desired_pos = [0, -200]
+                else: #pathfind to ball
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = ballpos
+                    desired_pos = [ballpos[0], ballpos[1] - 50]
 
-            elif botstate == 4: #chill in goals
+            elif botstate == 3: #chill in goals
                 desired_heading = 0
                 desired_pos = [goalpos[0], goalpos[1] - 100] # align middle and go backwards #TUNE -100 to be inside goals
                 motors.motorspeed5 = 0
