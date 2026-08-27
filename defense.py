@@ -735,7 +735,7 @@ def main():
                     liney += math.sin(angle) * excess
 
             on_line = (linex != 0 or liney != 0)
-            if on_line:
+            if False: #DEBUG
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
