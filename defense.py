@@ -233,6 +233,7 @@ class PCBThread(threading.Thread):
         while self.running:
             try:
                 self.ir = self._read_ir()
+                self.ir[0] = 0 #DEBUG TEST
                 self.colours = self._read_colours()
                 self.ready = True
             except IOError as e:
@@ -518,7 +519,7 @@ def main():
     basespd = 200000 # ideal speed
     dribblerspd = -50000000
     spin_weight = 50 # bigger number = bot spins more instead of moves more
-    line_threshold = 3000 # tune for colour sensor readings
+    line_threshold = 4000 # tune for colour sensor readings
     line_escape_speed = 50000000
     desired_heading = 0
     ir = [math.pi/2,50] # direction, distance
