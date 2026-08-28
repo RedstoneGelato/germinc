@@ -5,23 +5,21 @@ import picamera2
 import numpy as np
 import time
 import sys
+import socket
+import json
 from smbus2 import SMBus, i2c_msg
 import select
 import board
 import busio
-import socket
-import json
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-from gpiozero import OutputDevice, DigitalInputDevice
+from gpiozero import DigitalInputDevice
 
-kick_pin = OutputDevice(17, active_high=True, initial_value=False)
 script_activate_pin = DigitalInputDevice(25, pull_up = True)
 
-#comms stuff
 TEAM_ID = "GERM_INC"
-ROBOT_ID = 1 #attack bot
+ROBOT_ID = 2 #goalie bot
 COMMS_PORT = 5555
 
 class FrameGrabber(threading.Thread):
@@ -45,7 +43,7 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             frame = self.cap.capture_array("lores")
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE) #FIND WHICH WAY THIS IS CW OR CCW
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             self.frame = frame
             try:
                 self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -74,11 +72,10 @@ class DetectionThread(threading.Thread):
         self.kernel = np.ones((3,3), np.uint8)
 
         # pixel region to ignore (center, ignore bot)
-        # TUNE
-        self.ignore_x1 = 55
-        self.ignore_x2 = 105
-        self.ignore_y1 = 70
-        self.ignore_y2 = 120
+        self.ignore_x1 = 20
+        self.ignore_x2 = 85
+        self.ignore_y1 = 50
+        self.ignore_y2 = 110
 
     def run(self):
         while self.running:
@@ -169,7 +166,7 @@ class PCBThread(threading.Thread):
         self.COLOUR_SENSOR_COUNT = 32
         self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
         self.IR_SENSOR_COUNT = 12
-        self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT
+        self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT * 2
         self.CMD_TO_RESPONSE_DELAY = 0.05
         self.READ_RETRIES = 3
         self.RETRY_DELAY = 0.02
@@ -201,13 +198,16 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def read_ir_activity(self):
-        data = self._read_packet(0x04, 24)
-        return [data[i*2] | (data[i*2+1] << 8) for i in range(12)]
-
     def _read_ir(self):
         data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
-        return list(data)
+
+        return [
+            {
+                'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
+                'distance': data[i * 2 + 1] if data[i * 2 + 1] >= 2 else 0
+            }
+            for i in range(12)
+        ]
 
     def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
@@ -240,15 +240,98 @@ class PCBThread(threading.Thread):
             try:
                 self.ir = self._read_ir()
                 self.colours = self._read_colours()
-                self.strength = self.read_ir_activity()
                 self.ready = True
             except IOError as e:
                 print(f"PCB I2C error: {e}")
                 self.ready = False
 
-            time.sleep(0.004) #4ms, time inbetween report of pcb ir
+            time.sleep(0.004)
 
         self.bus.close()
+
+class MotorThread(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+
+        self.speedlimit = 546133333
+        self.motorspeed1 = 0
+        self.motorspeed2 = 0
+        self.motorspeed3 = 0
+        self.motorspeed4 = 0
+        self.motorspeed5 = 0
+
+        self.i2c = busio.I2C(board.SCL, board.SDA)
+
+        self.motor1 = PowerfulBLDCDriver(self.i2c, 26)
+        self.motor1.set_current_limit_foc(262144)  # max 8 amps is 524288
+        self.motor1.set_id_pid_constants(1500, 200)
+        self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor1.set_position_pid_constants(275, 0, 0)
+        self.motor1.set_position_region_boundary(250000)
+        self.motor1.set_ELECANGLEOFFSET(1161314304)
+        self.motor1.set_SINCOSCENTRE(1244)
+        self.motor1.set_speed_limit(self.speedlimit)
+        self.motor1.configure_operating_mode_and_sensor(3, 1)
+        self.motor1.configure_command_mode(12)
+
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 32)
+        self.motor2.set_current_limit_foc(262144)  # 4 amps
+        self.motor2.set_id_pid_constants(1500, 200)
+        self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor2.set_position_pid_constants(275, 0, 0)
+        self.motor2.set_position_region_boundary(250000)
+        self.motor2.set_ELECANGLEOFFSET(1304942336)
+        self.motor2.set_SINCOSCENTRE(1239)
+        self.motor2.set_speed_limit(self.speedlimit)
+        self.motor2.configure_operating_mode_and_sensor(3, 1)
+        self.motor2.configure_command_mode(12)
+
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor3.set_current_limit_foc(262144)
+        self.motor3.set_id_pid_constants(1500, 200)
+        self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor3.set_position_pid_constants(275, 0, 0)
+        self.motor3.set_position_region_boundary(250000)
+        self.motor3.set_ELECANGLEOFFSET(1772804352)
+        self.motor3.set_SINCOSCENTRE(1251)
+        self.motor3.set_speed_limit(self.speedlimit)
+        self.motor3.configure_operating_mode_and_sensor(3, 1)
+        self.motor3.configure_command_mode(12)
+
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor4.set_current_limit_foc(262144)
+        self.motor4.set_id_pid_constants(1500, 200)
+        self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor4.set_position_pid_constants(275, 0, 0)
+        self.motor4.set_position_region_boundary(250000)
+        self.motor4.set_ELECANGLEOFFSET(1352689664)
+        self.motor4.set_SINCOSCENTRE(1251)
+        self.motor4.set_speed_limit(self.speedlimit)
+        self.motor4.configure_operating_mode_and_sensor(3, 1)
+        self.motor4.configure_command_mode(12)
+
+        self.motor5 = PowerfulBLDCDriver(self.i2c, 25) #dribbler motor
+        self.motor5.set_current_limit_foc(262144)
+        self.motor5.set_id_pid_constants(1500, 200)
+        self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor5.set_position_pid_constants(275, 0, 0)
+        self.motor5.set_position_region_boundary(250000)
+        self.motor5.set_ELECANGLEOFFSET(1326110464)
+        self.motor5.set_SINCOSCENTRE(1221)
+        self.motor5.set_speed_limit(self.speedlimit)
+        self.motor5.configure_operating_mode_and_sensor(3, 1)
+        self.motor5.configure_command_mode(12)
+
+    def run(self):
+        while self.running:
+            self.motor1.set_speed(int(-self.motorspeed1))
+            self.motor2.set_speed(int(-self.motorspeed2))
+            self.motor3.set_speed(int(-self.motorspeed3))
+            self.motor4.set_speed(int(-self.motorspeed4))
+            self.motor5.set_speed(int(self.motorspeed5))
+            time.sleep(0.005)
 
 class TeammateLinkThread(threading.Thread): #comms between bots
     def __init__(self, send_interval=0.05):
@@ -265,10 +348,9 @@ class TeammateLinkThread(threading.Thread): #comms between bots
         self.sock.bind(("", COMMS_PORT))
         self.sock.settimeout(0.02)
 
-        self.teammate_state = None      # most recent info FROM the teammate
+        self.teammate_state = {}      # most recent info FROM the teammate
         self.teammate_last_seen = 0
-        self.my_state = {}              # what THIS robot wants to tell its teammate - main loop writes here
-
+        self.my_state = {}              # what THIS robot wants to tell its teammate
     def run(self):
         last_send = 0
         while self.running:
@@ -286,7 +368,7 @@ class TeammateLinkThread(threading.Thread): #comms between bots
                 data, _ = self.sock.recvfrom(1024)
                 msg = json.loads(data.decode("utf-8"))
                 if (self.enabled and isinstance(msg, dict)
-                        and msg.get("team") == TEAM_ID
+                        and msg.get("team") == TEAM_ID # message from bot of the same team
                         and msg.get("robot") != ROBOT_ID):   # ignore a possible echo of our own broadcast
                     self.teammate_state = msg
                     self.teammate_last_seen = now
@@ -298,72 +380,6 @@ class TeammateLinkThread(threading.Thread): #comms between bots
     def stop(self):
         self.running = False
         self.sock.close()
-
-class MotorThread(threading.Thread):
-    def __init__(self):
-        super().__init__()
-        self.daemon = True
-        self.running = True
-
-        self.speedlimit = 546133333
-        self.motorspeed1 = 0
-        self.motorspeed2 = 0
-        self.motorspeed3 = 0
-        self.motorspeed4 = 0
-
-        self.i2c = busio.I2C(board.SCL, board.SDA)
-        self.motor1 = PowerfulBLDCDriver(self.i2c, 26)
-        self.motor1.set_current_limit_foc(262144)  # max 8 amps is 524288
-        self.motor1.set_id_pid_constants(1500, 200)
-        self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor1.set_position_pid_constants(275, 0, 0)
-        self.motor1.set_position_region_boundary(250000)
-        self.motor1.set_ELECANGLEOFFSET(1161314304)
-        self.motor1.set_SINCOSCENTRE(1244)
-        self.motor1.set_speed_limit(self.speedlimit)
-        self.motor1.configure_operating_mode_and_sensor(3, 1)
-        self.motor1.configure_command_mode(12)
-        self.motor2 = PowerfulBLDCDriver(self.i2c, 32)
-        self.motor2.set_current_limit_foc(262144)  # 4 amps
-        self.motor2.set_id_pid_constants(1500, 200)
-        self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor2.set_position_pid_constants(275, 0, 0)
-        self.motor2.set_position_region_boundary(250000)
-        self.motor2.set_ELECANGLEOFFSET(1304942336)
-        self.motor2.set_SINCOSCENTRE(1239)
-        self.motor2.set_speed_limit(self.speedlimit)
-        self.motor2.configure_operating_mode_and_sensor(3, 1)
-        self.motor2.configure_command_mode(12)
-        self.motor3 = PowerfulBLDCDriver(self.i2c, 28)
-        self.motor3.set_current_limit_foc(262144)
-        self.motor3.set_id_pid_constants(1500, 200)
-        self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor3.set_position_pid_constants(275, 0, 0)
-        self.motor3.set_position_region_boundary(250000)
-        self.motor3.set_ELECANGLEOFFSET(1772804352)
-        self.motor3.set_SINCOSCENTRE(1251)
-        self.motor3.set_speed_limit(self.speedlimit)
-        self.motor3.configure_operating_mode_and_sensor(3, 1)
-        self.motor3.configure_command_mode(12)
-        self.motor4 = PowerfulBLDCDriver(self.i2c, 27)
-        self.motor4.set_current_limit_foc(262144)
-        self.motor4.set_id_pid_constants(1500, 200)
-        self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor4.set_position_pid_constants(275, 0, 0)
-        self.motor4.set_position_region_boundary(250000)
-        self.motor4.set_ELECANGLEOFFSET(1352689664)
-        self.motor4.set_SINCOSCENTRE(1251)
-        self.motor4.set_speed_limit(self.speedlimit)
-        self.motor4.configure_operating_mode_and_sensor(3, 1)
-        self.motor4.configure_command_mode(12)
-
-    def run(self):
-        while self.running:
-            self.motor1.set_speed(int(-self.motorspeed1))
-            self.motor2.set_speed(int(-self.motorspeed2))
-            self.motor3.set_speed(int(-self.motorspeed3))
-            self.motor4.set_speed(int(-self.motorspeed4))
-            time.sleep(0.005)
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
     motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) - rot
@@ -379,36 +395,11 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
-def kick(trigger=False):
-    # persistent state (stored on the function itself)
-    if not hasattr(kick, "last_kick"):
-        kick.last_kick = 0
-        kick.active = False
-        kick.start = 0
-
-    kick_duration = 0.05
-    kick_cooldown = 0.5
-
-    now = time.time()
-
-    # trigger kick
-    if trigger and not kick.active:
-        if now - kick.last_kick >= kick_cooldown:
-            kick_pin.on()
-            kick.active = True
-            kick.start = now
-            kick.last_kick = now
-
-    # update (turn off after duration)
-    if kick.active and (now - kick.start >= kick_duration):
-        kick_pin.off()
-        kick.active = False
-
 def circular_mean(angles):
     return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
 
 def angdiff(a, b):
-    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through ±pi
+    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
 
 class Hysteresis:
     """
@@ -468,10 +459,12 @@ def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     motors.motorspeed2 = 0
     motors.motorspeed3 = 0
     motors.motorspeed4 = 0
+    motors.motorspeed5 = 0
     motors.motor1.clear_faults()
     motors.motor2.clear_faults()
     motors.motor3.clear_faults()
     motors.motor4.clear_faults()
+    motors.motor5.clear_faults()
 
     # allow motor thread to send stop command
     time.sleep(0.05)
@@ -495,7 +488,7 @@ def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     motors.join()
     imu.join()
     pcb.join()
-    kick_pin.close()
+    comms.join()
 
     print("Robot stopped.")
 
@@ -516,9 +509,6 @@ def main():
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready and pcb.ready):
         time.sleep(0.05)
-    
-    print("Calibrating heading... keep robot still")
-    time.sleep(1)  # let imu settle
 
     print("Waiting for signal")
     #initialise variables
@@ -528,21 +518,23 @@ def main():
     heading_error = 0
     rot = 0
     basespd = 200000 # ideal speed
-    spin_weight = 50 # bigger number = bot spins more instead of moves more
+    dribblerspd = -500000
+    base_spin = 30 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
-    shoot_spd = 5000000
     desired_heading = 0
     ir = [math.pi/2,50] # direction, distance
-    ballpos = [0,0] #cartesian plane coord relative of bot
+    ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
     heading_offset = imu.heading
-    no_ball_time = time.time()
-    irstrengthlist = []
     directionlist = []
     irdirection = 0
+    colour_see = 0
     unconcordantdirection = 0
+    ball_distance = 0
+    ball_distance_count = 0
+    ball_distance_total = 0
     brightness_float = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15)
@@ -555,10 +547,9 @@ def main():
 
         if max(pcb.colours) > line_threshold: # calibrate pcb leds
             brightness_float -= 200
-            pcb.set_brightness(brightness_float)
         elif max(pcb.colours) + 500 < line_threshold:
             brightness_float += 200
-            pcb.set_brightness(brightness_float)
+        pcb.set_brightness(max(min(brightness_float, 65535), 0))
 
         heading_offset = imu.heading
         time.sleep(0.01)
@@ -570,6 +561,10 @@ def main():
         while True:
             irx = 0
             iry = 0
+            ball_distance_total = 0
+            ball_distance_count = 0
+            ball_distance = 0
+            colour_see = 0
             linex = 0
             liney = 0
 
@@ -585,8 +580,12 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
-            #others
-            if user_input == "l": kick(True)
+            #dribbler
+            if user_input == "'": dribblerspd = 0
+            if user_input == ",": dribblerspd = -5000000
+            if user_input == ".": dribblerspd = -20000000
+            if user_input == "p": dribblerspd = -100000000
+            if user_input == "y": dribblerspd = -500000000
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
@@ -596,9 +595,8 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                kick()
+                motors.motorspeed5 = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
-                
 
                 if camera.yellow[1] > 60:
                     goal_colour = 1
@@ -607,10 +605,9 @@ def main():
 
                 if max(pcb.colours) > line_threshold: # calibrate pcb leds
                     brightness_float -= 200
-                    pcb.set_brightness(brightness_float)
                 elif max(pcb.colours) + 500 < line_threshold:
                     brightness_float += 200
-                    pcb.set_brightness(brightness_float)
+                pcb.set_brightness(max(min(brightness_float, 65535), 0))
 
                 heading_offset = imu.heading
 
@@ -625,9 +622,11 @@ def main():
 #----------------------------------------------------------------------
             teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
             if isinstance(comms.teammate_state, dict) and teammate_fresh:
-                goalie_bot_state = comms.teammate_state.get("bot active") # 0 for bot off, 1 for bot on
+                comms_command = comms.teammate_state.get("command") # 1 for go get ball, 0 for chill
+                attack_bot_state = comms.teammate_state.get("bot active") # 0 for bot off, 1 for bot on
             else:
-                goalie_bot_state = None
+                comms_command = None
+                attack_bot_state = None
 
 #----------------------------------------------------------------------
 #            convert camera readings into goal position
@@ -654,12 +653,15 @@ def main():
 #----------------------------------------------------------------------
 #            read ir then convert into ball position, compass
 #----------------------------------------------------------------------
-            for i, active in enumerate(pcb.ir):
-                if active:
-                    w = pcb.strength[i]
-                    angle = i * math.pi / 6 + math.pi/2
-                    irx += math.cos(angle) * w
-                    iry += math.sin(angle) * w
+            for i, sensor in enumerate(pcb.ir):
+                if sensor["detected"]:
+                    angle = i * math.pi / 6 + math.pi / 2
+
+                    irx += math.cos(angle)
+                    iry += math.sin(angle)
+
+                    ball_distance_total += sensor["distance"]
+                    ball_distance_count += 1
 
             if irx != 0 or iry != 0:
                 irdirection = math.atan2(iry, irx) # direction
@@ -678,23 +680,14 @@ def main():
                 else:
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
-                ir[0] = circular_mean(directionlist)
 
+                ball_distance = ball_distance_total / ball_distance_count
 
-                average = np.mean(pcb.strength) # strength
-                irstrengthlist.append(average)
-                if len(irstrengthlist) > 10:
-                    irstrengthlist.pop(0)
-                strength = np.mean(irstrengthlist)
-                strength = max(0, min(strength, 10000))
-                ir[1] = 100 - math.sqrt(strength)
-            else:
-                ir = None
-
-            if ir is None:
-                ballpos = [0,0]
-            else:
+                ir = [circular_mean(directionlist), ball_distance * 25]
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
+            else:
+                ballpos = [0,0]
+                ir = [0,0]
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -702,58 +695,76 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ir is None or ir[1] > 99: #doesnt see ball
+            if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0
-            elif ir[1] < 25 and ballpos[1] > 0 : # ball is in ball capture zone check: close enough, infront of bot TUNE: 25 to be in bcz
-                raw_botstate = 1 #try to shoot
-            else:
-                raw_botstate = 2 #try to get possession of ball
+            elif attack_bot_state == 0 or attack_bot_state == None: # attack bot is off
+                raw_botstate = 1
+            elif comms_command == 1: #signal from other bot to go get ball
+                raw_botstate = 2
+            else: #chill in goals
+                raw_botstate = 3
 
             botstate = botstate_hyst.update(raw_botstate)
+
+            #DEBUG
+            botstate = 1
 
 #----------------------------------------------------------------------
 #            state machine
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
-                comms.my_state.update({"command": 1})
                 desired_heading = 0
-                desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards #TUNE -80 to be infront of goals
-                no_ball_time = time.time()
+                desired_pos = [goalpos[0], goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
+                motors.motorspeed5 = 0
 
-            elif botstate == 1: # shoot
-                comms.my_state.update({"command": 0})
-                desired_heading = math.atan2(goalpos[1],goalpos[0])
-                desired_pos = goalpos
-                held_ball_time = time.time() - no_ball_time
-                if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
-                    shoot_spd = 300000000
-                    kick(True)
-                else:
-                    shoot_spd = 5000000
-                # turn on dribbler
-
-            elif botstate == 2: # go for ball
-                no_ball_time = time.time()
-                if ballpos[1] < 0: # ball behind bot
-                    comms.my_state.update({"command": 1}) #send goalie to get ball
-                    if goalie_bot_state == 0: #goalie off
-                        if abs(ballpos[0]) < 25 and ballpos[1] < 25: #TUNE: ir 25 distance: corner of the bot without colliding the bot
-                            if goalpos[0] > 0:
-                                desired_pos = [200, -200]
-                            else:
-                                desired_pos = [-200, -200]
-                        else:
-                            desired_pos = [0,-200] # go straight backwards
-                        desired_heading = 0
+            elif botstate == 1: # go for ball then score
+                if (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: #ball in bcz
+                    motors.motorspeed5 = dribblerspd
+                    desired_heading = math.atan2(goalpos[1], goalpos[0])
+                    desired_pos = goalpos
+                elif ballpos[1] < 20: # go backwards
+                    desired_heading = 0
+                    if ir[1] < 50: #not close
+                        desired_pos = [0, -200]
                     else:
-                        desired_pos = [goalpos[0],goalpos[1] - 50] #TUNE: -50 to be about center field
-                        desired_heading = 0
-                else:
-                    comms.my_state.update({"command": 0})
-                    desired_heading = math.atan2(goalpos[1],goalpos[0])
-                    goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0]) #vector from goal to ball
-                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 10, ballpos[1] + math.sin(goal_to_ball_angle) * 10] # go to a spot behind the ball such that the bot the ball and the goal are in a line
-                    #TUNE: *10 makes it behind the ball without colliding with the ball
+                        if abs(ballpos[0]) < 30: # ball straight behind bot
+                            if goalpos[0] < 0: #bot right of goals
+                                desired_pos = [-200, -200]
+                            else:
+                                desired_pos = [200, -200]
+                        else:
+                            desired_pos = [0, -200]
+                else: #pathfind to ball
+                    motors.motorspeed5 = 0
+                    desired_heading = 0
+                    desired_pos = [ballpos[0], ballpos[1] - 20]
+
+            elif botstate == 2: # go for ball then pass
+                if (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: #ball in bcz
+                    motors.motorspeed5 = dribblerspd
+                    desired_heading = 0
+                    desired_pos = [0, 200]
+                elif ballpos[1] < 20: # go backwards
+                    desired_heading = 0
+                    if ir[1] < 50: #not close
+                        desired_pos = [0, -200]
+                    else:
+                        if abs(ballpos[0]) < 30: #right behind ball
+                            if goalpos[0] < 0: #bot right of goals
+                                desired_pos = [-200, -200]
+                            else:
+                                desired_pos = [200, -200]
+                        else:
+                            desired_pos = [0, -200]
+                else: #pathfind to ball
+                    motors.motorspeed5 = 0
+                    desired_heading = 0
+                    desired_pos = [ballpos[0], ballpos[1] - 20]
+
+            elif botstate == 3: #chill in goals
+                desired_heading = 0
+                desired_pos = [goalpos[0], goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
+                motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
 #            line detection
@@ -764,16 +775,17 @@ def main():
                     excess = value - line_threshold
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
+                    colour_see += 1
 
             on_line = (linex != 0 or liney != 0)
-            if on_line:
+            if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
+            print(ballpos)
+            print(ir)
             print(botstate)
-            print(pcb.strength)
-            print(goalpos)
             print("================")
 
 #----------------------------------------------------------------------
@@ -781,10 +793,10 @@ def main():
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+            spin_weight = base_spin * (1 + abs(heading_error))
             rot = spin_weight * heading_error
 
-            current_basespd = shoot_spd if botstate == 1 else basespd
-            maxspd = round(current_basespd * (1 + (abs(rot) / 160)) * (1 + (abs(ballpos[1]) / 1000)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (0.8 + (50 / (ir[1] + 1))))
             if on_line:
                 maxspd = line_escape_speed
 
@@ -797,13 +809,12 @@ def main():
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
-            kick()
     
     except KeyboardInterrupt:
         print("User stopped.")
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        safe_shutdown(grabber,camera,motors,imu,pcb, comms)
+        safe_shutdown(grabber,camera,motors,imu,pcb,comms)
 
 main()

@@ -25,10 +25,3 @@ PI commands:
 NANO commands:
 	ctrl + O, enter -> save
 	ctrl + X -> quit
-
-OTHER stuff:
-	Teamviewer ID: 1 276 215 774
-	Teamviewer PWD: GermInc1!
-
-github token
-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
