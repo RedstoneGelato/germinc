@@ -724,7 +724,7 @@ def main():
                 if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4:
                     raw_substate = 1  # ball in bcz
                 elif ballpos[1] < 20:
-                    raw_substate = 2 if ballpos[1] < 51 else 3  # far vs near backup
+                    raw_substate = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
                     raw_substate = 4  # pathfind to ball
 
