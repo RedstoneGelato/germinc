@@ -815,7 +815,7 @@ def main():
             rot = spin_weight * heading_error
 
             current_basespd = shoot_spd if botstate == 1 else basespd
-            maxspd = round(current_basespd * (1 + (abs(rot) / 160)) * (0.8 + (50 / (ir[1] + 1))))
+            maxspd = round(current_basespd * (1 + (abs(rot) / 160)))
             if on_line:
                 maxspd = line_escape_speed
 

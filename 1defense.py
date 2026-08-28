@@ -806,7 +806,7 @@ def main():
             spin_weight = base_spin * (1 + abs(heading_error))
             rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * (0.8 + (50 / (ir[1] + 1))))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)))
             if on_line:
                 maxspd = line_escape_speed
 
