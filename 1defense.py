@@ -539,6 +539,8 @@ def main():
     pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15)
 
+    debug = 0
+
     while script_activate_pin.is_active:
         if camera.yellow[1] > 60:
             goal_colour = 1
@@ -722,10 +724,14 @@ def main():
                     motors.motorspeed5 = dribblerspd
                     desired_heading = math.atan2(goalpos[1], goalpos[0])
                     desired_pos = goalpos
+
+                    debug = 1
                 elif ballpos[1] < 20: # go backwards
                     desired_heading = 0
                     if ir[1] < 50: #not close
                         desired_pos = [0, -200]
+
+                        debug = 2
                     else:
                         if abs(ballpos[0]) < 30: # ball straight behind bot
                             if goalpos[0] < 0: #bot right of goals
@@ -734,10 +740,14 @@ def main():
                                 desired_pos = [200, -200]
                         else:
                             desired_pos = [0, -200]
+
+                        debug = 3
                 else: #pathfind to ball
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [ballpos[0], ballpos[1] - 20]
+
+                    debug = 4
 
             elif botstate == 2: # go for ball then pass
                 if (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: #ball in bcz
@@ -784,8 +794,7 @@ def main():
 
             #DEBUG
             print(ballpos)
-            print(ir)
-            print(botstate)
+            print(debug)
             print("================")
 
 #----------------------------------------------------------------------
