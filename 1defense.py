@@ -538,6 +538,7 @@ def main():
     brightness_float = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15)
+    substate_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
 
     debug = 0
 
@@ -720,34 +721,35 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
-                if (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: #ball in bcz
+                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4:
+                    raw_substate = 1  # ball in bcz
+                elif ballpos[1] < 20:
+                    raw_substate = 2 if ballpos[1] < 51 else 3  # far vs near backup
+                else:
+                    raw_substate = 4  # pathfind to ball
+
+                substate = substate_hyst.update(raw_substate)
+                debug = substate
+
+                if substate == 1:
                     motors.motorspeed5 = dribblerspd
                     desired_heading = 0
                     desired_pos = goalpos
-
-                    debug = 1
-                elif ballpos[1] < 20: # go backwards
+                elif substate == 2:
+                    motors.motorspeed5 = 0
                     desired_heading = 0
-                    if ir[1] < 50: #not close
-                        desired_pos = [0, -200]
-
-                        debug = 2
+                    desired_pos = [0, -200]
+                elif substate == 3:
+                    motors.motorspeed5 = 0
+                    desired_heading = 0
+                    if abs(ballpos[0]) < 30:
+                        desired_pos = [-200, -200] if goalpos[0] < 0 else [200, -200]
                     else:
-                        if abs(ballpos[0]) < 30: # ball straight behind bot
-                            if goalpos[0] < 0: #bot right of goals
-                                desired_pos = [-200, -200]
-                            else:
-                                desired_pos = [200, -200]
-                        else:
-                            desired_pos = [0, -200]
-
-                        debug = 3
-                else: #pathfind to ball
+                        desired_pos = [0, -200]
+                elif substate == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [ballpos[0], ballpos[1] - 20]
-
-                    debug = 4
 
             elif botstate == 2: # go for ball then pass
                 if (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: #ball in bcz
@@ -756,7 +758,7 @@ def main():
                     desired_pos = [0, 200]
                 elif ballpos[1] < 20: # go backwards
                     desired_heading = 0
-                    if ir[1] < 50: #not close
+                    if ballpos[1] < 51: #not close
                         desired_pos = [0, -200]
                     else:
                         if abs(ballpos[0]) < 30: #right behind ball
