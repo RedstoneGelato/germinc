@@ -8,8 +8,6 @@ Test numbers or other already implemented thingys
 
     goalie idle spot
 
-    attack approach offset (*10 vector behind the ball)
     attack centre field spot
-    attack held ball shoot timing
 
     comms

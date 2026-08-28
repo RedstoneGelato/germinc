@@ -708,9 +708,6 @@ def main():
 
             botstate = botstate_hyst.update(raw_botstate)
 
-            #DEBUG
-            botstate = 1
-
 #----------------------------------------------------------------------
 #            state machine
 #----------------------------------------------------------------------
@@ -777,6 +774,11 @@ def main():
                     desired_heading = 0
                     desired_pos = [ballpos[0], ballpos[1] - 20]
 
+            elif botstate == 3: #chill in goals
+                desired_heading = 0
+                desired_pos = [goalpos[0], goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
+                motors.motorspeed5 = 0
+
 #----------------------------------------------------------------------
 #            line detection
 #----------------------------------------------------------------------
@@ -792,11 +794,6 @@ def main():
             if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
-
-            #DEBUG
-            print(pcb.colours)
-            print(led_brightness)
-            print("================")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
