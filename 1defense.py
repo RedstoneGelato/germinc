@@ -535,12 +535,11 @@ def main():
     ball_distance = 0
     ball_distance_count = 0
     ball_distance_total = 0
-    brightness_float = 10000  # pcb led brightness: 0 - 65535
-    pcb.set_brightness(brightness_float)
+    led_brightness = 10000  # pcb led brightness: 0 - 65535
+    pcb.set_brightness(led_brightness)
     botstate_hyst = Hysteresis(hold_time=0.15)
-    substate_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
-
-    debug = 0
+    substate1_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
+    substate2_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
 
     while script_activate_pin.is_active:
         if camera.yellow[1] > 60:
@@ -549,10 +548,10 @@ def main():
             goal_colour = 0
 
         if max(pcb.colours) > line_threshold: # calibrate pcb leds
-            brightness_float -= 200
+            led_brightness -= 200
         elif max(pcb.colours) + 500 < line_threshold:
-            brightness_float += 200
-        pcb.set_brightness(max(min(brightness_float, 65535), 0))
+            led_brightness += 200
+        pcb.set_brightness(max(min(led_brightness, 65535), 0))
 
         heading_offset = imu.heading
         time.sleep(0.01)
@@ -607,10 +606,10 @@ def main():
                     goal_colour = 0
 
                 if max(pcb.colours) > line_threshold: # calibrate pcb leds
-                    brightness_float -= 200
+                    led_brightness -= 200
                 elif max(pcb.colours) + 500 < line_threshold:
-                    brightness_float += 200
-                pcb.set_brightness(max(min(brightness_float, 65535), 0))
+                    led_brightness += 200
+                pcb.set_brightness(max(min(led_brightness, 65535), 0))
 
                 heading_offset = imu.heading
 
@@ -722,61 +721,61 @@ def main():
 
             elif botstate == 1: # go for ball then score
                 if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4:
-                    raw_substate = 1  # ball in bcz
-                elif ballpos[1] < 20:
-                    raw_substate = 2 if ir[1] < 51 else 3  # far vs near backup
+                    raw_substate1 = 1  # ball in bcz
+                elif ballpos[1] < 30:
+                    raw_substate1 = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
-                    raw_substate = 4  # pathfind to ball
+                    raw_substate1 = 4  # pathfind to ball
+                substate1 = substate1_hyst.update(raw_substate1)
 
-                substate = substate_hyst.update(raw_substate)
-                debug = substate
-
-                if substate == 1:
+                if substate1 == 1:
                     motors.motorspeed5 = dribblerspd
                     desired_heading = 0
                     desired_pos = goalpos
-                elif substate == 2:
+                elif substate1 == 2:
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [0, -200]
-                elif substate == 3:
+                elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 30:
-                        desired_pos = [-200, -200] if goalpos[0] < 0 else [200, -200]
+                    if abs(ballpos[0]) < 40:
+                        desired_pos = [-200, 0] if goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
-                elif substate == 4:
+                elif substate1 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [ballpos[0], ballpos[1] - 20]
 
             elif botstate == 2: # go for ball then pass
-                if (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: #ball in bcz
+                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4:
+                    raw_substate2 = 1  # ball in bcz
+                elif ballpos[1] < 30:
+                    raw_substate2 = 2 if ir[1] < 51 else 3  # far vs near backup
+                else:
+                    raw_substate2 = 4  # pathfind to ball
+                substate2 = substate2_hyst.update(raw_substate2)
+
+                if substate2 == 1:
                     motors.motorspeed5 = dribblerspd
                     desired_heading = 0
-                    desired_pos = [0, 200]
-                elif ballpos[1] < 20: # go backwards
+                    desired_pos = [0,200]
+                elif substate2 == 2:
+                    motors.motorspeed5 = 0
                     desired_heading = 0
-                    if ballpos[1] < 51: #not close
-                        desired_pos = [0, -200]
+                    desired_pos = [0, -200]
+                elif substate2 == 3:
+                    motors.motorspeed5 = 0
+                    desired_heading = 0
+                    if abs(ballpos[0]) < 40:
+                        desired_pos = [-200, 0] if goalpos[0] < 0 else [200, 0]
                     else:
-                        if abs(ballpos[0]) < 30: #right behind ball
-                            if goalpos[0] < 0: #bot right of goals
-                                desired_pos = [-200, -200]
-                            else:
-                                desired_pos = [200, -200]
-                        else:
-                            desired_pos = [0, -200]
-                else: #pathfind to ball
+                        desired_pos = [0, -200]
+                elif substate2 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [ballpos[0], ballpos[1] - 20]
-
-            elif botstate == 3: #chill in goals
-                desired_heading = 0
-                desired_pos = [goalpos[0], goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
-                motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
 #            line detection
@@ -795,9 +794,8 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(ballpos)
-            print(debug)
-            print(ir)
+            print(pcb.colours)
+            print(led_brightness)
             print("================")
 
 #----------------------------------------------------------------------
