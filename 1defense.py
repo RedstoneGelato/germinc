@@ -722,7 +722,7 @@ def main():
             elif botstate == 1: # go for ball then score
                 if (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: #ball in bcz
                     motors.motorspeed5 = dribblerspd
-                    desired_heading = math.atan2(goalpos[1], goalpos[0])
+                    desired_heading = 0
                     desired_pos = goalpos
 
                     debug = 1
@@ -795,6 +795,7 @@ def main():
             #DEBUG
             print(ballpos)
             print(debug)
+            print(ir)
             print("================")
 
 #----------------------------------------------------------------------
