@@ -520,7 +520,7 @@ def main():
     rot = 0
     basespd = 200000 # ideal speed
     dribblerspd = -5000000
-    base_spin = 30 # bigger number = bot spins more instead of moves more
+    base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
     shoot_spd = 5000000
