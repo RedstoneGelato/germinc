@@ -735,13 +735,14 @@ def main():
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
-                desired_heading = math.atan2(goalpos[1],goalpos[0])
+                desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
+                desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                 desired_pos = goalpos
                 held_ball_time = time.time() - no_ball_time
-                if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
-                    shoot_spd = 20000000
+                if held_ball_time > 1: #after the bot still has ball for certain time, increase speed to shoot faster
+                    shoot_spd = basespd * 3
                 else:
-                    shoot_spd = 2000000
+                    shoot_spd = basespd // 3
                 motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball

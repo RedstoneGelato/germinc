@@ -759,7 +759,8 @@ def main():
                         desired_pos = [0, -200]
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
-                    desired_heading = 0
+                    desired_heading = math.atan2(ballpos[1], ballpos[0]) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = [ballpos[0], ballpos[1] - 20]
 
             elif botstate == 2: # go for ball then pass
@@ -788,7 +789,8 @@ def main():
                         desired_pos = [0, -200]
                 elif substate2 == 4:
                     motors.motorspeed5 = 0
-                    desired_heading = 0
+                    desired_heading = math.atan2(ballpos[1], ballpos[0]) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = [ballpos[0], ballpos[1] - 20]
 
             elif botstate == 3: #chill in goals
