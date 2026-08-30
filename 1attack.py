@@ -317,14 +317,14 @@ class MotorThread(threading.Thread):
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
-        self.motor5 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor5 = PowerfulBLDCDriver(self.i2c, 25) #dribbler motor
         self.motor5.set_current_limit_foc(262144)
         self.motor5.set_id_pid_constants(1500, 200)
         self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
         self.motor5.set_position_pid_constants(275, 0, 0)
         self.motor5.set_position_region_boundary(250000)
-        self.motor5.set_ELECANGLEOFFSET(1352689664)
-        self.motor5.set_SINCOSCENTRE(1251)
+        self.motor5.set_ELECANGLEOFFSET(1326110464)
+        self.motor5.set_SINCOSCENTRE(1221)
         self.motor5.set_speed_limit(self.speedlimit)
         self.motor5.configure_operating_mode_and_sensor(3, 1)
         self.motor5.configure_command_mode(12)
@@ -759,7 +759,7 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [0, -200]
+                    desired_pos = ballpos
                 elif substate == 3:
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
@@ -791,6 +791,10 @@ def main():
             if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+
+            #DEBUG
+            print(botstate)
+            print("====================")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement

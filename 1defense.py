@@ -749,7 +749,7 @@ def main():
                 elif substate1 == 2:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [0, -200]
+                    desired_pos = ballpos
                 elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
