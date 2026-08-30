@@ -716,7 +716,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0
-            elif (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone
+            elif (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -794,6 +794,9 @@ def main():
 
             #DEBUG
             print(botstate)
+            print(held_ball_time)
+            print(goalpos)
+            print(math.atan2(goalpos[1], goalpos[0]))
             print("====================")
 
 #----------------------------------------------------------------------
