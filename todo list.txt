@@ -3,11 +3,12 @@ Yet to add or implement or do
     motor calibration numbers for attack
 
 Test numbers or other already implemented thingys
-    brightness calibration works
+    brightness calibration
     line threshold numbers
 
-    goalie idle spot
+    test camera and tune the numbers where it says tune in code
 
-    attack centre field spot
+    tune bot movement speed
+    tune dribbler speed
 
     comms

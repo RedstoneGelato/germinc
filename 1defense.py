@@ -544,6 +544,7 @@ def main():
     botstate_hyst = Hysteresis(hold_time=0.15)
     substate1_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
     substate2_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
+    line_hyst = Hysteresis(hold_time=0.1)
     CONTROL_PERIOD = 0.01
 
     while script_activate_pin.is_active:
@@ -752,7 +753,7 @@ def main():
             elif botstate == 1: # go for ball then score
                 if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
                     raw_substate1 = 1  # ball in bcz
-                elif ballpos[1] < 30:
+                elif ballpos[1] < 40:
                     raw_substate1 = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
@@ -799,13 +800,13 @@ def main():
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     if abs(ballpos[0]) < 40:
-                        desired_pos = [-200, 0] if goalpos[0] < 0 else [200, 0]
+                        desired_pos = [-200, 0] if goalpos[0] < 0  or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate2 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 20]
+                    desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
@@ -823,7 +824,8 @@ def main():
                     liney += math.sin(angle) * excess
                     colour_see += 1
 
-            on_line = (linex != 0 or liney != 0)
+            raw_on_line = (linex != 0 or liney != 0) and colour_see > 2
+            on_line = line_hyst.update(raw_on_line)
             if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
@@ -833,8 +835,11 @@ def main():
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight = base_spin * (1 + abs(heading_error))
-            rot = spin_weight * heading_error
+            spin_weight = base_spin * abs(heading_error) if heading_error != 0 else base_spin
+            if abs(heading_error) < 0.05:
+                rot = 0
+            else:
+                rot = spin_weight * heading_error
 
             maxspd = round(basespd * (1 + (abs(rot) / 160)))
             if on_line and colour_see > 2:

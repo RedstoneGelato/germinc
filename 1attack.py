@@ -546,6 +546,7 @@ def main():
     pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
     substate_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
+    line_hyst = Hysteresis(hold_time=0.1)
     CONTROL_PERIOD = 0.01
 
     while script_activate_pin.is_active:
@@ -757,6 +758,8 @@ def main():
                 held_ball_time = time.time() - no_ball_time
                 if held_ball_time > 1: #after the bot still has ball for certain time, increase speed to shoot faster
                     shoot_spd = basespd * 3
+                else:
+                    shoot_spd = basespd // 2
                 motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
@@ -770,6 +773,8 @@ def main():
 
                 if substate == 1:
                     comms.my_state.update({"command": 1}) #send goalie to get ball
+                    desired_heading = 0
+                    desired_pos = [goalpos[0], goalpos[1] - 180] #TUNE: -180 to be about midfield
                 elif substate == 2:
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
@@ -783,11 +788,13 @@ def main():
                         desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
-                elif substate == 4:
+                elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
-                    desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 30]
+                    goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0])
+                    desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30] #TUNE: *30 to be reasonably behind ball in the extended direction of goal from ball
                 no_ball_time = time.time()
                 motors.motorspeed5 = 0
 
@@ -802,7 +809,8 @@ def main():
                     liney += math.sin(angle) * excess
                     colour_see += 1
 
-            on_line = (linex != 0 or liney != 0)
+            raw_on_line = (linex != 0 or liney != 0) and colour_see > 2
+            on_line = line_hyst.update(raw_on_line)
             if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
@@ -812,12 +820,15 @@ def main():
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight = base_spin * (1 + abs(heading_error))
-            rot = spin_weight * heading_error
+            spin_weight = base_spin * abs(heading_error) if heading_error != 0 else base_spin
+            if abs(heading_error) < 0.05:
+                rot = 0
+            else:
+                rot = spin_weight * heading_error
 
             current_basespd = shoot_spd if botstate == 1 else basespd
             maxspd = round(current_basespd * (1 + (abs(rot) / 160)))
-            if on_line:
+            if on_line and colour_see > 2:
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]
