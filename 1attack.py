@@ -723,9 +723,9 @@ def main():
                 desired_pos = goalpos
                 held_ball_time = time.time() - no_ball_time
                 if held_ball_time > 0.2: #after the bot still has ball for certain time, increase speed to shoot faster
-                    shoot_spd = 300000000
+                    shoot_spd = 20000000
                 else:
-                    shoot_spd = 5000000
+                    shoot_spd = 2000000
                 motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
