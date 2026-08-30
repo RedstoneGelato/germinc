@@ -544,6 +544,7 @@ def main():
     botstate_hyst = Hysteresis(hold_time=0.15)
     substate1_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
     substate2_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
+    CONTROL_PERIOD = 0.01
 
     while script_activate_pin.is_active:
         with pcb.lock:
@@ -567,6 +568,7 @@ def main():
     robot_active = True
 
     try:
+        next_loop = time.monotonic()
         while True:
             irx = 0
             iry = 0
@@ -819,7 +821,7 @@ def main():
             rot = spin_weight * heading_error
 
             maxspd = round(basespd * (1 + (abs(rot) / 160)))
-            if on_line:
+            if on_line and colour_see > 2:
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]
@@ -831,6 +833,15 @@ def main():
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+
+            # Maintain a fixed 100 Hz loop
+            next_loop += CONTROL_PERIOD
+            sleep_time = next_loop - time.monotonic()
+
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            else:
+                next_loop = time.monotonic()
     
     except KeyboardInterrupt:
         print("User stopped.")
