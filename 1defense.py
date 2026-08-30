@@ -659,6 +659,14 @@ def main():
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos =[dx,dy]
+                if camera.blue == [0,0,0,0]:
+                    own_goalpos = [0,-200]
+                else:
+                    own_goalx = camera.blue[0] + camera.blue[2]/2
+                    own_goaly = camera.blue[1] + camera.blue[3]/2
+                    own_dx = own_goalx - 60
+                    own_dy = 80 - own_goaly
+                    own_goalpos = [own_dx,own_dy]
             else: #shoot in blue
                 if camera.blue == [0,0,0,0]:
                     goalpos = [0,200]
@@ -668,6 +676,14 @@ def main():
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos = [dx,dy]
+                if camera.yellow == [0,0,0,0]:
+                    own_goalpos = [0,-200]
+                else:
+                    own_goalx = camera.yellow[0] + camera.yellow[2]/2
+                    own_goaly = camera.yellow[1] + camera.yellow[3]/2
+                    own_dx = own_goalx - 60
+                    own_dy = 80 - own_goaly
+                    own_goalpos = [own_dx,own_dy]
 
 #----------------------------------------------------------------------
 #            read ir then convert into ball position, compass
@@ -730,7 +746,7 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [goalpos[0], goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
@@ -754,13 +770,12 @@ def main():
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     if abs(ballpos[0]) < 40:
-                        desired_pos = [-200, 0] if goalpos[0] < 0 else [200, 0]
+                        desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
-                    desired_heading = math.atan2(ballpos[1], ballpos[0]) - math.pi/2
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_heading = 0
                     desired_pos = [ballpos[0], ballpos[1] - 20]
 
             elif botstate == 2: # go for ball then pass
@@ -789,13 +804,12 @@ def main():
                         desired_pos = [0, -200]
                 elif substate2 == 4:
                     motors.motorspeed5 = 0
-                    desired_heading = math.atan2(ballpos[1], ballpos[0]) - math.pi/2
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_heading = 0
                     desired_pos = [ballpos[0], ballpos[1] - 20]
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [goalpos[0], goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
                 motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------

@@ -659,6 +659,14 @@ def main():
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos =[dx,dy]
+                if camera.blue == [0,0,0,0]:
+                    own_goalpos = [0,-200]
+                else:
+                    own_goalx = camera.blue[0] + camera.blue[2]/2
+                    own_goaly = camera.blue[1] + camera.blue[3]/2
+                    own_dx = own_goalx - 60
+                    own_dy = 80 - own_goaly
+                    own_goalpos = [own_dx,own_dy]
             else: #shoot in blue
                 if camera.blue == [0,0,0,0]:
                     goalpos = [0,200]
@@ -668,6 +676,14 @@ def main():
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos = [dx,dy]
+                if camera.yellow == [0,0,0,0]:
+                    own_goalpos = [0,-200]
+                else:
+                    own_goalx = camera.yellow[0] + camera.yellow[2]/2
+                    own_goaly = camera.yellow[1] + camera.yellow[3]/2
+                    own_dx = own_goalx - 60
+                    own_dy = 80 - own_goaly
+                    own_goalpos = [own_dx,own_dy]
 
 #----------------------------------------------------------------------
 #            read ir then convert into ball position, compass
@@ -729,7 +745,7 @@ def main():
             if botstate == 0: # do not see ball
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
-                desired_pos = [goalpos[0], goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be near goals
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 30] # align middle and go backwards #TUNE +30 to be near goals
                 no_ball_time = time.time()
                 motors.motorspeed5 = 0
 
@@ -741,8 +757,6 @@ def main():
                 held_ball_time = time.time() - no_ball_time
                 if held_ball_time > 1: #after the bot still has ball for certain time, increase speed to shoot faster
                     shoot_spd = basespd * 3
-                else:
-                    shoot_spd = basespd // 3
                 motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
@@ -766,7 +780,7 @@ def main():
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     if abs(ballpos[0]) < 40:
-                        desired_pos = [-200, 0] if goalpos[0] < 0 else [200, 0]
+                        desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4:
@@ -795,8 +809,6 @@ def main():
 
             #DEBUG
             print(botstate)
-            print(goalpos)
-            print(math.atan2(goalpos[1], goalpos[0]))
             print("====================")
 
 #----------------------------------------------------------------------
