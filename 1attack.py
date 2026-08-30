@@ -794,7 +794,6 @@ def main():
 
             #DEBUG
             print(botstate)
-            print(held_ball_time)
             print(goalpos)
             print(math.atan2(goalpos[1], goalpos[0]))
             print("====================")
