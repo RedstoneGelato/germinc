@@ -776,12 +776,12 @@ def main():
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 20]
+                    desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 2: # go for ball then pass
                 if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < 30:
+                elif ballpos[1] < 40:
                     raw_substate2 = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball

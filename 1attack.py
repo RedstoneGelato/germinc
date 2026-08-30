@@ -762,7 +762,7 @@ def main():
             elif botstate == 2: # go for ball
                 if ballpos[1] < 0 and goalpos[1] < 200 and ir[1] < 51 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
-                elif ballpos[1] < 30:
+                elif ballpos[1] < 40:
                     raw_substate = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
@@ -787,7 +787,7 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 20]
+                    desired_pos = [ballpos[0], ballpos[1] - 30]
                 no_ball_time = time.time()
                 motors.motorspeed5 = 0
 
