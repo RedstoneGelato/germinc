@@ -751,7 +751,7 @@ def main():
                     raw_substate = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
-                substate = substate_hyst(raw_substate)
+                substate = substate_hyst.update(raw_substate)
 
                 if substate == 1:
                     comms.my_state.update({"command": 1}) #send goalie to get ball
