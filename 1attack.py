@@ -172,6 +172,7 @@ class PCBThread(threading.Thread):
         self.READ_RETRIES = 3
         self.RETRY_DELAY = 0.02
         self.bus = SMBus(self.I2C_BUS)
+        self.lock = threading.Lock()
 
     def _send_command(self, cmd):
         self.bus.write_byte(self.I2C_ADDR, cmd)
@@ -239,8 +240,11 @@ class PCBThread(threading.Thread):
     def run(self):
         while self.running:
             try:
-                self.ir = self._read_ir()
-                self.colours = self._read_colours()
+                new_ir = self._read_ir()
+                new_colours = self._read_colours()
+                with self.lock:
+                    self.ir = new_ir
+                    self.colours = new_colours
                 self.ready = True
             except IOError as e:
                 print(f"PCB I2C error: {e}")
@@ -542,16 +546,20 @@ def main():
     pcb.set_brightness(brightness_float)
     botstate_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
     substate_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
+    CONTROL_PERIOD = 0.01
 
     while script_activate_pin.is_active:
+        with pcb.lock:
+            ir_snapshot = pcb.ir
+            colours_snapshot = pcb.colours
         if camera.yellow[1] > 60:
             goal_colour = 1
         else:
             goal_colour = 0
 
-        if max(pcb.colours) > line_threshold: # calibrate pcb leds
+        if max(colours_snapshot) > line_threshold: # calibrate pcb leds
             brightness_float -= 200
-        elif max(pcb.colours) + 500 < line_threshold:
+        elif max(colours_snapshot) + 500 < line_threshold:
             brightness_float += 200
         pcb.set_brightness(max(min(brightness_float, 65535), 0))
 
@@ -562,6 +570,7 @@ def main():
     robot_active = True
 
     try:
+        next_loop = time.monotonic()
         while True:
             irx = 0
             iry = 0
@@ -571,6 +580,10 @@ def main():
             colour_see = 0
             linex = 0
             liney = 0
+
+            with pcb.lock:
+                ir_snapshot = pcb.ir
+                colours_snapshot = pcb.colours
 
             user_input = read_input()
             # TESTING speed
@@ -601,16 +614,19 @@ def main():
                 motors.motorspeed4 = 0
                 motors.motorspeed5 = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
-                
+                    
+                with pcb.lock:
+                    ir_snapshot = pcb.ir
+                    colours_snapshot = pcb.colours
 
                 if camera.yellow[1] > 60:
                     goal_colour = 1
                 else:
                     goal_colour = 0
 
-                if max(pcb.colours) > line_threshold: # calibrate pcb leds
+                if max(colours_snapshot) > line_threshold: # calibrate pcb leds
                     brightness_float -= 200
-                elif max(pcb.colours) + 500 < line_threshold:
+                elif max(colours_snapshot) + 500 < line_threshold:
                     brightness_float += 200
                 pcb.set_brightness(max(min(brightness_float, 65535), 0))
 
@@ -656,7 +672,7 @@ def main():
 #----------------------------------------------------------------------
 #            read ir then convert into ball position, compass
 #----------------------------------------------------------------------
-            for i, sensor in enumerate(pcb.ir):
+            for i, sensor in enumerate(ir_snapshot):
                 if sensor["detected"]:
                     angle = i * math.pi / 6 + math.pi / 2
 
@@ -700,7 +716,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0
-            elif (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or pcb.ir[0].get("distance") == 4: # ball in ball capture zone
+            elif (ir[1] > 50 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -763,7 +779,7 @@ def main():
 #----------------------------------------------------------------------
 #            line detection
 #----------------------------------------------------------------------
-            for i, value in enumerate(pcb.colours):
+            for i, value in enumerate(colours_snapshot):
                 if value > line_threshold:
                     angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
                     excess = value - line_threshold
@@ -798,6 +814,15 @@ def main():
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
             motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+
+            # Maintain a fixed 100 Hz loop
+            next_loop += CONTROL_PERIOD
+            sleep_time = next_loop - time.monotonic()
+
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            else:
+                next_loop = time.monotonic()
     
     except KeyboardInterrupt:
         print("User stopped.")
