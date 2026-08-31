@@ -1,42 +1,33 @@
+import time
 import cv2
 import numpy as np
 import picamera2
-import time
 
-hsv = np.zeros((120,160,3), dtype=np.uint8)
-cap = picamera2.Picamera2()
-config = cap.create_preview_configuration(
-    main={"size": (320, 240), "format": "RGB888"},
-    lores={"size": (160, 120), "format": "RGB888"})
-cap.configure(config)
-cap.set_controls({
-    "AwbEnable": False,
-    "ColourGains": (2.1, 2.7)   # blue, red tweak when needed
-})
-cap.start()
+# ---- copied from main.py's FrameGrabber/DetectionThread - keep these in sync manually ----
+ROTATION = cv2.ROTATE_90_CLOCKWISE
 
-blue = [0,0,0,0]
-yellow = [0,0,0,0]
-white = [0,0,0,0]
-frame = None
+LOWER_BLUE = np.array([90, 200, 100])
+UPPER_BLUE = np.array([110, 255, 255])
+LOWER_YELLOW = np.array([0, 180, 180])
+UPPER_YELLOW = np.array([40, 255, 255])
 
-# HSV ranges
-lower_blue = np.array([90, 200, 100])
-upper_blue = np.array([110, 255, 255])
-lower_yellow = np.array([0, 180, 180])
-upper_yellow = np.array([40, 255, 255])
-lower_white = np.array([0, 0, 180])
-upper_white = np.array([180, 40, 255])
+KERNEL = np.ones((3, 3), np.uint8)
 
-kernel = np.ones((3,3), np.uint8)
+IGNORE_X1, IGNORE_X2 = 20, 85
+IGNORE_Y1, IGNORE_Y2 = 50, 110
+
+MIN_CONTOUR_AREA = 100
+# --------------------------------------------------------------------------------------------
+
 
 def merge_blobs(mask):
+    """Identical logic to DetectionThread._merge_blobs - keep in sync if that changes."""
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     x_min = y_min = float('inf')
     x_max = y_max = 0
 
     for c in contours:
-        if cv2.contourArea(c) < 100:
+        if cv2.contourArea(c) < MIN_CONTOUR_AREA:
             continue
         x, y, w, h = cv2.boundingRect(c)
         x_min = min(x_min, x)
@@ -45,49 +36,76 @@ def merge_blobs(mask):
         y_max = max(y_max, y + h)
 
     if x_min < x_max and y_min < y_max:
-        return [x_min, y_min, x_max - x_min, y_max - y_min] # coords of top left corner, width, height
+        return [x_min, y_min, x_max - x_min, y_max - y_min]
     else:
-        return [0,0,0,0]
+        return [0, 0, 0, 0]
 
-while True:
-    frame = cap.capture_array("lores")
+
+def main():
+    cap = picamera2.Picamera2()
+    config = cap.create_preview_configuration(lores={"size": (160, 120), "format": "RGB888"})
+    cap.configure(config)
+    cap.set_controls({"AwbEnable": False, "ColourGains": (2.1, 2.7)})
+    cap.start()
+    print("Ctrl+C to stop.\n")
+
+    display_available = True
+
     try:
-        hsv[:] = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    except:
-        continue
+        while True:
+            frame = cap.capture_array("lores")
+            frame = cv2.rotate(frame, ROTATION)
 
-    if hsv is None or frame is None:
-        time.sleep(0.005)
-        continue
-    
-    # reset
-    blue = [0,0,0,0]
-    yellow = [0,0,0,0]
-    white = [0,0,0,0]
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    masks = {
-        "blue":   cv2.morphologyEx(cv2.inRange(hsv, lower_blue, upper_blue), cv2.MORPH_OPEN, kernel),
-        "yellow": cv2.morphologyEx(cv2.inRange(hsv, lower_yellow, upper_yellow), cv2.MORPH_OPEN, kernel),
-        "white": cv2.morphologyEx(cv2.inRange(hsv, lower_white, upper_white), cv2.MORPH_OPEN, kernel)
-    }
+            blue_raw = cv2.inRange(hsv, LOWER_BLUE, UPPER_BLUE)
+            yellow_raw = cv2.inRange(hsv, LOWER_YELLOW, UPPER_YELLOW)
 
-    blue = merge_blobs(masks["blue"])
-    yellow = merge_blobs(masks["yellow"])
-    white = merge_blobs(masks["white"])
+            blue_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
+            yellow_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
 
-    if frame is not None:
-        for color, bbox in zip(["blue","yellow","white"], [blue,yellow,white]):
-            x, y, w, h = bbox
-            if w > 0 and h > 0:
-                if color=="blue":   cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
-                if color=="yellow": cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,255), 2)
-                if color=="white": cv2.rectangle(frame, (x,y), (x+w,y+h), (255,255,255), 2)
+            blue_mask = cv2.morphologyEx(blue_raw, cv2.MORPH_OPEN, KERNEL)
+            yellow_mask = cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, KERNEL)
 
-    cv2.imshow("Debug", frame)
-    cv2.imshow("white", masks["white"])
+            blue_box = merge_blobs(blue_mask)
+            yellow_box = merge_blobs(yellow_mask)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+            annotated = frame.copy()
 
-cap.stop()
-cv2.destroyAllWindows()
+            # ignore region drawn first, so real detections sit visually on top if they overlap
+            cv2.rectangle(annotated, (IGNORE_X1, IGNORE_Y1), (IGNORE_X2, IGNORE_Y2), (0, 0, 255), 1)
+            cv2.putText(annotated, "ignore", (IGNORE_X1, max(IGNORE_Y1 - 4, 10)),
+                        cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 0, 255), 1)
+
+            if blue_box != [0, 0, 0, 0]:
+                x, y, w, h = blue_box
+                cv2.rectangle(annotated, (x, y), (x + w, y + h), (255, 0, 0), 1)
+                cv2.putText(annotated, "blue", (x, max(y - 4, 10)),
+                            cv2.FONT_HERSHEY_PLAIN, 0.8, (255, 0, 0), 1)
+
+            if yellow_box != [0, 0, 0, 0]:
+                x, y, w, h = yellow_box
+                cv2.rectangle(annotated, (x, y), (x + w, y + h), (255, 0, 255), 1)  # magenta - yellow itself barely shows against a bright frame
+                cv2.putText(annotated, "yellow", (x, max(y - 4, 10)),
+                            cv2.FONT_HERSHEY_PLAIN, 0.8, (255, 0, 255), 1)
+
+            print(f"blue={blue_box}  yellow={yellow_box}")
+
+            if display_available:
+                try:
+                    cv2.imshow("camera debug", annotated)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+                except cv2.error:
+                    print("No display available - continuing with file output only.")
+                    display_available = False
+
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        cap.stop()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
