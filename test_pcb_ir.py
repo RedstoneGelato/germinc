@@ -79,7 +79,7 @@ def main():
 
     try:
         while True:
-            ir_raw  = read_ir(bus)
+            ir_raw  = 0 
             colours = read_colours(bus)
 
             print(ir_raw)
