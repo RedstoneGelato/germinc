@@ -811,7 +811,7 @@ def main():
                     liney += math.sin(angle) * excess
                     colour_see += 1
 
-            raw_on_line = (linex != 0 or liney != 0) and colour_see > 2
+            raw_on_line = (linex != 0 or liney != 0) and colour_see > 5
             on_line = line_hyst.update(raw_on_line)
             if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
@@ -830,7 +830,7 @@ def main():
 
             current_basespd = shoot_spd if botstate == 1 else basespd
             maxspd = round(current_basespd * (1 + (abs(rot) / 160)))
-            if on_line and colour_see > 2:
+            if on_line and colour_see > 5:
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]
