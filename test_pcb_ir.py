@@ -80,7 +80,9 @@ def main():
     try:
         while True:
             colours = read_colours(bus)
+            time.sleep(1)
             ir_raw  = read_ir(bus)
+            time.sleep(1)
 
             print(ir_raw)
             print(colours)
