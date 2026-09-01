@@ -835,6 +835,7 @@ def main():
             #DEBUG
             print(colours_snapshot)
             print(colour_see)
+            print(led_brightness)
             print(botstate)
             print("===================")
 
