@@ -29,9 +29,10 @@ class FrameGrabber(threading.Thread):
         self.running = True
 
         self.frame = None
-        self.hsv = np.zeros((320,240,3), dtype=np.uint8)
+        self.hsv = np.zeros((160,120,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
-        config = self.cap.create_preview_configuration(main={"size": (320,240), "format": "RGB888"})
+        config = self.cap.create_preview_configuration(
+	        lores={"size": (160, 120), "format": "RGB888"})
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
@@ -41,7 +42,7 @@ class FrameGrabber(threading.Thread):
 
     def run(self):
         while self.running:
-            frame = self.cap.capture_array("main")
+            frame = self.cap.capture_array("lores")
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             self.frame = frame
             try:
@@ -59,25 +60,22 @@ class DetectionThread(threading.Thread):
 
         self.blue = [0,0,0,0]
         self.yellow = [0,0,0,0]
-        self.orange = [0,0,0,0]
         self.frame = None
         self.ready = False
 
         # HSV ranges
         self.lower_blue = np.array([90, 200, 100])
         self.upper_blue = np.array([110, 255, 255])
-        self.lower_orange = np.array([0, 180, 180])
-        self.upper_orange = np.array([20, 255, 255])
-        self.lower_yellow = np.array([20, 180, 100])
-        self.upper_yellow = np.array([40, 255, 160])
+        self.lower_yellow = np.array([0, 180, 180])
+        self.upper_yellow = np.array([40, 255, 255])
 
         self.kernel = np.ones((3,3), np.uint8)
 
         # pixel region to ignore (center, ignore bot)
-        self.ignore_x1 = 40
-        self.ignore_x2 = 170
-        self.ignore_y1 = 100
-        self.ignore_y2 = 220
+        self.ignore_x1 = 20
+        self.ignore_x2 = 85
+        self.ignore_y1 = 50
+        self.ignore_y2 = 110
 
     def run(self):
         while self.running:
@@ -91,25 +89,20 @@ class DetectionThread(threading.Thread):
             # reset
             self.blue = [0,0,0,0]
             self.yellow = [0,0,0,0]
-            self.orange = [0,0,0,0]
 
             blue_raw = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
             yellow_raw = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
-            orange_raw = cv2.inRange(hsv, self.lower_orange, self.upper_orange)
 
             blue_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
             yellow_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
-            orange_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
 
             masks = {
                 "blue":   cv2.morphologyEx(blue_raw, cv2.MORPH_OPEN, self.kernel),
                 "yellow": cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, self.kernel),
-                "orange": cv2.morphologyEx(orange_raw, cv2.MORPH_OPEN, self.kernel)
             }
 
             self.blue = self._merge_blobs(masks["blue"])
             self.yellow = self._merge_blobs(masks["yellow"])
-            self.orange = self._merge_blobs(masks["orange"])
             time.sleep(0.005)
 
     def _merge_blobs(self, mask):
@@ -118,7 +111,7 @@ class DetectionThread(threading.Thread):
         x_max = y_max = 0
 
         for c in contours:
-            if cv2.contourArea(c) < 150:
+            if cv2.contourArea(c) < 100:
                 continue
             x, y, w, h = cv2.boundingRect(c)
             x_min = min(x_min, x)
@@ -206,6 +199,17 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
+    def _read_ir(self):
+        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
+
+        return [
+            {
+                'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
+                'distance': data[i * 2 + 1] if data[i * 2 + 1] >= 2 else 0
+            }
+            for i in range(12)
+        ]
+
     def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
 
@@ -235,8 +239,10 @@ class PCBThread(threading.Thread):
     def run(self):
         while self.running:
             try:
+                new_ir = self._read_ir()
                 new_colours = self._read_colours()
                 with self.lock:
+                    self.ir = new_ir
                     self.colours = new_colours
                 self.ready = True
             except IOError as e:
@@ -393,6 +399,12 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
+def circular_mean(angles):
+    return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
+
+def angdiff(a, b):
+    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
+
 class Hysteresis:
     """
     Holds a value steady across brief flickers around a sensor threshold.
@@ -515,12 +527,18 @@ def main():
     line_threshold = 1500 # tune for colour sensor readings
     line_escape_speed = basespd * 3
     desired_heading = 0
+    ir = [math.pi/2,50] # direction, distance
     ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
     heading_offset = imu.heading
+    directionlist = []
+    irdirection = 0
     colour_see = 0
+    unconcordantdirection = 0
     ball_distance = 0
+    ball_distance_count = 0
+    ball_distance_total = 0
     led_brightness = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(led_brightness)
     botstate_hyst = Hysteresis(hold_time=0.15)
@@ -531,13 +549,14 @@ def main():
 
     while script_activate_pin.is_active:
         with pcb.lock:
+            ir_snapshot = pcb.ir
             colours_snapshot = pcb.colours
         if camera.yellow[1] > 60:
             goal_colour = 1
         else:
             goal_colour = 0
 
-        if max(colours_snapshot) - 1000 > line_threshold: # calibrate pcb leds
+        if max(colours_snapshot) - 500 > line_threshold: # calibrate pcb leds
             led_brightness -= 200
         elif max(colours_snapshot) < line_threshold:
             led_brightness += 200
@@ -553,15 +572,18 @@ def main():
     try:
         next_loop = time.monotonic()
         while True:
+            irx = 0
+            iry = 0
+            ball_distance_total = 0
+            ball_distance_count = 0
+            ball_distance = 0
             colour_see = 0
             linex = 0
             liney = 0
 
             with pcb.lock:
+                ir_snapshot = pcb.ir
                 colours_snapshot = pcb.colours
-            yellow = camera.yellow[:]
-            orange = camera.orange[:]
-            blue = camera.blue[:]
 
             user_input = read_input()
             # TESTING speed
@@ -594,16 +616,17 @@ def main():
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock:
+                    ir_snapshot = pcb.ir
                     colours_snapshot = pcb.colours
 
-                if yellow[1] > 60:
+                if camera.yellow[1] > 60:
                     goal_colour = 1
                 else:
                     goal_colour = 0
 
-                if max(colours_snapshot) < line_threshold: # calibrate pcb leds
+                if max(colours_snapshot) - 500 > line_threshold: # calibrate pcb leds
                     led_brightness -= 200
-                elif max(colours_snapshot) + 500 > line_threshold:
+                elif max(colours_snapshot) < line_threshold:
                     led_brightness += 200
                 led_brightness = max(min(led_brightness,65535),0)
                 pcb.set_brightness(led_brightness)
@@ -631,53 +654,78 @@ def main():
 #            convert camera readings into goal position
 #----------------------------------------------------------------------
             if goal_colour == 0: #shoot in yellow
-                if yellow == [0,0,0,0]:
+                if camera.yellow == [0,0,0,0]:
                     goalpos= [0,200]
                 else:
-                    goalx = yellow[0] + yellow[2]/2
-                    goaly = yellow[1] + yellow[3]/2
+                    goalx = camera.yellow[0] + camera.yellow[2]/2
+                    goaly = camera.yellow[1] + camera.yellow[3]/2
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos =[dx,dy]
-                if blue == [0,0,0,0]:
+                if camera.blue == [0,0,0,0]:
                     own_goalpos = [0,-200]
                 else:
-                    own_goalx = blue[0] + blue[2]/2
-                    own_goaly = blue[1] + blue[3]/2
+                    own_goalx = camera.blue[0] + camera.blue[2]/2
+                    own_goaly = camera.blue[1] + camera.blue[3]/2
                     own_dx = own_goalx - 60
                     own_dy = 80 - own_goaly
                     own_goalpos = [own_dx,own_dy]
             else: #shoot in blue
-                if blue == [0,0,0,0]:
+                if camera.blue == [0,0,0,0]:
                     goalpos = [0,200]
                 else:
-                    goalx = blue[0] + blue[2]/2
-                    goaly = blue[1] + blue[3]/2
+                    goalx = camera.blue[0] + camera.blue[2]/2
+                    goaly = camera.blue[1] + camera.blue[3]/2
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos = [dx,dy]
-                if yellow == [0,0,0,0]:
+                if camera.yellow == [0,0,0,0]:
                     own_goalpos = [0,-200]
                 else:
-                    own_goalx = yellow[0] + yellow[2]/2
-                    own_goaly = yellow[1] + yellow[3]/2
+                    own_goalx = camera.yellow[0] + camera.yellow[2]/2
+                    own_goaly = camera.yellow[1] + camera.yellow[3]/2
                     own_dx = own_goalx - 60
                     own_dy = 80 - own_goaly
                     own_goalpos = [own_dx,own_dy]
 
 #----------------------------------------------------------------------
-#            read camera then convert into ball position, compass
+#            read ir then convert into ball position, compass
 #----------------------------------------------------------------------
-            if orange != [0,0,0,0]:
-                ballpos = [orange[0] + orange[2]/2 - 60, 80 - orange[1] - orange[3]] #bottom middle of ball
-                ball_direction = math.atan2(ballpos[1], ballpos[0])
-                ball_distance = math.hypot(ballpos[0],ballpos[1])
-                ball_distance = (ball_distance ** 2) * 0.5 #some random function to correct camera distance to irl distance
-                ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
+            for i, sensor in enumerate(ir_snapshot):
+                if sensor["detected"]:
+                    angle = i * math.pi / 6 + math.pi / 2
+
+                    irx += math.cos(angle)
+                    iry += math.sin(angle)
+
+                    ball_distance_total += sensor["distance"]
+                    ball_distance_count += 1
+
+            if irx != 0 or iry != 0:
+                irdirection = math.atan2(iry, irx) # direction
+    
+                if len(directionlist) > 10: # smoothing
+                    if unconcordantdirection > 10: # 40ms
+                        directionlist.clear()
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                    elif abs(angdiff(circular_mean(directionlist), irdirection)) > 1:
+                        unconcordantdirection += 1
+                    else:
+                        directionlist.pop(0)
+                        directionlist.append(irdirection)
+                        unconcordantdirection = 0
+                else:
+                    directionlist.append(irdirection)
+                    unconcordantdirection = 0
+
+                ball_distance = ball_distance_total / ball_distance_count
+
+                ir = [circular_mean(directionlist), ball_distance * 25]
+                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
             else:
-                ballpos = [float("inf"), float("inf")]
-                ball_distance = float("inf")
-                ball_direction = math.pi/2
+                ballpos = [0,0]
+                ir = [0,0]
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -685,7 +733,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ball_distance == float("inf"): #doesnt see ball
+            if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state == None: # attack bot is off
                 raw_botstate = 1
@@ -705,10 +753,10 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
-                if ball_distance <= 30 and ballpos[1] < 10 and abs(ballpos[0]) < 30:
+                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
                     raw_substate1 = 1  # ball in bcz
                 elif ballpos[1] < 40:
-                    raw_substate1 = 2 if ball_distance > 51 else 3  # far vs near backup
+                    raw_substate1 = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
@@ -734,10 +782,10 @@ def main():
                     desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 2: # go for ball then pass
-                if ball_distance <= 30 and ballpos[1] < 10 and abs(ballpos[0]) < 30:
+                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
                     raw_substate2 = 1  # ball in bcz
                 elif ballpos[1] < 40:
-                    raw_substate2 = 2 if ball_distance > 51 else 3  # far vs near backup
+                    raw_substate2 = 2 if ir[1] < 51 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
                 substate2 = substate2_hyst.update(raw_substate2)
@@ -771,7 +819,7 @@ def main():
 #            line detection
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot):
-                if value < line_threshold:
+                if value > line_threshold:
                     angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
                     excess = value - line_threshold
                     linex += math.cos(angle) * excess
@@ -784,19 +832,12 @@ def main():
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
-            #DEBUG
-            print(colours_snapshot)
-            print(led_brightness)
-            print(colour_see)
-            print(f"ball={orange}  own goal={own_goalpos}  shooting goal={goalpos}")
-            print("======================")
-
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight = base_spin * min(abs(heading_error),2) if heading_error != 0 else base_spin
+            spin_weight = base_spin * abs(heading_error) if heading_error != 0 else base_spin
             if abs(heading_error) < 0.05:
                 rot = 0
             else:
