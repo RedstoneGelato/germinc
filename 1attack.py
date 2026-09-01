@@ -579,6 +579,9 @@ def main():
 
             with pcb.lock:
                 colours_snapshot = pcb.colours
+            yellow = camera.yellow[:]
+            orange = camera.orange[:]
+            blue = camera.blue[:]
 
             user_input = read_input()
             # TESTING speed
@@ -613,7 +616,7 @@ def main():
                 with pcb.lock:
                     colours_snapshot = pcb.colours
 
-                if camera.yellow[1] > 60:
+                if yellow[1] > 60:
                     goal_colour = 1
                 else:
                     goal_colour = 0
@@ -645,36 +648,36 @@ def main():
 #            convert camera readings into goal position
 #----------------------------------------------------------------------
             if goal_colour == 0: #shoot in yellow
-                if camera.yellow == [0,0,0,0]:
+                if yellow == [0,0,0,0]:
                     goalpos= [0,200]
                 else:
-                    goalx = camera.yellow[0] + camera.yellow[2]/2
-                    goaly = camera.yellow[1] + camera.yellow[3]/2
+                    goalx = yellow[0] + yellow[2]/2
+                    goaly = yellow[1] + yellow[3]/2
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos =[dx,dy]
-                if camera.blue == [0,0,0,0]:
+                if blue == [0,0,0,0]:
                     own_goalpos = [0,-200]
                 else:
-                    own_goalx = camera.blue[0] + camera.blue[2]/2
-                    own_goaly = camera.blue[1] + camera.blue[3]/2
+                    own_goalx = blue[0] + blue[2]/2
+                    own_goaly = blue[1] + blue[3]/2
                     own_dx = own_goalx - 60
                     own_dy = 80 - own_goaly
                     own_goalpos = [own_dx,own_dy]
             else: #shoot in blue
-                if camera.blue == [0,0,0,0]:
+                if blue == [0,0,0,0]:
                     goalpos = [0,200]
                 else:
-                    goalx = camera.blue[0] + camera.blue[2]/2
-                    goaly = camera.blue[1] + camera.blue[3]/2
+                    goalx = blue[0] + blue[2]/2
+                    goaly = blue[1] + blue[3]/2
                     dx = goalx - 60
                     dy = 80 - goaly
                     goalpos = [dx,dy]
-                if camera.yellow == [0,0,0,0]:
+                if yellow == [0,0,0,0]:
                     own_goalpos = [0,-200]
                 else:
-                    own_goalx = camera.yellow[0] + camera.yellow[2]/2
-                    own_goaly = camera.yellow[1] + camera.yellow[3]/2
+                    own_goalx = yellow[0] + yellow[2]/2
+                    own_goaly = yellow[1] + yellow[3]/2
                     own_dx = own_goalx - 60
                     own_dy = 80 - own_goaly
                     own_goalpos = [own_dx,own_dy]
@@ -682,14 +685,16 @@ def main():
 #----------------------------------------------------------------------
 #            read camera then convert into ball position, compass
 #----------------------------------------------------------------------
-            if camera.orange != [0,0,0,0]:
-                ballpos = [camera.orange[0] + camera.orange[2]/2 - 60, 80 - camera.orange[1] - camera.orange[3]] #bottom middle of ball
+            if orange != [0,0,0,0]:
+                ballpos = [orange[0] + orange[2]/2 - 60, 80 - orange[1] - orange[3]] #bottom middle of ball
                 ball_direction = math.atan2(ballpos[1], ballpos[0])
                 ball_distance = math.hypot(ballpos[0],ballpos[1])
-                ball_distance = (ball_distance ^ 2) * 0.5 #some random function to correct camera distance to irl distance
+                ball_distance = (ball_distance ** 2) * 0.5 #some random function to correct camera distance to irl distance
                 ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
             else:
                 ballpos = [float("inf"), float("inf")]
+                ball_distance = float("inf")
+                ball_direction = math.pi/2
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -697,7 +702,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ballpos == [float("inf"), float("inf")]: #doesnt see ball
+            if ball_distance == float("inf"): #doesnt see ball
                 raw_botstate = 0
             elif (ballpos[1] < 10 and abs(ballpos[0]) < 30): # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
@@ -786,7 +791,7 @@ def main():
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight = base_spin * abs(heading_error) if heading_error != 0 else base_spin
+            spin_weight = base_spin * min(abs(heading_error),2) if heading_error != 0 else base_spin
             if abs(heading_error) < 0.05:
                 rot = 0
             else:
