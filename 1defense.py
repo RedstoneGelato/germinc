@@ -29,10 +29,8 @@ class FrameGrabber(threading.Thread):
         self.running = True
 
         self.frame = None
-        self.hsv = np.zeros((160,120,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
-        config = self.cap.create_preview_configuration(
-	        lores={"size": (160, 120), "format": "RGB888"})
+        config = self.cap.create_preview_configuration(main={"size": (320,240), "format": "RGB888"})
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
@@ -42,7 +40,7 @@ class FrameGrabber(threading.Thread):
 
     def run(self):
         while self.running:
-            frame = self.cap.capture_array("lores")
+            frame = self.cap.capture_array("main")
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             self.frame = frame
             try:
@@ -75,10 +73,10 @@ class DetectionThread(threading.Thread):
         self.kernel = np.ones((3,3), np.uint8)
 
         # pixel region to ignore (center, ignore bot)
-        self.ignore_x1 = 20
-        self.ignore_x2 = 85
-        self.ignore_y1 = 50
-        self.ignore_y2 = 110
+        self.ignore_x1 = 40
+        self.ignore_x2 = 170
+        self.ignore_y1 = 100
+        self.ignore_y2 = 220
 
     def run(self):
         while self.running:
@@ -119,7 +117,7 @@ class DetectionThread(threading.Thread):
         x_max = y_max = 0
 
         for c in contours:
-            if cv2.contourArea(c) < 70:
+            if cv2.contourArea(c) < 150:
                 continue
             x, y, w, h = cv2.boundingRect(c)
             x_min = min(x_min, x)
@@ -207,17 +205,6 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def _read_ir(self):
-        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
-
-        return [
-            {
-                'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
-                'distance': data[i * 2 + 1] if data[i * 2 + 1] >= 2 else 0
-            }
-            for i in range(12)
-        ]
-
     def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
 
@@ -247,10 +234,8 @@ class PCBThread(threading.Thread):
     def run(self):
         while self.running:
             try:
-                new_ir = self._read_ir()
                 new_colours = self._read_colours()
                 with self.lock:
-                    self.ir = new_ir
                     self.colours = new_colours
                 self.ready = True
             except IOError as e:
@@ -795,6 +780,11 @@ def main():
             if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+
+            #DEBUG
+            print(colours_snapshot)
+            print(f"ball={orange}  own goal={own_goalpos}  shooting goal={goalpos}")
+            print("======================")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
