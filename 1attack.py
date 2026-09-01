@@ -30,6 +30,7 @@ class FrameGrabber(threading.Thread):
         self.running = True
 
         self.frame = None
+        self.hsv = np.zeros((320,240,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
         config = self.cap.create_preview_configuration(main={"size": (320,240), "format": "RGB888"})
         self.cap.configure(config)
