@@ -30,10 +30,9 @@ class FrameGrabber(threading.Thread):
         self.running = True
 
         self.frame = None
-        self.hsv = np.zeros((160,120,3), dtype=np.uint8)
+        self.hsv = np.zeros((320,240,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
-        config = self.cap.create_preview_configuration(
-	        lores={"size": (160, 120), "format": "RGB888"})
+        config = self.cap.create_preview_configuration(main={"size": (320,240), "format": "RGB888"})
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
@@ -43,7 +42,7 @@ class FrameGrabber(threading.Thread):
 
     def run(self):
         while self.running:
-            frame = self.cap.capture_array("lores")
+            frame = self.cap.capture_array("main")
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             self.frame = frame
             try:
@@ -73,10 +72,10 @@ class DetectionThread(threading.Thread):
         self.kernel = np.ones((3,3), np.uint8)
 
         # pixel region to ignore (center, ignore bot)
-        self.ignore_x1 = 20
-        self.ignore_x2 = 85
-        self.ignore_y1 = 50
-        self.ignore_y2 = 110
+        self.ignore_x1 = 40
+        self.ignore_x2 = 170
+        self.ignore_y1 = 100
+        self.ignore_y2 = 220
 
     def run(self):
         while self.running:
