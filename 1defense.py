@@ -173,6 +173,13 @@ class PCBThread(threading.Thread):
         self.bus = SMBus(self.I2C_BUS)
         self.lock = threading.Lock()
 
+        self.ir = [
+            {'detected': 0, 'distance': 0}
+            for _ in range(self.IR_SENSOR_COUNT)
+                    ]
+
+        self.colours = [0] * self.COLOUR_SENSOR_COUNT
+
     def _send_command(self, cmd):
         self.bus.write_byte(self.I2C_ADDR, cmd)
 
@@ -240,6 +247,7 @@ class PCBThread(threading.Thread):
         while self.running:
             try:
                 new_ir = self._read_ir()
+                time.sleep(0.05)
                 new_colours = self._read_colours()
                 with self.lock:
                     self.ir = new_ir
@@ -249,7 +257,7 @@ class PCBThread(threading.Thread):
                 print(f"PCB I2C error: {e}")
                 self.ready = False
 
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         self.bus.close()
 
