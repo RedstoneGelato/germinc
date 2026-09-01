@@ -258,7 +258,7 @@ class PCBThread(threading.Thread):
                 print(f"PCB I2C error: {e}")
                 self.ready = False
 
-            time.sleep(0.004)
+            time.sleep(0.05)
 
         self.bus.close()
 
@@ -408,12 +408,6 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
     motor4 *= scale
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
-
-def circular_mean(angles):
-    return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
-
-def angdiff(a, b):
-    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through ±pi
 
 class Hysteresis:
     """
@@ -736,7 +730,7 @@ def main():
             elif botstate == 2: # go for ball
                 if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 51 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
-                elif ballpos[1] > 60:
+                elif ballpos[1] < 40:
                     raw_substate = 2 if ball_distance > 51 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball

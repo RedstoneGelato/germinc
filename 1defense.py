@@ -257,7 +257,7 @@ class PCBThread(threading.Thread):
                 print(f"PCB I2C error: {e}")
                 self.ready = False
 
-            time.sleep(0.04)
+            time.sleep(0.05)
 
         self.bus.close()
 
@@ -406,12 +406,6 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
     motor4 *= scale
 
     return int(motor1),int(motor2),int(motor3),int(motor4)
-
-def circular_mean(angles):
-    return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
-
-def angdiff(a, b):
-    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
 
 class Hysteresis:
     """

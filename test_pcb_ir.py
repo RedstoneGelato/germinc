@@ -85,6 +85,7 @@ def main():
             print(ir_raw)
             print(colours)
             print("------------------------------")
+            time.sleep(0.05)
 
     except KeyboardInterrupt:
         print("\nStopped.")

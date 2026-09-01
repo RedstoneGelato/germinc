@@ -18,7 +18,7 @@ KERNEL = np.ones((3, 3), np.uint8)
 IGNORE_X1, IGNORE_X2 = 20, 85
 IGNORE_Y1, IGNORE_Y2 = 50, 110
 
-MIN_CONTOUR_AREA = 100
+MIN_CONTOUR_AREA = 70
 # --------------------------------------------------------------------------------------------
 
 
@@ -122,7 +122,7 @@ def main():
                 ballpos = [orange_box[0] + orange_box[2]/2 - 60, 80 - orange_box[1] - orange_box[3]] #bottom middle of ball
                 ball_direction = math.atan2(ballpos[1], ballpos[0])
                 ball_distance = math.hypot(ballpos[0],ballpos[1])
-                ball_distance = (ball_distance ^ 2) * 0.5 #some random function to correct camera distance to irl distance
+                ball_distance = (ball_distance ** 2) * 0.5 #some random function to correct camera distance to irl distance
                 ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
             else:
                 ballpos = [float("inf"), float("inf")]
