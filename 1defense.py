@@ -512,7 +512,7 @@ def main():
     basespd = 200000 # ideal speed
     dribblerspd = -5000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
-    line_threshold = 3000 # tune for colour sensor readings
+    line_threshold = 1500 # tune for colour sensor readings
     line_escape_speed = basespd * 3
     desired_heading = 0
     ballpos = [0,100] #cartesian plane coord relative of bot
@@ -537,11 +537,12 @@ def main():
         else:
             goal_colour = 0
 
-        if max(colours_snapshot) > line_threshold: # calibrate pcb leds
+        if max(colours_snapshot) - 1000 > line_threshold: # calibrate pcb leds
             led_brightness -= 200
-        elif max(colours_snapshot) + 500 < line_threshold:
+        elif max(colours_snapshot) < line_threshold:
             led_brightness += 200
-        pcb.set_brightness(max(min(led_brightness, 65535), 0))
+        led_brightness = max(min(led_brightness,65535),0)
+        pcb.set_brightness(led_brightness)
 
         heading_offset = imu.heading
         time.sleep(0.01)
@@ -600,11 +601,12 @@ def main():
                 else:
                     goal_colour = 0
 
-                if max(colours_snapshot) > line_threshold: # calibrate pcb leds
+                if max(colours_snapshot) < line_threshold: # calibrate pcb leds
                     led_brightness -= 200
-                elif max(colours_snapshot) + 500 < line_threshold:
+                elif max(colours_snapshot) + 500 > line_threshold:
                     led_brightness += 200
-                pcb.set_brightness(max(min(led_brightness, 65535), 0))
+                led_brightness = max(min(led_brightness,65535),0)
+                pcb.set_brightness(led_brightness)
 
                 heading_offset = imu.heading
 
@@ -769,7 +771,7 @@ def main():
 #            line detection
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot):
-                if value > line_threshold:
+                if value < line_threshold:
                     angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
                     excess = value - line_threshold
                     linex += math.cos(angle) * excess
