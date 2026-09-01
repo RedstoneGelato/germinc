@@ -832,6 +832,12 @@ def main():
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
+            #DEBUG
+            print(colours_snapshot)
+            print(colour_see)
+            print(botstate)
+            print("===================")
+
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
