@@ -784,6 +784,8 @@ def main():
 
             #DEBUG
             print(colours_snapshot)
+            print(led_brightness)
+            print(colour_see)
             print(f"ball={orange}  own goal={own_goalpos}  shooting goal={goalpos}")
             print("======================")
 
