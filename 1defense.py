@@ -60,14 +60,17 @@ class DetectionThread(threading.Thread):
 
         self.blue = [0,0,0,0]
         self.yellow = [0,0,0,0]
+        self.orange = [0,0,0,0]
         self.frame = None
         self.ready = False
 
         # HSV ranges
         self.lower_blue = np.array([90, 200, 100])
         self.upper_blue = np.array([110, 255, 255])
-        self.lower_yellow = np.array([0, 180, 180])
-        self.upper_yellow = np.array([40, 255, 255])
+        self.lower_orange = np.array([0, 180, 180])
+        self.upper_orange = np.array([20, 255, 255])
+        self.lower_yellow = np.array([20, 180, 100])
+        self.upper_yellow = np.array([40, 255, 160])
 
         self.kernel = np.ones((3,3), np.uint8)
 
@@ -89,20 +92,25 @@ class DetectionThread(threading.Thread):
             # reset
             self.blue = [0,0,0,0]
             self.yellow = [0,0,0,0]
+            self.orange = [0,0,0,0]
 
             blue_raw = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
             yellow_raw = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
+            orange_raw = cv2.inRange(hsv, self.lower_orange, self.upper_orange)
 
             blue_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
             yellow_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
+            orange_raw[self.ignore_y1:self.ignore_y2, self.ignore_x1:self.ignore_x2] = 0
 
             masks = {
                 "blue":   cv2.morphologyEx(blue_raw, cv2.MORPH_OPEN, self.kernel),
                 "yellow": cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, self.kernel),
+                "orange": cv2.morphologyEx(orange_raw, cv2.MORPH_OPEN, self.kernel)
             }
 
             self.blue = self._merge_blobs(masks["blue"])
             self.yellow = self._merge_blobs(masks["yellow"])
+            self.orange = self._merge_blobs(masks["orange"])
             time.sleep(0.005)
 
     def _merge_blobs(self, mask):
@@ -111,7 +119,7 @@ class DetectionThread(threading.Thread):
         x_max = y_max = 0
 
         for c in contours:
-            if cv2.contourArea(c) < 100:
+            if cv2.contourArea(c) < 70:
                 continue
             x, y, w, h = cv2.boundingRect(c)
             x_min = min(x_min, x)
@@ -527,18 +535,12 @@ def main():
     line_threshold = 3000 # tune for colour sensor readings
     line_escape_speed = 50000000
     desired_heading = 0
-    ir = [math.pi/2,50] # direction, distance
     ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
     heading_offset = imu.heading
-    directionlist = []
-    irdirection = 0
     colour_see = 0
-    unconcordantdirection = 0
     ball_distance = 0
-    ball_distance_count = 0
-    ball_distance_total = 0
     led_brightness = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(led_brightness)
     botstate_hyst = Hysteresis(hold_time=0.15)
@@ -549,7 +551,6 @@ def main():
 
     while script_activate_pin.is_active:
         with pcb.lock:
-            ir_snapshot = pcb.ir
             colours_snapshot = pcb.colours
         if camera.yellow[1] > 60:
             goal_colour = 1
@@ -571,17 +572,11 @@ def main():
     try:
         next_loop = time.monotonic()
         while True:
-            irx = 0
-            iry = 0
-            ball_distance_total = 0
-            ball_distance_count = 0
-            ball_distance = 0
             colour_see = 0
             linex = 0
             liney = 0
 
             with pcb.lock:
-                ir_snapshot = pcb.ir
                 colours_snapshot = pcb.colours
 
             user_input = read_input()
@@ -615,7 +610,6 @@ def main():
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock:
-                    ir_snapshot = pcb.ir
                     colours_snapshot = pcb.colours
 
                 if camera.yellow[1] > 60:
@@ -687,43 +681,18 @@ def main():
                     own_goalpos = [own_dx,own_dy]
 
 #----------------------------------------------------------------------
-#            read ir then convert into ball position, compass
+#            read camera then convert into ball position, compass
 #----------------------------------------------------------------------
-            for i, sensor in enumerate(ir_snapshot):
-                if sensor["detected"]:
-                    angle = i * math.pi / 6 + math.pi / 2
-
-                    irx += math.cos(angle)
-                    iry += math.sin(angle)
-
-                    ball_distance_total += sensor["distance"]
-                    ball_distance_count += 1
-
-            if irx != 0 or iry != 0:
-                irdirection = math.atan2(iry, irx) # direction
-    
-                if len(directionlist) > 10: # smoothing
-                    if unconcordantdirection > 10: # 40ms
-                        directionlist.clear()
-                        directionlist.append(irdirection)
-                        unconcordantdirection = 0
-                    elif abs(angdiff(circular_mean(directionlist), irdirection)) > 1:
-                        unconcordantdirection += 1
-                    else:
-                        directionlist.pop(0)
-                        directionlist.append(irdirection)
-                        unconcordantdirection = 0
-                else:
-                    directionlist.append(irdirection)
-                    unconcordantdirection = 0
-
-                ball_distance = ball_distance_total / ball_distance_count
-
-                ir = [circular_mean(directionlist), ball_distance * 25]
-                ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
+            if camera.orange != [0,0,0,0]:
+                ballpos = [camera.orange[0] + camera.orange[2]/2 - 60, 80 - camera.orange[1] - camera.orange[3]] #bottom middle of ball
+                ball_direction = math.atan2(ballpos[1], ballpos[0])
+                ball_distance = math.hypot(ballpos[0],ballpos[1])
+                ball_distance = (ball_distance ^ 2) * 0.5 #some random function to correct camera distance to irl distance
+                ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
             else:
-                ballpos = [0,0]
-                ir = [0,0]
+                ballpos = [float("inf"), float("inf")]
+                ball_distance = float("inf")
+                ball_direction = math.pi/2
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -731,7 +700,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
+            if ballpos == [float("inf"), float("inf")]: #doesnt see ball
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state == None: # attack bot is off
                 raw_botstate = 1
@@ -751,10 +720,10 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
-                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
+                if ball_distance <= 30 and ballpos[1] < 10 and abs(ballpos[0]) < 30:
                     raw_substate1 = 1  # ball in bcz
                 elif ballpos[1] < 40:
-                    raw_substate1 = 2 if ir[1] < 51 else 3  # far vs near backup
+                    raw_substate1 = 2 if ball_distance > 51 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
@@ -780,10 +749,10 @@ def main():
                     desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 2: # go for ball then pass
-                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
+                if ball_distance <= 30 and ballpos[1] < 10 and abs(ballpos[0]) < 30:
                     raw_substate2 = 1  # ball in bcz
                 elif ballpos[1] < 40:
-                    raw_substate2 = 2 if ir[1] < 51 else 3  # far vs near backup
+                    raw_substate2 = 2 if ball_distance > 51 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
                 substate2 = substate2_hyst.update(raw_substate2)

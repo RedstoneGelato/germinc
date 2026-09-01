@@ -1,4 +1,4 @@
-import time
+import math
 import cv2
 import numpy as np
 import picamera2
@@ -8,8 +8,10 @@ ROTATION = cv2.ROTATE_90_CLOCKWISE
 
 LOWER_BLUE = np.array([90, 200, 100])
 UPPER_BLUE = np.array([110, 255, 255])
-LOWER_YELLOW = np.array([0, 180, 180])
-UPPER_YELLOW = np.array([40, 255, 255])
+LOWER_YELLOW = np.array([20, 180, 100])
+UPPER_YELLOW = np.array([40, 255, 160])
+LOWER_ORANGE = np.array([0, 180, 180])
+UPPER_ORANGE = np.array([20, 255, 255])
 
 KERNEL = np.ones((3, 3), np.uint8)
 
@@ -60,15 +62,19 @@ def main():
 
             blue_raw = cv2.inRange(hsv, LOWER_BLUE, UPPER_BLUE)
             yellow_raw = cv2.inRange(hsv, LOWER_YELLOW, UPPER_YELLOW)
+            orange_raw = cv2.inRange(hsv, LOWER_ORANGE, UPPER_ORANGE)
 
             blue_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
             yellow_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
+            orange_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
 
             blue_mask = cv2.morphologyEx(blue_raw, cv2.MORPH_OPEN, KERNEL)
             yellow_mask = cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, KERNEL)
+            orange_mask = cv2.morphologyEx(orange_raw, cv2.MORPH_OPEN, KERNEL)
 
             blue_box = merge_blobs(blue_mask)
             yellow_box = merge_blobs(yellow_mask)
+            orange_box = merge_blobs(orange_mask)
 
             annotated = frame.copy()
 
@@ -89,7 +95,39 @@ def main():
                 cv2.putText(annotated, "yellow", (x, max(y - 4, 10)),
                             cv2.FONT_HERSHEY_PLAIN, 0.8, (255, 0, 255), 1)
 
-            print(f"blue={blue_box}  yellow={yellow_box}")
+            if orange_box != [0, 0, 0, 0]:
+                x, y, w, h = orange_box
+                cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 165, 255), 1)
+                cv2.putText(annotated, "orange", (x, max(y - 4, 10)),
+                            cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 165, 255), 1)
+
+            if yellow_box == [0,0,0,0]:
+                goalpos= [0,200]
+            else:
+                goalx = yellow_box[0] + yellow_box[2]/2
+                goaly = yellow_box[1] + yellow_box[3]/2
+                dx = goalx - 60
+                dy = 80 - goaly
+                goalpos =[dx,dy]
+            if blue_box == [0,0,0,0]:
+                own_goalpos = [0,-200]
+            else:
+                own_goalx = blue_box[0] + blue_box[2]/2
+                own_goaly = blue_box[1] + blue_box[3]/2
+                own_dx = own_goalx - 60
+                own_dy = 80 - own_goaly
+                own_goalpos = [own_dx,own_dy]
+
+            if orange_box != [0,0,0,0]:
+                ballpos = [orange_box[0] + orange_box[2]/2 - 60, 80 - orange_box[1] - orange_box[3]] #bottom middle of ball
+                ball_direction = math.atan2(ballpos[1], ballpos[0])
+                ball_distance = math.hypot(ballpos[0],ballpos[1])
+                ball_distance = (ball_distance ^ 2) * 0.5 #some random function to correct camera distance to irl distance
+                ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
+            else:
+                ballpos = [float("inf"), float("inf")]
+
+            print(f"goalpos={goalpos}  own goal={own_goalpos}  ballpos={ballpos}")
 
             if display_available:
                 try:
