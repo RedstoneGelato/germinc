@@ -246,9 +246,9 @@ class PCBThread(threading.Thread):
     def run(self):
         while self.running:
             try:
-                new_ir = self._read_ir()
-                time.sleep(0.05)
                 new_colours = self._read_colours()
+                time.sleep(0.05)
+                new_ir = self._read_ir()
                 with self.lock:
                     self.ir = new_ir
                     self.colours = new_colours
@@ -842,6 +842,7 @@ def main():
 
             #DEBUG
             print(colours_snapshot)
+            print(ir_snapshot)
             print(colour_see)
             print(led_brightness)
             print(botstate)
