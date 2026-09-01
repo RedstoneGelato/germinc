@@ -513,7 +513,7 @@ def main():
     dribblerspd = -5000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 3000 # tune for colour sensor readings
-    line_escape_speed = 50000000
+    line_escape_speed = basespd * 3
     desired_heading = 0
     ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
