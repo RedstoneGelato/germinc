@@ -776,12 +776,14 @@ def main():
             if botstate == 0: # do not see ball
                 desired_heading = 0
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 60] # align middle and go backwards
+                if abs(desired_pos[0]) + abs(desired_pos[1]) < 20:
+                    desired_pos = [0,0]
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
                 if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate1 = 1  # ball in bcz
-                elif ballpos[1] < 10:
+                elif ballpos[1] < 20:
                     raw_substate1 = 2 if ballpos[1] > -20 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
@@ -798,7 +800,7 @@ def main():
                 elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 40:
+                    if abs(ballpos[0]) < 30:
                         desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
@@ -810,8 +812,8 @@ def main():
             elif botstate == 2: # go for ball then pass
                 if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < 15:
-                    raw_substate2 = 2 if ballpos[1] > -30 else 3  # far vs near backup
+                elif ballpos[1] < 20:
+                    raw_substate2 = 2 if ballpos[1] > -20 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
                 substate2 = substate2_hyst.update(raw_substate2)
@@ -827,7 +829,7 @@ def main():
                 elif substate2 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 40:
+                    if abs(ballpos[0]) < 30:
                         desired_pos = [-200, 0] if goalpos[0] < 0  or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
@@ -840,6 +842,7 @@ def main():
                 desired_heading = 0
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 60] # align middle and go backwards
                 motors.motorspeed5 = 0
+
 #----------------------------------------------------------------------
 #            line detection
 #----------------------------------------------------------------------
