@@ -548,13 +548,10 @@ def main():
     heading_offset = imu.heading
     ballx_list = []
     bally_list = []
-    directionlist = []
-    irdirection = 0
     colour_see = 0
     lostballcount = 0
     unconcordant_ballx = 0
     unconcordant_bally = 0
-    unconcordant_ir_direction = 0
     led_brightness = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(led_brightness)
     botstate_hyst = Hysteresis(hold_time=0.15)
@@ -589,8 +586,6 @@ def main():
     try:
         next_loop = time.monotonic()
         while True:
-            irx = 0
-            iry = 0
             colour_see = 0
             linex = 0
             liney = 0
@@ -745,8 +740,8 @@ def main():
                 ball_distance = 100 - max(min(ball_distance/2, 99), 0)
                 ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
             else:
-                ballpos = [float("inf"), float("inf")]
-                ball_distance = float("inf")
+                ballpos = [0,0]
+                ball_distance = 100
                 ball_direction = math.pi/2
 
             compass = imu.heading - heading_offset
@@ -766,7 +761,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ballpos == [float("inf"),float("inf")]: #doesnt see ball
+            if ballpos == [0,0]: #doesnt see ball
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state is None: # attack bot is off
                 raw_botstate = 1
