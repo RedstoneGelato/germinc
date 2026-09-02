@@ -775,7 +775,7 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 40] # align middle and go backwards
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 60] # align middle and go backwards
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
@@ -838,9 +838,8 @@ def main():
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 40] # align middle and go backwards
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 60] # align middle and go backwards
                 motors.motorspeed5 = 0
-
 #----------------------------------------------------------------------
 #            line detection
 #----------------------------------------------------------------------
