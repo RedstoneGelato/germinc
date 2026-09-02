@@ -861,7 +861,7 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}  botstate={botstate}  substate={substate1}  on line={on_line}")
+            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}  botstate={botstate}  on line={on_line}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
