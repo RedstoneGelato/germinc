@@ -880,7 +880,7 @@ def main():
 #            line detection
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot):
-                if value < line_threshold:
+                if value < line_threshold and value != 0:
                     angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
                     excess = value - line_threshold
                     linex += math.cos(angle) * excess
