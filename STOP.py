@@ -9,8 +9,7 @@ MOTOR_CONFIGS = [
     {"addr": 26, "offset": 1161314304, "centre": 1244},
     {"addr": 32, "offset": 1304942336, "centre": 1239},
     {"addr": 28, "offset": 1772804352, "centre": 1251},
-    {"addr": 27, "offset": 1352689664, "centre": 1251},
-    {"addr": 25, "offset": 1326110464, "centre": 1221},  # dribbler
+    {"addr": 27, "offset": 1352689664, "centre": 1251}
 ]
 
 def main():

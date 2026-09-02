@@ -78,8 +78,8 @@ class DetectionThread(threading.Thread):
         # pixel region to ignore (center, ignore bot)
         self.ignore_x1 = 60
         self.ignore_x2 = 160
-        self.ignore_y1 = 150
-        self.ignore_y2 = 210
+        self.ignore_y1 = 170
+        self.ignore_y2 = 230
 
     def run(self):
         while self.running:
@@ -111,7 +111,7 @@ class DetectionThread(threading.Thread):
 
             self.blue = self._merge_blobs(masks["blue"], 200)
             self.yellow = self._merge_blobs(masks["yellow"], 200)
-            self.orange = self._merge_blobs(masks["orange"], 30)
+            self.orange = self._merge_blobs(masks["orange"], 10)
             time.sleep(0.005)
 
     def _merge_blobs(self, mask, min_area):
@@ -215,17 +215,6 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def _read_ir(self):
-        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
-
-        return [
-            {
-                'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
-                'distance': data[i * 2 + 1] if data[i * 2 + 1] >= 2 else 0
-            }
-            for i in range(12)
-        ]
-
     def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
 
@@ -278,7 +267,6 @@ class MotorThread(threading.Thread):
         self.motorspeed2 = 0
         self.motorspeed3 = 0
         self.motorspeed4 = 0
-        self.motorspeed5 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
 
@@ -330,25 +318,12 @@ class MotorThread(threading.Thread):
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
-        self.motor5 = PowerfulBLDCDriver(self.i2c, 25) #dribbler motor
-        self.motor5.set_current_limit_foc(262144)
-        self.motor5.set_id_pid_constants(1500, 200)
-        self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor5.set_position_pid_constants(275, 0, 0)
-        self.motor5.set_position_region_boundary(250000)
-        self.motor5.set_ELECANGLEOFFSET(1326110464)
-        self.motor5.set_SINCOSCENTRE(1221)
-        self.motor5.set_speed_limit(self.speedlimit)
-        self.motor5.configure_operating_mode_and_sensor(3, 1)
-        self.motor5.configure_command_mode(12)
-
     def run(self):
         while self.running:
             self.motor1.set_speed(int(-self.motorspeed1))
             self.motor2.set_speed(int(-self.motorspeed2))
             self.motor3.set_speed(int(-self.motorspeed3))
             self.motor4.set_speed(int(-self.motorspeed4))
-            self.motor5.set_speed(int(self.motorspeed5))
             time.sleep(0.005)
 
 class TeammateLinkThread(threading.Thread): #comms between bots
@@ -477,12 +452,10 @@ def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     motors.motorspeed2 = 0
     motors.motorspeed3 = 0
     motors.motorspeed4 = 0
-    motors.motorspeed5 = 0
     motors.motor1.clear_faults()
     motors.motor2.clear_faults()
     motors.motor3.clear_faults()
     motors.motor4.clear_faults()
-    motors.motor5.clear_faults()
 
     # allow motor thread to send stop command
     time.sleep(0.05)
@@ -536,12 +509,10 @@ def main():
     heading_error = 0
     rot = 0
     basespd = 200000 # ideal speed
-    dribblerspd = -5000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
-    line_escape_speed = basespd * 3
+    line_escape_speed = 50000000
     desired_heading = 0
-    ir = 0 # direction only
     ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
@@ -607,12 +578,6 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
-            #dribbler
-            if user_input == "'": dribblerspd = 0
-            if user_input == ",": dribblerspd = -5000000
-            if user_input == ".": dribblerspd = -20000000
-            if user_input == "p": dribblerspd = -100000000
-            if user_input == "y": dribblerspd = -500000000
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
@@ -622,7 +587,6 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                motors.motorspeed5 = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock:
@@ -699,7 +663,7 @@ def main():
                 bally = 160 - orange[1] - orange[3]
 
                 if len(ballx_list) > 10:
-                    if abs(ballx - np.mean(ballx_list)) < 40:
+                    if abs(ballx - np.mean(ballx_list)) < 60:
                         ballx_list.append(ballx)
                         ballx_list.pop(0)
                         unconcordant_ballx = 0
@@ -713,7 +677,7 @@ def main():
                     ballx_list.append(ballx)
 
                 if len(bally_list) > 10:
-                    if abs(bally - np.mean(bally_list)) < 40:
+                    if abs(bally - np.mean(bally_list)) < 60:
                         bally_list.append(bally)
                         bally_list.pop(0)
                         unconcordant_bally = 0
@@ -759,7 +723,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0]: #doesnt see ball
                 raw_botstate = 0
-            elif ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30: # ball in ball capture zone
+            elif ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -770,29 +734,23 @@ def main():
 #            state machine
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
-                comms.my_state.update({"command": 1})
+                comms.my_state.update({"command": 0})
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 50] # align middle and go backwards #TUNE +30 to be near goals
-                no_ball_time = time.time()
-                motors.motorspeed5 = 0
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 150] # align middle and go backwards
+                if abs(desired_pos[0]) < 20 and abs(desired_pos[1]) < 30:
+                    desired_pos = [0,0]
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
                 desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                 desired_pos = goalpos
-                held_ball_time = time.time() - no_ball_time
-                if held_ball_time > 1: #after the bot still has ball for certain time, increase speed to shoot faster
-                    shoot_spd = basespd * 3
-                else:
-                    shoot_spd = basespd // 2
-                motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
-                if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance < 51 and goalie_bot_state == 1: #tell goalie to get ball
+                if ballpos[1] < -50 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
                 elif ballpos[1] < 10:
-                    raw_substate = 2 if ballpos[1] > -30 else 3  # far vs near backup
+                    raw_substate = 2 if ballpos[1] < -30 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
                 substate = substate_hyst.update(raw_substate)
@@ -800,29 +758,26 @@ def main():
                 if substate == 1:
                     comms.my_state.update({"command": 1}) #send goalie to get ball
                     desired_heading = 0
-                    desired_pos = [goalpos[0], goalpos[1] - 180] #TUNE: -180 to be about midfield
+                    desired_pos = [goalpos[0], goalpos[1] - 180]
+                    if abs(desired_pos[0]) < 20 and abs(desired_pos[1]) < 30:
+                        desired_pos = [0,0]
                 elif substate == 2:
                     comms.my_state.update({"command": 0})
-                    motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = ballpos
                 elif substate == 3:
                     comms.my_state.update({"command": 0})
-                    motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 40:
+                    if abs(ballpos[0]) > 40:
                         desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
-                    motors.motorspeed5 = 0
                     goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0])
                     desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30] #TUNE: *30 to be reasonably behind ball in the extended direction of goal from ball
-                no_ball_time = time.time()
-                motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
 #            line detection
@@ -852,8 +807,7 @@ def main():
             else:
                 rot = spin_weight * heading_error
 
-            current_basespd = shoot_spd if botstate == 1 else basespd
-            maxspd = round(current_basespd * (1 + (abs(rot) / 160)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)))
             if on_line and colour_see > 5:
                 maxspd = line_escape_speed
 

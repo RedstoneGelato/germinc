@@ -111,7 +111,7 @@ class DetectionThread(threading.Thread):
 
             self.blue = self._merge_blobs(masks["blue"], 200)
             self.yellow = self._merge_blobs(masks["yellow"], 200)
-            self.orange = self._merge_blobs(masks["orange"], 20)
+            self.orange = self._merge_blobs(masks["orange"], 10)
             time.sleep(0.005)
 
     def _merge_blobs(self, mask, min_area):
@@ -215,17 +215,6 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def _read_ir(self):
-        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
-
-        return [
-            {
-                'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
-                'distance': data[i * 2 + 1] if data[i * 2 + 1] >= 2 else 0
-            }
-            for i in range(12)
-        ]
-
     def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
 
@@ -278,7 +267,6 @@ class MotorThread(threading.Thread):
         self.motorspeed2 = 0
         self.motorspeed3 = 0
         self.motorspeed4 = 0
-        self.motorspeed5 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
 
@@ -330,25 +318,12 @@ class MotorThread(threading.Thread):
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
-        self.motor5 = PowerfulBLDCDriver(self.i2c, 25) #dribbler motor
-        self.motor5.set_current_limit_foc(262144)
-        self.motor5.set_id_pid_constants(1500, 200)
-        self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor5.set_position_pid_constants(275, 0, 0)
-        self.motor5.set_position_region_boundary(250000)
-        self.motor5.set_ELECANGLEOFFSET(1326110464)
-        self.motor5.set_SINCOSCENTRE(1221)
-        self.motor5.set_speed_limit(self.speedlimit)
-        self.motor5.configure_operating_mode_and_sensor(3, 1)
-        self.motor5.configure_command_mode(12)
-
     def run(self):
         while self.running:
             self.motor1.set_speed(int(-self.motorspeed1))
             self.motor2.set_speed(int(-self.motorspeed2))
             self.motor3.set_speed(int(-self.motorspeed3))
             self.motor4.set_speed(int(-self.motorspeed4))
-            self.motor5.set_speed(int(self.motorspeed5))
             time.sleep(0.005)
 
 class TeammateLinkThread(threading.Thread): #comms between bots
@@ -477,12 +452,10 @@ def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     motors.motorspeed2 = 0
     motors.motorspeed3 = 0
     motors.motorspeed4 = 0
-    motors.motorspeed5 = 0
     motors.motor1.clear_faults()
     motors.motor2.clear_faults()
     motors.motor3.clear_faults()
     motors.motor4.clear_faults()
-    motors.motor5.clear_faults()
 
     # allow motor thread to send stop command
     time.sleep(0.05)
@@ -536,7 +509,6 @@ def main():
     heading_error = 0
     rot = 0
     basespd = 200000 # ideal speed
-    dribblerspd = -5000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
     line_escape_speed = 50000000
@@ -607,12 +579,6 @@ def main():
             if user_input == "8": basespd = 200000000
             if user_input == "9": basespd = 250000000
             if user_input == "0": basespd = 300000000
-            #dribbler
-            if user_input == "'": dribblerspd = 0
-            if user_input == ",": dribblerspd = -5000000
-            if user_input == ".": dribblerspd = -20000000
-            if user_input == "p": dribblerspd = -100000000
-            if user_input == "y": dribblerspd = -500000000
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
@@ -622,7 +588,6 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                motors.motorspeed5 = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock:
@@ -759,12 +724,16 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ballpos == [0,0]: #doesnt see ball
+            if comms_command == 1: #signal from other bot to go get ball
+                raw_botstate = 2
+            elif ball_distance < 50 and own_goalpos != [0,0,0,0]: #ball close and in the defense half court
+                raw_botstate = 2
+            elif comms_command == 0:
+                raw_botstate = 3
+            elif ballpos == [0,0]: #doesnt see ball
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state is None: # attack bot is off
                 raw_botstate = 1
-            elif comms_command == 1: #signal from other bot to go get ball
-                raw_botstate = 2
             else: #chill in goals
                 raw_botstate = 3
 
@@ -775,73 +744,69 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 60] # align middle and go backwards
-                if abs(desired_pos[0]) + abs(desired_pos[1]) < 20:
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
+                if abs(desired_pos[0]) < 30 and abs(desired_pos[1]) < 20:
                     desired_pos = [0,0]
-                motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
-                if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
+                if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate1 = 1  # ball in bcz
                 elif ballpos[1] < 20:
-                    raw_substate1 = 2 if ballpos[1] > -20 else 3  # far vs near backup
+                    raw_substate1 = 2 if ballpos[1] < -20 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
 
                 if substate1 == 1:
-                    motors.motorspeed5 = dribblerspd
                     desired_heading = 0
                     desired_pos = goalpos
                 elif substate1 == 2:
-                    motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = ballpos
                 elif substate1 == 3:
-                    motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 30:
+                    if abs(ballpos[0]) > 30:
                         desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate1 == 4:
-                    motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1]]
+                    desired_pos = [ballpos[0], ballpos[1] - 10]
 
             elif botstate == 2: # go for ball then pass
-                if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
-                    raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < 20:
-                    raw_substate2 = 2 if ballpos[1] > -20 else 3  # far vs near backup
-                else:
-                    raw_substate2 = 4  # pathfind to ball
-                substate2 = substate2_hyst.update(raw_substate2)
-
-                if substate2 == 1:
-                    motors.motorspeed5 = dribblerspd
-                    desired_heading = 0
+                if ballpos == [0,0]:
                     desired_pos = [0,200]
-                elif substate2 == 2:
-                    motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [0, -200]
-                elif substate2 == 3:
-                    motors.motorspeed5 = 0
-                    desired_heading = 0
-                    if abs(ballpos[0]) < 30:
-                        desired_pos = [-200, 0] if goalpos[0] < 0  or own_goalpos[0] < 0 else [200, 0]
+                else:
+                    if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
+                        raw_substate2 = 1  # ball in bcz
+                    elif ballpos[1] < 20:
+                        raw_substate2 = 2 if ballpos[1] < -20 else 3  # far vs near backup
                     else:
+                        raw_substate2 = 4  # pathfind to ball
+                    substate2 = substate2_hyst.update(raw_substate2)
+
+                    if substate2 == 1:
+                        desired_heading = 0
+                        desired_pos = [0,200]
+                    elif substate2 == 2:
+                        desired_heading = 0
                         desired_pos = [0, -200]
-                elif substate2 == 4:
-                    motors.motorspeed5 = 0
-                    desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1]]
+                    elif substate2 == 3:
+                        desired_heading = 0
+                        if abs(ballpos[0]) > 30:
+                            desired_pos = [-200, 0] if goalpos[0] < 0  or own_goalpos[0] < 0 else [200, 0]
+                        else:
+                            desired_pos = [0, -200]
+                    elif substate2 == 4:
+                        desired_heading = 0
+                        desired_pos = [ballpos[0], ballpos[1] - 10]
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 60] # align middle and go backwards
-                motors.motorspeed5 = 0
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
+                if abs(desired_pos[0]) < 30 and abs(desired_pos[1]) < 20:
+                    desired_pos = [0,0]
 
 #----------------------------------------------------------------------
 #            line detection
@@ -861,7 +826,7 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}  botstate={botstate}  goal colour={goal_colour}")
+            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}  botstate={botstate}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement

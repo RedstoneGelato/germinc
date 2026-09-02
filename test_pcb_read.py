@@ -2,7 +2,6 @@
 import time
 import sys
 from smbus2 import SMBus, i2c_msg
-import math
 
 I2C_BUS = 1
 I2C_ADDR = 0x64
@@ -80,11 +79,7 @@ def main():
     try:
         while True:
             colours = read_colours(bus)
-            time.sleep(1)
-            ir_raw  = read_ir(bus)
-            time.sleep(1)
 
-            print(ir_raw)
             print(colours)
             print("------------------------------")
             time.sleep(0.05)

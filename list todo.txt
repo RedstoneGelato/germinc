@@ -7,7 +7,6 @@ Test numbers or other already implemented thingys
     line threshold numbers
 
     test camera and tune the numbers where it says tune in code
-    test camera ball detection
 
     tune bot movement speed
     tune dribbler speed

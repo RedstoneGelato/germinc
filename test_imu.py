@@ -25,8 +25,6 @@ while True:
             2*(w*z + x*y),
             1 - 2*(y*y + z*z)
         )
-
-        # smooth
-        heading = (heading * (1 - alpha)) + (heading * alpha)
+        
         print(heading)
     time.sleep(0.01)
