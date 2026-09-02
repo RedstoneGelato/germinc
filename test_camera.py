@@ -10,9 +10,9 @@ CAPTURE_SIZE = (320, 240)  # main stream, 4x the pixel area of the old 160x120 l
 
 LOWER_BLUE = np.array([90, 200, 100])
 UPPER_BLUE = np.array([110, 255, 255])
-LOWER_YELLOW = np.array([20, 180, 100])
-UPPER_YELLOW = np.array([40, 255, 160])
-LOWER_ORANGE = np.array([0, 180, 180])
+LOWER_YELLOW = np.array([20, 150, 100])
+UPPER_YELLOW = np.array([40, 255, 255])
+LOWER_ORANGE = np.array([0, 180, 50])
 UPPER_ORANGE = np.array([20, 255, 255])
 
 KERNEL = np.ones((3, 3), np.uint8)
