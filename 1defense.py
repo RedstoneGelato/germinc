@@ -111,7 +111,7 @@ class DetectionThread(threading.Thread):
 
             self.blue = self._merge_blobs(masks["blue"], 200)
             self.yellow = self._merge_blobs(masks["yellow"], 200)
-            self.orange = self._merge_blobs(masks["orange"], 30)
+            self.orange = self._merge_blobs(masks["orange"], 20)
             time.sleep(0.005)
 
     def _merge_blobs(self, mask, min_area):
@@ -700,7 +700,7 @@ def main():
                 bally = 160 - orange[1] - orange[3]
 
                 if len(ballx_list) > 10:
-                    if abs(ballx - np.mean(ballx_list)) < 40:
+                    if abs(ballx - np.mean(ballx_list)) < 60:
                         ballx_list.append(ballx)
                         ballx_list.pop(0)
                         unconcordant_ballx = 0
@@ -714,7 +714,7 @@ def main():
                     ballx_list.append(ballx)
 
                 if len(bally_list) > 10:
-                    if abs(bally - np.mean(bally_list)) < 40:
+                    if abs(bally - np.mean(bally_list)) < 60:
                         bally_list.append(bally)
                         bally_list.pop(0)
                         unconcordant_bally = 0
@@ -811,7 +811,7 @@ def main():
             elif botstate == 2: # go for ball then pass
                 if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < 10:
+                elif ballpos[1] < 15:
                     raw_substate2 = 2 if ballpos[1] > -30 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
