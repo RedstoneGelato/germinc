@@ -782,7 +782,7 @@ def main():
             elif botstate == 1: # go for ball then score
                 if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate1 = 1  # ball in bcz
-                elif ballpos[1] < 20:
+                elif ballpos[1] < 5:
                     raw_substate1 = 2 if ballpos[1] > -30 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
