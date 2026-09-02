@@ -776,7 +776,7 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 40] # align middle and go backwards
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
@@ -809,10 +809,10 @@ def main():
                     desired_pos = [ballpos[0], ballpos[1]]
 
             elif botstate == 2: # go for ball then pass
-                if ball_distance >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30:
+                if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < 40:
-                    raw_substate2 = 2 if ball_distance < 51 else 3  # far vs near backup
+                elif ballpos[1] < 5:
+                    raw_substate2 = 2 if ballpos[1] > 5-30 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
                 substate2 = substate2_hyst.update(raw_substate2)
@@ -835,11 +835,11 @@ def main():
                 elif substate2 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 30]
+                    desired_pos = [ballpos[0], ballpos[1]]
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 20] # align middle and go backwards #TUNE +20 to be inside goals
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 40] # align middle and go backwards
                 motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
