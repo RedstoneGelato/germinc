@@ -256,9 +256,8 @@ class PCBThread(threading.Thread):
         while self.running:
             try:
                 new_colours = self._read_colours()
-                new_ir = self._read_ir()
                 with self.lock:
-                    self.ir = new_ir
+                    self.ir = None
                     self.colours = new_colours
                 self.ready = True
             except IOError as e:
