@@ -726,7 +726,7 @@ def main():
                             unconcordant_bally = 0
                 else:
                     bally_list.append(bally)
-            if lostballcount > 10:
+            if lostballcount > 40:
                 ballx_list.clear()
                 bally_list.clear()
 
