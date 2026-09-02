@@ -9,6 +9,5 @@ Test numbers or other already implemented thingys
     test camera and tune the numbers where it says tune in code
 
     tune bot movement speed
-    tune dribbler speed
 
     comms

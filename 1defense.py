@@ -570,15 +570,13 @@ def main():
             user_input = read_input()
             # TESTING speed
             if user_input == "1": basespd = 0
-            if user_input == "2": basespd = 500000
-            if user_input == "3": basespd = 5000000
-            if user_input == "4": basespd = 20000000
+            if user_input == "2": basespd -= 10000000
+            if user_input == "3": basespd -= 5000000
+            if user_input == "4": basespd -= 1000000
             if user_input == "5": basespd = 50000000
-            if user_input == "6": basespd = 100000000
-            if user_input == "7": basespd = 150000000
-            if user_input == "8": basespd = 200000000
-            if user_input == "9": basespd = 250000000
-            if user_input == "0": basespd = 300000000
+            if user_input == "6": basespd += 1000000
+            if user_input == "7": basespd += 5000000
+            if user_input == "8": basespd += 10000000
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
@@ -826,7 +824,7 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}  botstate={botstate}")
+            print(f"botstate={botstate}  line={on_line}  speed={basespd}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
