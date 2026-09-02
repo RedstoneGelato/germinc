@@ -564,9 +564,9 @@ def main():
         with pcb.lock:
             colours_snapshot = pcb.colours
             if camera.yellow != [0,0,0,0]:
-                goal_colour = 0 if camera.yellow[1] > 0 else 1
+                goal_colour = 0 if 160 - camera.yellow[1] > 0 else 1
             elif camera.blue != [0,0,0,0]:
-                goal_colour = 1 if camera.blue[1] > 0 else 0
+                goal_colour = 1 if 160 - camera.blue[1] > 0 else 0
             else:
                 pass
 
@@ -630,9 +630,9 @@ def main():
                     colours_snapshot = pcb.colours
 
                 if yellow != [0,0,0,0]:
-                    goal_colour = 0 if yellow[1] > 0 else 1
+                    goal_colour = 0 if 160 - yellow[1] > 0 else 1
                 elif blue != [0,0,0,0]:
-                    goal_colour = 1 if blue[1] > 0 else 0
+                    goal_colour = 1 if 160 - blue[1] > 0 else 0
                 else:
                     pass
 
