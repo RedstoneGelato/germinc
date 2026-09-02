@@ -68,10 +68,10 @@ class DetectionThread(threading.Thread):
         # HSV ranges
         self.lower_blue = np.array([90, 200, 100])
         self.upper_blue = np.array([110, 255, 255])
-        self.lower_orange = np.array([0, 180, 180])
+        self.lower_orange = np.array([2, 140, 0])
         self.upper_orange = np.array([20, 255, 255])
-        self.lower_yellow = np.array([21, 180, 100])
-        self.upper_yellow = np.array([40, 255, 160])
+        self.lower_yellow = np.array([21, 150, 100])
+        self.upper_yellow = np.array([40, 255, 255])
 
         self.kernel = np.ones((3,3), np.uint8)
 
@@ -109,18 +109,18 @@ class DetectionThread(threading.Thread):
                 "orange": cv2.morphologyEx(orange_raw, cv2.MORPH_OPEN, self.kernel)
             }
 
-            self.blue = self._merge_blobs(masks["blue"])
-            self.yellow = self._merge_blobs(masks["yellow"])
-            self.orange = self._merge_blobs(masks["orange"])
+            self.blue = self._merge_blobs(masks["blue"], 200)
+            self.yellow = self._merge_blobs(masks["yellow"], 200)
+            self.orange = self._merge_blobs(masks["orange"], 30)
             time.sleep(0.005)
 
-    def _merge_blobs(self, mask):
+    def _merge_blobs(self, mask, min_area):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         x_min = y_min = float('inf')
         x_max = y_max = 0
 
         for c in contours:
-            if cv2.contourArea(c) < 150:
+            if cv2.contourArea(c) < min_area:
                 continue
             x, y, w, h = cv2.boundingRect(c)
             x_min = min(x_min, x)
