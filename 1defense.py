@@ -780,10 +780,10 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # go for ball then score
-                if ball_distance >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30:
+                if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate1 = 1  # ball in bcz
-                elif ballpos[1] < 40:
-                    raw_substate1 = 2 if ball_distance < 51 else 3  # far vs near backup
+                elif ballpos[1] < 20:
+                    raw_substate1 = 2 if ballpos[1] > -30 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
