@@ -257,7 +257,6 @@ class PCBThread(threading.Thread):
             try:
                 new_colours = self._read_colours()
                 with self.lock:
-                    self.ir = None
                     self.colours = new_colours
                 self.ready = True
             except IOError as e:
@@ -566,7 +565,6 @@ def main():
 
     while script_activate_pin.is_active:
         with pcb.lock:
-            ir_snapshot = pcb.ir
             colours_snapshot = pcb.colours
             if camera.yellow != [0,0,0,0]:
                 goal_colour = 0 if camera.yellow[1] > 0 else 1
@@ -598,7 +596,6 @@ def main():
             liney = 0
 
             with pcb.lock:
-                ir_snapshot = pcb.ir
                 colours_snapshot = pcb.colours
             yellow = camera.yellow[:]
             orange = camera.orange[:]
@@ -635,7 +632,6 @@ def main():
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock:
-                    ir_snapshot = pcb.ir
                     colours_snapshot = pcb.colours
 
                 if yellow != [0,0,0,0]:
@@ -699,37 +695,8 @@ def main():
                     own_goalpos = [own_dx,own_dy]
 
 #----------------------------------------------------------------------
-#            ir to ball direction, camera to ball position, compass
+#            camera to ball position, compass
 #----------------------------------------------------------------------
-            for i, sensor in enumerate(ir_snapshot):
-                if sensor["detected"]:
-                    angle = i * math.pi / 6 + math.pi / 2
-
-                    irx += math.cos(angle)
-                    iry += math.sin(angle)
-
-            if irx != 0 or iry != 0:
-                irdirection = math.atan2(iry, irx) # direction
-    
-                if len(directionlist) > 20: # smoothing
-                    if unconcordant_ir_direction > 10: # 40ms
-                        directionlist.clear()
-                        directionlist.append(irdirection)
-                        unconcordant_ir_direction = 0
-                    elif abs(angdiff(circular_mean(directionlist), irdirection)) > 1:
-                        unconcordant_ir_direction += 1
-                    else:
-                        directionlist.pop(0)
-                        directionlist.append(irdirection)
-                        unconcordant_ir_direction = 0
-                else:
-                    directionlist.append(irdirection)
-                    unconcordant_ir_direction = 0
-
-                ir = circular_mean(directionlist) #direction only
-            else:
-                ir = None
-
             if orange == [0,0,0,0]: #camera smoothing
                 lostballcount += 1
             else:
@@ -771,19 +738,7 @@ def main():
             ballx = np.mean(ballx_list) if len(ballx_list) != 0 else None
             bally = np.mean(bally_list) if len(bally_list) != 0 else None
  
-            if ballx is not None and bally is not None and ir is not None:
-                ballpos = [ballx, bally] #bottom middle of ball
-                ball_direction = math.atan2(ballpos[1], ballpos[0])
-                if abs(angdiff(ball_direction, ir)) < 0.5:
-                    ball_direction = circular_mean([ball_direction, ir])
-                ball_distance = math.hypot(abs(ballpos[0]),abs(ballpos[1]))
-                ball_distance = 100 - max(min(ball_distance/2, 99), 0)
-                ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
-            elif ir is not None:
-                ball_direction = ir
-                ball_distance = 0
-                ballpos = [math.cos(ball_direction) * 100, math.sin(ball_direction) * 100]
-            elif ballx is not None and bally is not None:
+            if ballx is not None and bally is not None:
                 ballpos = [ballx, bally] #bottom middle of ball
                 ball_direction = math.atan2(ballpos[1], ballpos[0])
                 ball_distance = math.hypot(abs(ballpos[0]),abs(ballpos[1]))
@@ -811,7 +766,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ballpos == [float("inf"),float("inf")] and ir is None: #doesnt see ball
+            if ballpos == [float("inf"),float("inf")]: #doesnt see ball
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state is None: # attack bot is off
                 raw_botstate = 1
