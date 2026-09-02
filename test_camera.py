@@ -26,18 +26,17 @@ IGNORE_Y1, IGNORE_Y2 = 100, 220
 # TUNE: contour area scales with the SQUARE of linear resolution, not linearly - so this
 # is 70 * 4 (2x width * 2x height), not 70 * 2. Still just a starting guess for the new
 # resolution; recheck against real blob sizes once you can see actual detections.
-MIN_CONTOUR_AREA = 280
 # --------------------------------------------------------------------------------------------
 
 
-def merge_blobs(mask):
+def merge_blobs(mask, min_size):
     """Identical logic to DetectionThread._merge_blobs - keep in sync if that changes."""
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     x_min = y_min = float('inf')
     x_max = y_max = 0
 
     for c in contours:
-        if cv2.contourArea(c) < MIN_CONTOUR_AREA:
+        if cv2.contourArea(c) < min_size:
             continue
         x, y, w, h = cv2.boundingRect(c)
         x_min = min(x_min, x)
@@ -89,9 +88,9 @@ def main():
             yellow_mask = cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, KERNEL)
             orange_mask = cv2.morphologyEx(orange_raw, cv2.MORPH_OPEN, KERNEL)
 
-            blue_box = merge_blobs(blue_mask)
-            yellow_box = merge_blobs(yellow_mask)
-            orange_box = merge_blobs(orange_mask)
+            blue_box = merge_blobs(blue_mask, 280)
+            yellow_box = merge_blobs(yellow_mask, 280)
+            orange_box = merge_blobs(orange_mask, 50)
 
             annotated = frame.copy()
 
