@@ -90,7 +90,7 @@ def main():
 
             blue_box = merge_blobs(blue_mask, 280)
             yellow_box = merge_blobs(yellow_mask, 280)
-            orange_box = merge_blobs(orange_mask, 50)
+            orange_box = merge_blobs(orange_mask, 30)
 
             annotated = frame.copy()
 
