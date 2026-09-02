@@ -12,7 +12,7 @@ LOWER_BLUE = np.array([90, 200, 100])
 UPPER_BLUE = np.array([110, 255, 255])
 LOWER_YELLOW = np.array([20, 150, 100])
 UPPER_YELLOW = np.array([40, 255, 255])
-LOWER_ORANGE = np.array([0, 180, 50])
+LOWER_ORANGE = np.array([0, 180, 0])
 UPPER_ORANGE = np.array([20, 255, 255])
 
 KERNEL = np.ones((3, 3), np.uint8)
