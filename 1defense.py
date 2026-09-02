@@ -811,8 +811,8 @@ def main():
             elif botstate == 2: # go for ball then pass
                 if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < 5:
-                    raw_substate2 = 2 if ballpos[1] > 5-30 else 3  # far vs near backup
+                elif ballpos[1] < 10:
+                    raw_substate2 = 2 if ballpos[1] > -30 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
                 substate2 = substate2_hyst.update(raw_substate2)
