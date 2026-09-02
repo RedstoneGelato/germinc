@@ -78,8 +78,8 @@ class DetectionThread(threading.Thread):
         # pixel region to ignore (center, ignore bot)
         self.ignore_x1 = 60
         self.ignore_x2 = 160
-        self.ignore_y1 = 150
-        self.ignore_y2 = 210
+        self.ignore_y1 = 170
+        self.ignore_y2 = 230
 
     def run(self):
         while self.running:

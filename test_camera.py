@@ -20,8 +20,8 @@ KERNEL = np.ones((3, 3), np.uint8)
 # TUNE: doubled linearly from the old 160x120 values (20,85,50,110) to match this
 # resolution's 2x scale factor - this is a starting guess, not a calibrated value.
 # Retake a debug frame at this resolution and re-run the ignore-box test before trusting it.
-IGNORE_X1, IGNORE_X2 = 50, 160
-IGNORE_Y1, IGNORE_Y2 = 110, 210
+IGNORE_X1, IGNORE_X2 = 60, 160
+IGNORE_Y1, IGNORE_Y2 = 170, 230
 
 # TUNE: contour area scales with the SQUARE of linear resolution, not linearly - so this
 # is 70 * 4 (2x width * 2x height), not 70 * 2. Still just a starting guess for the new
@@ -90,7 +90,7 @@ def main():
 
             blue_box = merge_blobs(blue_mask, 280)
             yellow_box = merge_blobs(yellow_mask, 280)
-            orange_box = merge_blobs(orange_mask, 30)
+            orange_box = merge_blobs(orange_mask, 20)
 
             annotated = frame.copy()
 
