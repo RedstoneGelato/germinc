@@ -137,7 +137,6 @@ def main():
                 ballpos = [orange_box[0] + orange_box[2] / 2 - frame_cx, frame_cy - orange_box[1] - orange_box[3]]
                 ball_direction = math.atan2(ballpos[1], ballpos[0])
                 ball_distance = math.hypot(ballpos[0], ballpos[1])
-                ball_distance = (ball_distance ** 2) * 0.5  # TUNE: this scaling constant was fit to the old resolution's pixel geometry - recheck at this size
                 ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
             else:
                 ballpos = [float("inf"), float("inf")]

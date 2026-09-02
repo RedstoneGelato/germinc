@@ -736,8 +736,7 @@ def main():
             if ballx is not None and bally is not None:
                 ballpos = [ballx, bally] #bottom middle of ball
                 ball_direction = math.atan2(ballpos[1], ballpos[0])
-                ball_distance = math.hypot(abs(ballpos[0]),abs(ballpos[1]))
-                ball_distance = 100 - max(min(ball_distance/2, 99), 0)
+                ball_distance = math.hypot(ballpos[0],ballpos[1])
                 ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
             else:
                 ballpos = [0,0]
