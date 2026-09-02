@@ -148,6 +148,7 @@ def main():
             if display_available:
                 try:
                     cv2.imshow("camera debug", annotated)
+                    cv2.imshow("orange", orange_mask)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
                 except cv2.error:
