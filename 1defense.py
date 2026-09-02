@@ -539,9 +539,8 @@ def main():
     dribblerspd = -5000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
-    line_escape_speed = basespd * 3
+    line_escape_speed = 50000000
     desired_heading = 0
-    ir = 0 # direction only
     ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
@@ -782,8 +781,8 @@ def main():
             elif botstate == 1: # go for ball then score
                 if ballpos[1] <= 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate1 = 1  # ball in bcz
-                elif ballpos[1] < 5:
-                    raw_substate1 = 2 if ballpos[1] > -30 else 3  # far vs near backup
+                elif ballpos[1] < 10:
+                    raw_substate1 = 2 if ballpos[1] > -20 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
