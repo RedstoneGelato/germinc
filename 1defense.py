@@ -806,7 +806,7 @@ def main():
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 30]
+                    desired_pos = [ballpos[0], ballpos[1]]
 
             elif botstate == 2: # go for ball then pass
                 if ball_distance >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30:
@@ -868,7 +868,7 @@ def main():
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
             spin_weight = base_spin * min(abs(heading_error),2) if heading_error != 0 else base_spin
-            if abs(heading_error) < 0.05:
+            if abs(heading_error) < 0.01:
                 rot = 0
             else:
                 rot = spin_weight * heading_error
