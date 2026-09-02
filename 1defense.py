@@ -912,10 +912,9 @@ def main():
 
             #DEBUG
             print(colours_snapshot)
-            print(ir_snapshot)
             print(colour_see)
             print(led_brightness)
-            print(botstate)
+            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}")
             print("===================")
 
 #----------------------------------------------------------------------
