@@ -78,7 +78,7 @@ class DetectionThread(threading.Thread):
         # pixel region to ignore (center, ignore bot)
         self.ignore_x1 = 60
         self.ignore_x2 = 160
-        self.ignore_y1 = 120
+        self.ignore_y1 = 150
         self.ignore_y2 = 210
 
     def run(self):
@@ -860,7 +860,7 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}  botstate={botstate}  on line={on_line}")
+            print(f"own goal={own_goalpos}  goal={goalpos}  ball={ballpos}  botstate={botstate}  goal colour={goal_colour}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
