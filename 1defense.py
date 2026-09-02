@@ -111,7 +111,7 @@ class DetectionThread(threading.Thread):
 
             self.blue = self._merge_blobs(masks["blue"], 200)
             self.yellow = self._merge_blobs(masks["yellow"], 200)
-            self.orange = self._merge_blobs(masks["orange"], 10)
+            self.orange = self._merge_blobs(masks["orange"], 30)
             time.sleep(0.005)
 
     def _merge_blobs(self, mask, min_area):
