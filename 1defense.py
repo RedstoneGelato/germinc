@@ -779,7 +779,7 @@ def main():
                     if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                         raw_substate2 = 1  # ball in bcz
                     elif ballpos[1] < 20:
-                        raw_substate2 = 2 if ballpos[1] < -20 else 3  # far vs near backup
+                        raw_substate2 = 2 if ballpos[1] < -40 else 3  # far vs near backup
                     else:
                         raw_substate2 = 4  # pathfind to ball
                     substate2 = substate2_hyst.update(raw_substate2)
@@ -792,7 +792,7 @@ def main():
                         desired_pos = [0, -200]
                     elif substate2 == 3:
                         desired_heading = 0
-                        if abs(ballpos[0]) > 30:
+                        if abs(ballpos[0]) < 30:
                             desired_pos = [-200, 0] if goalpos[0] < 0  or own_goalpos[0] < 0 else [200, 0]
                         else:
                             desired_pos = [0, -200]
