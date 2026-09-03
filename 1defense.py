@@ -743,7 +743,7 @@ def main():
             if botstate == 0: # do not see ball
                 desired_heading = 0
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
-                if abs(desired_pos[0]) < 30 and abs(desired_pos[1]) < 20:
+                if abs(desired_pos[0]) < 20 and abs(desired_pos[1]) < 30:
                     desired_pos = [0,0]
 
             elif botstate == 1: # go for ball then score
@@ -769,7 +769,7 @@ def main():
                         desired_pos = [0, -200]
                 elif substate1 == 4:
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 10]
+                    desired_pos = [ballpos[0], ballpos[1] - 20]
 
             elif botstate == 2: # go for ball then pass
                 if ballpos == [0,0]:
@@ -798,7 +798,7 @@ def main():
                             desired_pos = [0, -200]
                     elif substate2 == 4:
                         desired_heading = 0
-                        desired_pos = [ballpos[0], ballpos[1] - 10]
+                        desired_pos = [ballpos[0], ballpos[1] - 20]
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
