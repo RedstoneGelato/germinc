@@ -747,10 +747,10 @@ def main():
                     desired_pos = [0,0]
 
             elif botstate == 1: # go for ball then score
-                if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
+                if ballpos[1] < 70 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
                     raw_substate1 = 1  # ball in bcz
-                elif ballpos[1] < 30:
-                    raw_substate1 = 2 if ballpos[1] < -40 else 3  # far vs near backup
+                elif ballpos[1] < 60:
+                    raw_substate1 = 2 if ballpos[1] < -90 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
@@ -763,7 +763,7 @@ def main():
                     desired_pos = ballpos
                 elif substate1 == 3:
                     desired_heading = 0
-                    if abs(ballpos[0]) < 30:
+                    if abs(ballpos[0]) < 80:
                         desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
@@ -776,10 +776,10 @@ def main():
                     desired_pos = [0,200]
                     desired_heading = 0
                 else:
-                    if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
+                    if ballpos[1] < 70 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
                         raw_substate2 = 1  # ball in bcz
-                    elif ballpos[1] < 30:
-                        raw_substate2 = 2 if ballpos[1] < -50 else 3  # far vs near backup
+                    elif ballpos[1] < 60:
+                        raw_substate2 = 2 if ballpos[1] < -90 else 3  # far vs near backup
                     else:
                         raw_substate2 = 4  # pathfind to ball
                     substate2 = substate2_hyst.update(raw_substate2)
@@ -792,7 +792,7 @@ def main():
                         desired_pos = [0, -200]
                     elif substate2 == 3:
                         desired_heading = 0
-                        if abs(ballpos[0]) < 30:
+                        if abs(ballpos[0]) < 80:
                             desired_pos = [-200, 0] if goalpos[0] < 0  or own_goalpos[0] < 0 else [200, 0]
                         else:
                             desired_pos = [0, -200]
