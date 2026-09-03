@@ -749,7 +749,7 @@ def main():
             elif botstate == 1: # go for ball then score
                 if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                     raw_substate1 = 1  # ball in bcz
-                elif ballpos[1] < 20:
+                elif ballpos[1] < 30:
                     raw_substate1 = 2 if ballpos[1] < -40 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
@@ -769,7 +769,7 @@ def main():
                         desired_pos = [0, -200]
                 elif substate1 == 4:
                     desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 20]
+                    desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 2: # go for ball then pass
                 if ballpos == [0,0]:
@@ -778,7 +778,7 @@ def main():
                 else:
                     if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                         raw_substate2 = 1  # ball in bcz
-                    elif ballpos[1] < 20:
+                    elif ballpos[1] < 30:
                         raw_substate2 = 2 if ballpos[1] < -40 else 3  # far vs near backup
                     else:
                         raw_substate2 = 4  # pathfind to ball
@@ -798,7 +798,7 @@ def main():
                             desired_pos = [0, -200]
                     elif substate2 == 4:
                         desired_heading = 0
-                        desired_pos = [ballpos[0], ballpos[1] - 20]
+                        desired_pos = [ballpos[0], ballpos[1] - 30]
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
