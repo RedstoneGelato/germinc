@@ -747,7 +747,7 @@ def main():
                     desired_pos = [0,0]
 
             elif botstate == 1: # go for ball then score
-                if ballpos[1] < 70 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
+                if ballpos[1] < 60 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
                     raw_substate1 = 1  # ball in bcz
                 elif ballpos[1] < 60:
                     raw_substate1 = 2 if ballpos[1] < -90 else 3  # far vs near backup
@@ -764,7 +764,7 @@ def main():
                 elif substate1 == 3:
                     desired_heading = 0
                     if abs(ballpos[0]) < 80:
-                        desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
+                        desired_pos = [-200, 0] if goalpos[0] < 90 or own_goalpos[0] < 90 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate1 == 4:
@@ -793,7 +793,7 @@ def main():
                     elif substate2 == 3:
                         desired_heading = 0
                         if abs(ballpos[0]) < 80:
-                            desired_pos = [-200, 0] if goalpos[0] < 0  or own_goalpos[0] < 0 else [200, 0]
+                            desired_pos = [-200, 0] if goalpos[0] < 90  or own_goalpos[0] < 90 else [200, 0]
                         else:
                             desired_pos = [0, -200]
                     elif substate2 == 4:
