@@ -78,8 +78,10 @@ def main():
 
     try:
         while True:
+            raw_ir = read_ir(bus)
             colours = read_colours(bus)
 
+            print(raw_ir)
             print(colours)
             print("------------------------------")
             time.sleep(0.05)
