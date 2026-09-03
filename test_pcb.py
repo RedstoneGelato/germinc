@@ -103,9 +103,10 @@ def main():
             colours = read_colours(bus)
             brightness = read_input()
 
-            if brightness.isnumeric() or type(brightness) is int:
-                brightness = int(brightness)
-                set_brightness(bus,brightness)
+            if brightness is not None:
+                if brightness.isnumeric() or type(brightness) is int:
+                    brightness = int(brightness)
+                    set_brightness(bus,brightness)
 
             print(raw_ir)
             print(colours)
