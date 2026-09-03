@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 import sys
+import select
 from smbus2 import SMBus, i2c_msg
 
 I2C_BUS = 1
@@ -66,6 +67,26 @@ def read_ir(bus: SMBus) -> list:
         for i in range(12)
     ]
 
+def set_brightness(bus, value: float):
+    """
+    Send brightness value to STM32.
+    Valid range: 0.0 to 65535.0 (matches TIM3 period).
+    Sends command 0x03 followed by 2 bytes (uint16, little-endian).
+    This matches the STM32 SlaveRxCpltCallback which expects
+    exactly 2 data bytes after the 0x03 command byte.
+    """
+    val = int(max(0.0, min(65535.0, value)))
+    lo  = val & 0xFF
+    hi  = (val >> 8) & 0xFF
+    # write_i2c_block_data sends: START, ADDR+W, 0x03 (reg), lo, hi, STOP
+    # STM32 receives 0x03 first (1 byte), then queues receive of 2 more bytes
+    bus.write_i2c_block_data(I2C_ADDR, 0x03, [lo, hi])
+
+def read_input():
+    if select.select([sys.stdin], [], [], 0)[0]:
+        return sys.stdin.readline().strip()
+    return None
+
 def main():
     try:
         bus = SMBus(I2C_BUS)
@@ -80,6 +101,11 @@ def main():
         while True:
             raw_ir = read_ir(bus)
             colours = read_colours(bus)
+            brightness = read_input()
+
+            if brightness.isnumeric() or type(brightness) is int:
+                brightness = int(brightness)
+                set_brightness(bus,brightness)
 
             print(raw_ir)
             print(colours)
