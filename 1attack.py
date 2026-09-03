@@ -4,11 +4,9 @@ import cv2
 import picamera2
 import numpy as np
 import time
-import sys
 import socket
 import json
 from smbus2 import SMBus, i2c_msg
-import select
 import board
 import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
@@ -439,11 +437,6 @@ class Hysteresis:
 
         return self.current
 
-def read_input():
-    if select.select([sys.stdin], [], [], 0)[0]:
-        return sys.stdin.readline().strip()
-    return None
-
 def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
 
@@ -508,7 +501,7 @@ def main():
     yvel = 0
     heading_error = 0
     rot = 0
-    basespd = 200000 # ideal speed
+    basespd = 80000000 # ideal speed 80mil
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
     line_escape_speed = 50000000
@@ -565,19 +558,6 @@ def main():
             yellow = camera.yellow[:]
             orange = camera.orange[:]
             blue = camera.blue[:]
-
-            user_input = read_input()
-            # TESTING speed
-            if user_input == "1": basespd = 0
-            if user_input == "2": basespd = 500000
-            if user_input == "3": basespd = 5000000
-            if user_input == "4": basespd = 20000000
-            if user_input == "5": basespd = 50000000
-            if user_input == "6": basespd = 100000000
-            if user_input == "7": basespd = 150000000
-            if user_input == "8": basespd = 200000000
-            if user_input == "9": basespd = 250000000
-            if user_input == "0": basespd = 300000000
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
@@ -723,7 +703,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0]: #doesnt see ball
                 raw_botstate = 0
-            elif ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30: # ball in ball capture zone
+            elif ballpos[1] < 50 and ballpos[1] > 0 and abs(ballpos[0]) < 50: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -737,7 +717,7 @@ def main():
                 comms.my_state.update({"command": 0})
                 desired_heading = 0
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 150] # align middle and go backwards
-                if abs(desired_pos[0]) < 20 and abs(desired_pos[1]) < 30:
+                if abs(desired_pos[0]) < 40 and abs(desired_pos[1]) < 50:
                     desired_pos = [0,0]
 
             elif botstate == 1: # shoot
@@ -747,9 +727,9 @@ def main():
                 desired_pos = goalpos
 
             elif botstate == 2: # go for ball
-                if ballpos[1] < -50 and goalie_bot_state == 1: #tell goalie to get ball
+                if ballpos[1] < -110 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
-                elif ballpos[1] < 10:
+                elif ballpos[1] < 60:
                     raw_substate = 2 if ballpos[1] < -30 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
@@ -759,7 +739,7 @@ def main():
                     comms.my_state.update({"command": 1}) #send goalie to get ball
                     desired_heading = 0
                     desired_pos = [goalpos[0], goalpos[1] - 180]
-                    if abs(desired_pos[0]) < 20 and abs(desired_pos[1]) < 30:
+                    if abs(desired_pos[0]) < 40 and abs(desired_pos[1]) < 50:
                         desired_pos = [0,0]
                 elif substate == 2:
                     comms.my_state.update({"command": 0})
@@ -768,8 +748,8 @@ def main():
                 elif substate == 3:
                     comms.my_state.update({"command": 0})
                     desired_heading = 0
-                    if abs(ballpos[0]) > 40:
-                        desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
+                    if abs(ballpos[0]) < 50:
+                        desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball

@@ -4,11 +4,9 @@ import cv2
 import picamera2
 import numpy as np
 import time
-import sys
 import socket
 import json
 from smbus2 import SMBus, i2c_msg
-import select
 import board
 import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
@@ -439,11 +437,6 @@ class Hysteresis:
 
         return self.current
 
-def read_input():
-    if select.select([sys.stdin], [], [], 0)[0]:
-        return sys.stdin.readline().strip()
-    return None
-
 def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
 
@@ -508,7 +501,7 @@ def main():
     yvel = 0
     heading_error = 0
     rot = 0
-    basespd = 200000 # ideal speed
+    basespd = 80000000 # ideal speed 80mil
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
     line_escape_speed = 50000000
@@ -566,17 +559,6 @@ def main():
             yellow = camera.yellow[:]
             orange = camera.orange[:]
             blue = camera.blue[:]
-
-            user_input = read_input()
-            # TESTING speed
-            if user_input == "1": basespd = 0
-            if user_input == "2": basespd -= 10000000
-            if user_input == "3": basespd -= 5000000
-            if user_input == "4": basespd -= 1000000
-            if user_input == "5": basespd = 50000000
-            if user_input == "6": basespd += 1000000
-            if user_input == "7": basespd += 5000000
-            if user_input == "8": basespd += 10000000
 
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
@@ -742,15 +724,15 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
-                if abs(desired_pos[0]) < 20 and abs(desired_pos[1]) < 30:
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
+                if abs(desired_pos[0]) < 40 and abs(desired_pos[1]) < 50:
                     desired_pos = [0,0]
 
             elif botstate == 1: # go for ball then score
                 if ballpos[1] < 50 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
                     raw_substate1 = 1  # ball in bcz
                 elif ballpos[1] < 60:
-                    raw_substate1 = 2 if ballpos[1] < -90 else 3  # far vs near backup
+                    raw_substate1 = 2 if ballpos[1] < -70 else 3  # far vs near backup
                 else:
                     raw_substate1 = 4  # pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
@@ -779,7 +761,7 @@ def main():
                     if ballpos[1] < 50 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
                         raw_substate2 = 1  # ball in bcz
                     elif ballpos[1] < 60:
-                        raw_substate2 = 2 if ballpos[1] < -90 else 3  # far vs near backup
+                        raw_substate2 = 2 if ballpos[1] < -70 else 3  # far vs near backup
                     else:
                         raw_substate2 = 4  # pathfind to ball
                     substate2 = substate2_hyst.update(raw_substate2)
@@ -802,8 +784,8 @@ def main():
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
-                if abs(desired_pos[0]) < 30 and abs(desired_pos[1]) < 20:
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
+                if abs(desired_pos[0]) < 40 and abs(desired_pos[1]) < 50:
                     desired_pos = [0,0]
 
 #----------------------------------------------------------------------
