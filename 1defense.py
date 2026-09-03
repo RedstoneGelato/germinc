@@ -779,7 +779,7 @@ def main():
                     if ballpos[1] < 30 and ballpos[1] > 0 and abs(ballpos[0]) < 30:
                         raw_substate2 = 1  # ball in bcz
                     elif ballpos[1] < 30:
-                        raw_substate2 = 2 if ballpos[1] < -40 else 3  # far vs near backup
+                        raw_substate2 = 2 if ballpos[1] < -50 else 3  # far vs near backup
                     else:
                         raw_substate2 = 4  # pathfind to ball
                     substate2 = substate2_hyst.update(raw_substate2)
