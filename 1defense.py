@@ -763,7 +763,7 @@ def main():
                     desired_pos = ballpos
                 elif substate1 == 3:
                     desired_heading = 0
-                    if abs(ballpos[0]) > 30:
+                    if abs(ballpos[0]) < 30:
                         desired_pos = [-200, 0] if goalpos[0] < 0 or own_goalpos[0] < 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
