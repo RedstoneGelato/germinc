@@ -504,7 +504,7 @@ def main():
     basespd = 80000000 # ideal speed 80mil
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
-    line_escape_speed = 50000000
+    line_escape_speed = 80000000
     desired_heading = 0
     ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
@@ -518,9 +518,9 @@ def main():
     unconcordant_bally = 0
     led_brightness = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(led_brightness)
-    botstate_hyst = Hysteresis(hold_time=0.15)
-    substate1_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
-    substate2_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
+    botstate_hyst = Hysteresis(hold_time=0.1)
+    substate1_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
+    substate2_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
     line_hyst = Hysteresis(hold_time=0.1)
     CONTROL_PERIOD = 0.01 #main loop runs at 100hz
 
@@ -806,7 +806,8 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(f"botstate={botstate}  line={on_line}  speed={basespd}")
+            print(colours_snapshot)
+            print(f"line={on_line}  brightness={led_brightness} coloursee={colour_see}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement

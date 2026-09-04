@@ -518,8 +518,8 @@ def main():
     unconcordant_bally = 0
     led_brightness = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(led_brightness)
-    botstate_hyst = Hysteresis(hold_time=0.15)
-    substate_hyst = Hysteresis(hold_time=0.15, instant_enter=lambda v: v == 1)
+    botstate_hyst = Hysteresis(hold_time=0.1)
+    substate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
     line_hyst = Hysteresis(hold_time=0.1)
     CONTROL_PERIOD = 0.01 #main loop runs at 100hz
 
