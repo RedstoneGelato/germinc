@@ -803,8 +803,7 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(colours_snapshot)
-            print(f"line={on_line}  brightness={led_brightness}")
+            print(f"line={on_line}  botstate={botstate}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
