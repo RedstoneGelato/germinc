@@ -799,9 +799,9 @@ def main():
                     liney += math.sin(angle) * excess
                     colour_see += 1
 
-            raw_on_line = (linex != 0 or liney != 0) and colour_see > 5
+            raw_on_line = (linex != 0 or liney != 0) and colour_see > 2
             on_line = line_hyst.update(raw_on_line)
-            if on_line and colour_see > 5:
+            if on_line and colour_see > 2:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
@@ -821,7 +821,7 @@ def main():
                 rot = spin_weight * heading_error
 
             maxspd = round(basespd * (1 + (abs(rot) / 160)))
-            if on_line and colour_see > 5:
+            if on_line and colour_see > 2:
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]
