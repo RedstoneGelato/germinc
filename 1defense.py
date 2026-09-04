@@ -512,7 +512,6 @@ def main():
     heading_offset = imu.heading
     ballx_list = []
     bally_list = []
-    colour_see = 0
     lostballcount = 0
     unconcordant_ballx = 0
     unconcordant_bally = 0
@@ -521,7 +520,7 @@ def main():
     botstate_hyst = Hysteresis(hold_time=0.1)
     substate1_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
     substate2_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
-    line_hyst = Hysteresis(hold_time=0.1)
+    line_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == True)
     CONTROL_PERIOD = 0.01 #main loop runs at 100hz
 
     while script_activate_pin.is_active:
@@ -550,7 +549,6 @@ def main():
     try:
         next_loop = time.monotonic()
         while True:
-            colour_see = 0
             linex = 0
             liney = 0
 
@@ -797,17 +795,16 @@ def main():
                     excess = value - line_threshold
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
-                    colour_see += 1
 
-            raw_on_line = (linex != 0 or liney != 0) and colour_see > 2
+            raw_on_line = (linex != 0 or liney != 0)
             on_line = line_hyst.update(raw_on_line)
-            if on_line and colour_see > 2:
+            if on_line:
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
             print(colours_snapshot)
-            print(f"line={on_line}  brightness={led_brightness} coloursee={colour_see}")
+            print(f"line={on_line}  brightness={led_brightness}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
@@ -821,7 +818,7 @@ def main():
                 rot = spin_weight * heading_error
 
             maxspd = round(basespd * (1 + (abs(rot) / 160)))
-            if on_line and colour_see > 2:
+            if on_line:
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]
