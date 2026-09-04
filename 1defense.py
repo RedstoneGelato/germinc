@@ -520,7 +520,6 @@ def main():
     botstate_hyst = Hysteresis(hold_time=0.1)
     substate1_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
     substate2_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
-    line_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == True)
     CONTROL_PERIOD = 0.01 #main loop runs at 100hz
 
     while script_activate_pin.is_active:
@@ -796,8 +795,7 @@ def main():
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
 
-            raw_on_line = (linex != 0 or liney != 0)
-            on_line = line_hyst.update(raw_on_line)
+            on_line = (linex != 0 or liney != 0)
             if on_line:
                 mag = math.hypot(linex, liney) if math.hypot(linex, liney) != 0 else 1
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
