@@ -504,7 +504,7 @@ def main():
     basespd = 80000000 # ideal speed 80mil
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
-    line_escape_speed = 80000000
+    line_escape_speed = 100000000
     desired_heading = 0
     ballpos = [0,100] #cartesian plane coord relative of bot
     goalpos = [0,200] # cartesian plane coord relative of bot
@@ -742,7 +742,7 @@ def main():
                     desired_pos = ballpos
                 elif substate1 == 3:
                     desired_heading = 0
-                    if abs(ballpos[0]) < 50:
+                    if abs(ballpos[0]) < 70:
                         desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]
@@ -771,7 +771,7 @@ def main():
                         desired_pos = [0, -200]
                     elif substate2 == 3:
                         desired_heading = 0
-                        if abs(ballpos[0]) < 50:
+                        if abs(ballpos[0]) < 70:
                             desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                         else:
                             desired_pos = [0, -200]
