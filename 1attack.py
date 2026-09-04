@@ -512,7 +512,6 @@ def main():
     heading_offset = imu.heading
     ballx_list = []
     bally_list = []
-    colour_see = 0
     lostballcount = 0
     unconcordant_ballx = 0
     unconcordant_bally = 0
@@ -549,7 +548,6 @@ def main():
     try:
         next_loop = time.monotonic()
         while True:
-            colour_see = 0
             linex = 0
             liney = 0
 
@@ -768,12 +766,11 @@ def main():
                     excess = value - line_threshold
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
-                    colour_see += 1
 
-            raw_on_line = (linex != 0 or liney != 0) and colour_see > 2
+            raw_on_line = (linex != 0 or liney != 0)
             on_line = line_hyst.update(raw_on_line)
-            if on_line and colour_see > 2:
-                mag = math.hypot(linex, liney)
+            if on_line:
+                mag = math.hypot(linex, liney) if math.hypot(linex, liney) != 0 else 1
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
 #----------------------------------------------------------------------
@@ -788,7 +785,7 @@ def main():
                 rot = spin_weight * heading_error
 
             maxspd = round(basespd * (1 + (abs(rot) / 160)))
-            if on_line and colour_see > 2:
+            if on_line:
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]

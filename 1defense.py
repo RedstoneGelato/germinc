@@ -799,7 +799,7 @@ def main():
             raw_on_line = (linex != 0 or liney != 0)
             on_line = line_hyst.update(raw_on_line)
             if on_line:
-                mag = min(math.hypot(linex, liney),1)
+                mag = math.hypot(linex, liney) if math.hypot(linex, liney) != 0 else 1
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
