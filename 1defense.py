@@ -721,8 +721,8 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
-                if abs(desired_pos[0]) < 40 and abs(desired_pos[1]) < 50:
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
+                if abs(desired_pos[0]) < 30 and abs(desired_pos[1]) < 40:
                     desired_pos = [0,0]
 
             elif botstate == 1: # go for ball then score
