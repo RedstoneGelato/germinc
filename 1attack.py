@@ -268,7 +268,7 @@ class MotorThread(threading.Thread):
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
 
-        self.motor1 = PowerfulBLDCDriver(self.i2c, 26)
+        self.motor1 = PowerfulBLDCDriver(self.i2c, 28)
         self.motor1.set_current_limit_foc(262144)  # max 8 amps is 524288
         self.motor1.set_id_pid_constants(1500, 200)
         self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -280,7 +280,7 @@ class MotorThread(threading.Thread):
         self.motor1.configure_operating_mode_and_sensor(3, 1)
         self.motor1.configure_command_mode(12)
 
-        self.motor2 = PowerfulBLDCDriver(self.i2c, 32)
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 27)
         self.motor2.set_current_limit_foc(262144)  # 4 amps
         self.motor2.set_id_pid_constants(1500, 200)
         self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -292,7 +292,7 @@ class MotorThread(threading.Thread):
         self.motor2.configure_operating_mode_and_sensor(3, 1)
         self.motor2.configure_command_mode(12)
 
-        self.motor3 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 25)
         self.motor3.set_current_limit_foc(262144)
         self.motor3.set_id_pid_constants(1500, 200)
         self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -304,7 +304,7 @@ class MotorThread(threading.Thread):
         self.motor3.configure_operating_mode_and_sensor(3, 1)
         self.motor3.configure_command_mode(12)
 
-        self.motor4 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 26)
         self.motor4.set_current_limit_foc(262144)
         self.motor4.set_id_pid_constants(1500, 200)
         self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
