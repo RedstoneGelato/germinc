@@ -738,9 +738,6 @@ def main():
             if botstate == 0: # do not see ball
                 desired_heading = 0
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 180] # align middle and go backwards
-                if abs(desired_pos[1]) < 40:
-                    if abs(desired_pos[0]) < 30:
-                        desired_pos = [0,0]
 
             elif botstate == 1: # go for ball then score
                 if ballpos[1] < 60 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
@@ -799,9 +796,6 @@ def main():
             elif botstate == 3: #chill in goals
                 desired_heading = 0
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
-                if abs(desired_pos[1]) < 40:
-                    if abs(desired_pos[0]) < 30:
-                        desired_pos = [0,0]
 
 #----------------------------------------------------------------------
 #            line detection
