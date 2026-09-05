@@ -767,7 +767,7 @@ def main():
                     liney += math.sin(angle) * excess
 
             on_line = (linex != 0 or liney != 0)
-            if on_line:
+            if False:
                 mag = math.hypot(linex, liney) if math.hypot(linex, liney) != 0 else 1
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
@@ -783,7 +783,7 @@ def main():
                 rot = spin_weight * heading_error
 
             maxspd = round(basespd * (1 + (abs(rot) / 160)))
-            if on_line:
+            if False:
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]
