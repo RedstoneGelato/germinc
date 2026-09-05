@@ -565,21 +565,6 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                compass = 0
-                xvel = 0
-                yvel = 0
-                heading_error = 0
-                rot = 0
-                desired_heading = 0
-                ballpos = [0,100] #cartesian plane coord relative of bot
-                goalpos = [0,200] # cartesian plane coord relative of bot
-                goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
-                heading_offset = imu.heading
-                ballx_list = []
-                bally_list = []
-                lostballcount = 0
-                unconcordant_ballx = 0
-                unconcordant_bally = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock:
@@ -598,6 +583,9 @@ def main():
                     led_brightness -= 50
                 led_brightness = max(min(led_brightness,65535),0)
                 pcb.set_brightness(led_brightness)
+
+                heading_offset = imu.heading
+
                 time.sleep(0.02)
                 continue
             else:
