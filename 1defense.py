@@ -830,7 +830,7 @@ def main():
 
             # Maintain a fixed 100 Hz loop
             next_loop += CONTROL_PERIOD
-            sleep_time = next_loop - time.monotonic()
+            sleep_time = next_loop - time.monotonic() 
 
             if sleep_time > 0:
                 time.sleep(sleep_time)
