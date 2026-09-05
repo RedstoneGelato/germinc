@@ -502,6 +502,7 @@ def main():
     heading_error = 0
     rot = 0
     basespd = 80000000 # ideal speed 80mil
+    ingoalspd = 15000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_threshold = 1500 # tune for colour sensor readings
     line_escape_speed = 100000000
@@ -565,6 +566,24 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
+                compass = 0
+                xvel = 0
+                yvel = 0
+                heading_error = 0
+                rot = 0
+                desired_heading = 0
+                ballpos = [0,100] #cartesian plane coord relative of bot
+                goalpos = [0,200] # cartesian plane coord relative of bot
+                goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
+                heading_offset = imu.heading
+                ballx_list = []
+                bally_list = []
+                lostballcount = 0
+                unconcordant_ballx = 0
+                unconcordant_bally = 0
+                x_robot = 0
+                y_robot = 0
+                maxspd = basespd
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock:
@@ -583,9 +602,6 @@ def main():
                     led_brightness -= 50
                 led_brightness = max(min(led_brightness,65535),0)
                 pcb.set_brightness(led_brightness)
-
-                heading_offset = imu.heading
-
                 time.sleep(0.02)
                 continue
             else:
@@ -721,12 +737,13 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
-                if abs(desired_pos[0]) < 30 and abs(desired_pos[1]) < 40:
-                    desired_pos = [0,0]
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 180] # align middle and go backwards
+                if abs(desired_pos[1]) < 40:
+                    if abs(desired_pos[0]) < 30:
+                        desired_pos = [0,0]
 
             elif botstate == 1: # go for ball then score
-                if ballpos[1] < 50 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
+                if ballpos[1] < 60 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
                     raw_substate1 = 1  # ball in bcz
                 elif ballpos[1] < 60:
                     raw_substate1 = 2 if ballpos[1] < -70 else 3  # far vs near backup
@@ -755,7 +772,7 @@ def main():
                     desired_pos = [0,200]
                     desired_heading = 0
                 else:
-                    if ballpos[1] < 50 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
+                    if ballpos[1] < 60 and ballpos[1] > 0 and abs(ballpos[0]) < 50:
                         raw_substate2 = 1  # ball in bcz
                     elif ballpos[1] < 60:
                         raw_substate2 = 2 if ballpos[1] < -70 else 3  # far vs near backup
@@ -782,8 +799,9 @@ def main():
             elif botstate == 3: #chill in goals
                 desired_heading = 0
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
-                if abs(desired_pos[0]) < 40 and abs(desired_pos[1]) < 50:
-                    desired_pos = [0,0]
+                if abs(desired_pos[1]) < 40:
+                    if abs(desired_pos[0]) < 30:
+                        desired_pos = [0,0]
 
 #----------------------------------------------------------------------
 #            line detection
@@ -814,7 +832,7 @@ def main():
             else:
                 rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160))) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)))
             if False:
                 maxspd = line_escape_speed
 
@@ -830,7 +848,7 @@ def main():
 
             # Maintain a fixed 100 Hz loop
             next_loop += CONTROL_PERIOD
-            sleep_time = next_loop - time.monotonic() 
+            sleep_time = next_loop - time.monotonic()
 
             if sleep_time > 0:
                 time.sleep(sleep_time)
