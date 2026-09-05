@@ -519,8 +519,8 @@ def main():
     led_brightness = 10000  # pcb led brightness: 0 - 65535
     pcb.set_brightness(led_brightness)
     botstate_hyst = Hysteresis(hold_time=0.1)
-    substate1_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
-    substate2_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
+    substate1_hyst = Hysteresis(hold_time=0.05, instant_enter=lambda v: v == 1)
+    substate2_hyst = Hysteresis(hold_time=0.05, instant_enter=lambda v: v == 1)
     CONTROL_PERIOD = 0.01 #main loop runs at 100hz
 
     while script_activate_pin.is_active:
@@ -759,7 +759,7 @@ def main():
                     desired_pos = ballpos
                 elif substate1 == 3:
                     desired_heading = 0
-                    if abs(ballpos[0]) < 70:
+                    if abs(ballpos[0]) < 80:
                         desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]
@@ -788,7 +788,7 @@ def main():
                         desired_pos = [0, -200]
                     elif substate2 == 3:
                         desired_heading = 0
-                        if abs(ballpos[0]) < 70:
+                        if abs(ballpos[0]) < 80:
                             desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                         else:
                             desired_pos = [0, -200]
