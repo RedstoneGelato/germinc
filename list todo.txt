@@ -3,11 +3,8 @@ Yet to add or implement or do
     motor calibration numbers for attack
 
 Test numbers or other already implemented thingys
-    brightness calibration
-    line threshold numbers
-
     test camera and tune the numbers where it says tune in code
 
-    tune bot movement speed
+    test comms
 
-    comms
+    test ir reading numbers

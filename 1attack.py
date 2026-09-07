@@ -581,28 +581,28 @@ def main():
     heading_offset = imu.heading
     desired_heading = 0
 
-    basespd = 80000000 # ideal speed
+    basespd = 80000000 #ideal speed
     ingoalspd = 1500000
     dribblerspd = 5000000
-    base_spin = 50 # bigger number = bot spins more instead of moves more
+    base_spin = 50 #bigger number = bot spins more instead of moves more
     line_escape_speed = basespd * 1.5
 
-    ir = [math.pi/2,100] # direction, distance
+    ir = [math.pi/2,100] #direction, distance
     ballpos = [0,100] #cartesian plane coord relative of bot
     directionlist = []
     irdirection = 0
     unconcordantdirection = 0
 
-    goalpos = [0,200] # cartesian plane coord relative of bot
-    own_goalpos = [0,-200] # cartesian plane coord relative of bot
-    goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
+    goalpos = [0,200] #cartesian plane coord relative of bot
+    own_goalpos = [0,-200] #cartesian plane coord relative of bot
+    goal_colour = 0 #0 shoot for yellow, 1 shoot for blue
 
     ball_distance = 0
     ball_distance_count = 0
     ball_distance_total = 0
 
-    led_brightness = 10000  # pcb led brightness: 0 - 65535
-    line_threshold = 1500 # tune for colour sensor readings
+    led_brightness = 10000  #pcb led brightness: 0 - 65535
+    line_threshold = 1500 #threshold for white line
     pcb.set_brightness(led_brightness)
 
     botstate_hyst = Hysteresis(hold_time=0.1)
@@ -610,11 +610,11 @@ def main():
 
     CONTROL_PERIOD = 0.01
 
-    while script_activate_pin.is_active:
+    while script_activate_pin.is_active: #calibrate
         with pcb.lock:
             ir_snapshot = pcb.ir
             colours_snapshot = pcb.colours
-        if camera.yellow != [0,0,0,0]:
+        if camera.yellow != [0,0,0,0]: #calibrate goal colours
             goal_colour = 0 if 160 - camera.yellow[1] > 0 else 1
         elif camera.blue != [0,0,0,0]:
             goal_colour = 1 if 160 - camera.blue[1] > 0 else 0
@@ -628,7 +628,7 @@ def main():
         led_brightness = max(min(led_brightness,65535),0)
         pcb.set_brightness(led_brightness)
 
-        heading_offset = imu.heading
+        heading_offset = imu.heading #calibrate heading
         time.sleep(0.01)
 
     print("running")
@@ -637,27 +637,30 @@ def main():
     try:
         next_loop = time.monotonic()
         while True:
-            irx = 0
+            irx = 0 #reset variables
             iry = 0
             ball_distance_total = 0
             ball_distance_count = 0
             linex = 0
             liney = 0
 
-            with pcb.lock:
+            with pcb.lock: #pull variables from threads
                 ir_snapshot = pcb.ir
                 colours_snapshot = pcb.colours
             yellow = camera.yellow[:]
             blue = camera.blue[:]
 
             user_input = read_input()
-            #dribbler
+            #TEST: dribbler spd
             if user_input == "'": dribblerspd = 0
             if user_input == ",": dribblerspd = 5000000
             if user_input == ".": dribblerspd = 20000000
             if user_input == "p": dribblerspd = 100000000
             if user_input == "y": dribblerspd = 500000000
 
+#----------------------------------------------------------------------
+#            pause and unpause bot
+#----------------------------------------------------------------------
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
                     print("Paused")
@@ -670,11 +673,19 @@ def main():
                 x_robot = 0
                 y_robot = 0
                 rot = 0
+                directionlist = []
+                CameraToGoal.goalx_list = []
+                CameraToGoal.goaly_list = []
+                CameraToGoal.own_goalx_list = []
+                CameraToGoal.own_goaly_list = []
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
+                comms.my_state.update({"command": 1}) #tell goalie to get ball
 
                 with pcb.lock:
                     ir_snapshot = pcb.ir
                     colours_snapshot = pcb.colours
+                yellow = camera.yellow[:]
+                blue = camera.blue[:]
 
                 if yellow != [0,0,0,0]:
                     goal_colour = 0 if 160 - yellow[1] > 0 else 1
@@ -755,7 +766,7 @@ def main():
 #            determine states
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
-                raw_botstate = 0
+                raw_botstate = 0 if goalie_bot_state == 1 else 3
             elif (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
@@ -769,7 +780,7 @@ def main():
             if botstate == 0: # do not see ball
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 180] # align middle and go backwards #TUNE +30 to be near goals
+                desired_pos = [goalpos[0], goalpos[1] - 180] # go midfield
                 motors.motorspeed5 = 0
 
             elif botstate == 1: # shoot
@@ -791,7 +802,7 @@ def main():
                 if substate == 1:
                     comms.my_state.update({"command": 1}) #send goalie to get ball
                     desired_heading = 0
-                    desired_pos = [goalpos[0], goalpos[1] - 180] #TUNE: -180 to be about midfield
+                    desired_pos = [goalpos[0], goalpos[1] - 180]
                 elif substate == 2:
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
@@ -814,6 +825,12 @@ def main():
                     desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30] #TUNE: *30 to be reasonably behind ball in the extended direction of goal from ball
                 motors.motorspeed5 = 0
 
+            elif botstate == 3:
+                comms.my_state.update({"command": 1})
+                desired_heading = 0
+                desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards
+                motors.motorspeed5 = 0
+
 #----------------------------------------------------------------------
 #            line detection
 #----------------------------------------------------------------------
@@ -834,13 +851,13 @@ def main():
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight = base_spin * abs(heading_error) if heading_error != 0 else base_spin
+            spin_weight = base_spin * max(0.1,min(abs(heading_error),2)) if heading_error != 0 else base_spin
             if abs(heading_error) < 0.01:
                 rot = 0
             else:
                 rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160))) if botstate != 0 else round(ingoalspd * (1 + (abs(rot) / 160)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * ((100 - ball_distance) / 25)) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * (((abs(desired_pos[0]) + abs(desired_pos[1])) / 100) ** 2))
             if on_line:
                 maxspd = line_escape_speed
 

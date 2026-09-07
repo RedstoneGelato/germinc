@@ -104,7 +104,7 @@ class DetectionThread(threading.Thread):
             self.blue = self._merge_blobs(masks["blue"], 200)
             time.sleep(0.005)
 
-    def _merge_blobs(self, mask, min_area):
+    def _merge_blobs(self, mask, min_area): #merge multiple rect of same colour into 1
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         x_min = y_min = float('inf')
         x_max = y_max = 0
@@ -205,7 +205,7 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def _read_ir(self):
+    def _read_ir(self): #read ir sensors
         data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
 
         return [
@@ -216,7 +216,7 @@ class PCBThread(threading.Thread):
             for i in range(12)
         ]
 
-    def _read_colours(self):
+    def _read_colours(self): #read bottom colour sensors
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
 
         values = []
@@ -229,17 +229,13 @@ class PCBThread(threading.Thread):
 
     def set_brightness(self, value: float):
         """
-        Send brightness value to STM32.
-        Valid range: 0.0 to 65535.0 (matches TIM3 period).
-        Sends command 0x03 followed by 2 bytes (uint16, little-endian).
-        This matches the STM32 SlaveRxCpltCallback which expects
-        exactly 2 data bytes after the 0x03 command byte.
+        Send brightness value to STM32 to change underlight brightness
+        Valid range: 0.0 to 65535.0
+        Affects colour readings
         """
         val = int(max(0.0, min(65535.0, value)))
         lo  = val & 0xFF
         hi  = (val >> 8) & 0xFF
-        # write_i2c_block_data sends: START, ADDR+W, 0x03 (reg), lo, hi, STOP
-        # STM32 receives 0x03 first (1 byte), then queues receive of 2 more bytes
         self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
 
     def run(self):
@@ -259,7 +255,7 @@ class PCBThread(threading.Thread):
 
         self.bus.close()
 
-class MotorThread(threading.Thread):
+class MotorThread(threading.Thread): #setup motors with motor drivers
     def __init__(self):
         super().__init__()
         self.daemon = True
@@ -358,9 +354,9 @@ class TeammateLinkThread(threading.Thread): #comms between bots
         self.sock.bind(("", COMMS_PORT))
         self.sock.settimeout(0.02)
 
-        self.teammate_state = {}      # most recent info FROM the teammate
+        self.teammate_state = {} #most recent info from teammate
         self.teammate_last_seen = 0
-        self.my_state = {}              # what THIS robot wants to tell its teammate
+        self.my_state = {} #what robot wants to tell its teammate
     def run(self):
         last_send = 0
         while self.running:
@@ -378,8 +374,8 @@ class TeammateLinkThread(threading.Thread): #comms between bots
                 data, _ = self.sock.recvfrom(1024)
                 msg = json.loads(data.decode("utf-8"))
                 if (self.enabled and isinstance(msg, dict)
-                        and msg.get("team") == TEAM_ID # message from bot of the same team
-                        and msg.get("robot") != ROBOT_ID):   # ignore a possible echo of our own broadcast
+                        and msg.get("team") == TEAM_ID #message from bot of the same team
+                        and msg.get("robot") != ROBOT_ID): #ignore a possible echo of own broadcast
                     self.teammate_state = msg
                     self.teammate_last_seen = now
             except socket.timeout:
@@ -412,25 +408,25 @@ class Hysteresis:
     def update(self, raw_value):
         now = time.time()
 
-        if self.current is None:                          # first call - nothing to debounce yet
+        if self.current is None: #first call - nothing to debounce yet
             self.current = raw_value
             return self.current
 
-        if raw_value == self.current:                       # still agrees - clear any pending change
+        if raw_value == self.current: #still agrees - clear any pending change
             self._pending = None
             return self.current
 
-        if self.instant_enter and self.instant_enter(raw_value):
-            self.current = raw_value                         # safety case - commit with no delay
+        if self.instant_enter and self.instant_enter(raw_value): #instantly swap with no delay
+            self.current = raw_value
             self._pending = None
             return self.current
 
-        if raw_value != self._pending:                        # new candidate - start timing it
+        if raw_value != self._pending: #new candidate - start timing it
             self._pending = raw_value
             self._pending_since = now
             return self.current
 
-        if now - self._pending_since >= self.hold_time:         # held long enough - commit it
+        if now - self._pending_since >= self.hold_time: #held long enough - commit it
             self.current = raw_value
             self._pending = None
 
@@ -486,7 +482,7 @@ class GoalTracker: #camera to goal position
         own_goalpos = [np.mean(self.own_goalx_list), np.mean(self.own_goaly_list)] if self.own_goalx_list else [0, -200]
         return goalpos, own_goalpos
 
-def VelocityToMotor(xvel, yvel, rot, maxspd):
+def VelocityToMotor(xvel, yvel, rot, maxspd): #convert variables into specific motor speed values
     motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) - rot
     motor2 = xvel*math.cos(3*math.pi/4) + yvel*math.sin(3*math.pi/4) - rot
     motor3 = xvel*math.cos(5*math.pi/4) + yvel*math.sin(5*math.pi/4) - rot
@@ -506,7 +502,7 @@ def circular_mean(angles):
 def angdiff(a, b):
     return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
 
-def read_input():
+def read_input(): #gets terminal line input
     if select.select([sys.stdin], [], [], 0)[0]:
         return sys.stdin.readline().strip()
     return None
@@ -611,11 +607,11 @@ def main():
 
     CONTROL_PERIOD = 0.01
 
-    while script_activate_pin.is_active:
+    while script_activate_pin.is_active: #calibrate bot
         with pcb.lock:
             ir_snapshot = pcb.ir
             colours_snapshot = pcb.colours
-        if camera.yellow != [0,0,0,0]:
+        if camera.yellow != [0,0,0,0]: #calibrate which goal to shoot
             goal_colour = 0 if 160 - camera.yellow[1] > 0 else 1
         elif camera.blue != [0,0,0,0]:
             goal_colour = 1 if 160 - camera.blue[1] > 0 else 0
@@ -629,7 +625,7 @@ def main():
         led_brightness = max(min(led_brightness,65535),0)
         pcb.set_brightness(led_brightness)
 
-        heading_offset = imu.heading
+        heading_offset = imu.heading #calibrate heading
         time.sleep(0.01)
 
     print("running")
@@ -638,27 +634,30 @@ def main():
     try:
         next_loop = time.monotonic()
         while True:
-            irx = 0
+            irx = 0 #reset variables
             iry = 0
             ball_distance_total = 0
             ball_distance_count = 0
             linex = 0
             liney = 0
 
-            with pcb.lock:
+            with pcb.lock: #pull variables from sensors
                 ir_snapshot = pcb.ir
                 colours_snapshot = pcb.colours
             yellow = camera.yellow[:]
             blue = camera.blue[:]
 
             user_input = read_input()
-            #dribbler
+            #TEST: dribbler spd
             if user_input == "'": dribblerspd = 0
             if user_input == ",": dribblerspd = 5000000
             if user_input == ".": dribblerspd = 20000000
             if user_input == "p": dribblerspd = 100000000
             if user_input == "y": dribblerspd = 500000000
 
+#----------------------------------------------------------------------
+#            pause and unpause bot
+#----------------------------------------------------------------------
             if script_activate_pin.is_active: #paused bot
                 if robot_active:
                     print("Paused")
@@ -671,13 +670,20 @@ def main():
                 x_robot = 0
                 y_robot = 0
                 rot = 0
+                directionlist = []
+                CameraToGoal.goalx_list = []
+                CameraToGoal.goaly_list = []
+                CameraToGoal.own_goalx_list = []
+                CameraToGoal.own_goaly_list = []
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
-                with pcb.lock:
+                with pcb.lock: #pull variables from threads
                     ir_snapshot = pcb.ir
                     colours_snapshot = pcb.colours
+                yellow = camera.yellow[:]
+                blue = camera.blue[:]
 
-                if yellow != [0,0,0,0]:
+                if yellow != [0,0,0,0]: #calibrate goal colour
                     goal_colour = 0 if 160 - yellow[1] > 0 else 1
                 elif blue != [0,0,0,0]:
                     goal_colour = 1 if 160 - blue[1] > 0 else 0
@@ -691,7 +697,7 @@ def main():
                 led_brightness = max(min(led_brightness,65535),0)
                 pcb.set_brightness(led_brightness)
 
-                heading_offset = imu.heading
+                heading_offset = imu.heading #calibrate imu heading
 
                 time.sleep(0.02)
                 continue
@@ -730,7 +736,7 @@ def main():
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
 
-                ball_distance = ball_distance_total / ball_distance_count
+                ball_distance = ball_distance_total / ball_distance_count #average distance, 50-100
 
                 ir = [circular_mean(directionlist), ball_distance * 25]
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
@@ -738,7 +744,7 @@ def main():
                 ballpos = [0,0]
                 ir = [0,0]
 
-            compass = imu.heading - heading_offset
+            compass = imu.heading - heading_offset #bot heading
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
             goalpos, own_goalpos = CameraToGoal.update(goal_colour, yellow, blue)
@@ -746,10 +752,10 @@ def main():
 #----------------------------------------------------------------------
 #            comms from and to other bot
 #----------------------------------------------------------------------
-            teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
+            teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 #checks if the bots are still connected
             if isinstance(comms.teammate_state, dict) and teammate_fresh:
-                comms_command = comms.teammate_state.get("command") # 1 for go get ball, 0 for chill
-                attack_bot_state = comms.teammate_state.get("bot active") # 0 for bot off, 1 for bot on
+                comms_command = comms.teammate_state.get("command") #1 for go get ball, 0 for chill in goals
+                attack_bot_state = comms.teammate_state.get("bot active") #0 for bot off, 1 for bot on
             else:
                 comms_command = None
                 attack_bot_state = None
@@ -757,9 +763,11 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
+            if comms_command == 0: #signal from attack to chill
+                raw_botstate = 3
+            elif ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0
-            elif attack_bot_state == 0 or attack_bot_state is None: # attack bot is off
+            elif attack_bot_state == 0 or attack_bot_state is None: #attack bot is off
                 raw_botstate = 1
             elif comms_command == 1 or (ball_distance > 50 and own_goalpos != [0,-200]): #signal from other bot to go get ball
                 raw_botstate = 2
@@ -771,18 +779,18 @@ def main():
 #----------------------------------------------------------------------
 #            state machine
 #----------------------------------------------------------------------
-            if botstate == 0: # do not see ball
+            if botstate == 0: #do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 180] # align middle and go backwards #TUNE +20 to be inside goals
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 180] # align middle and go backwards
                 motors.motorspeed5 = 0
 
-            elif botstate == 1: # go for ball then score
+            elif botstate == 1: #go for ball then score
                 if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
-                    raw_substate1 = 1  # ball in bcz
+                    raw_substate1 = 1  #ball in bcz
                 elif ballpos[1] < 40:
-                    raw_substate1 = 2 if ir[1] < 51 else 3  # far vs near backup
+                    raw_substate1 = 2 if ir[1] < 51 else 3  #far vs near backup
                 else:
-                    raw_substate1 = 4  # pathfind to ball
+                    raw_substate1 = 4  #pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
 
                 if substate1 == 1:
@@ -836,7 +844,7 @@ def main():
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards #TUNE +20 to be inside goals
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
                 motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
@@ -844,7 +852,7 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot):
                 if value > line_threshold:
-                    angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
+                    angle = i * (math.pi / 16) + math.pi / 2 #colour1 = front, spread anticlockwise
                     excess = value - line_threshold
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
@@ -855,20 +863,21 @@ def main():
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
 
             #DEBUG
-            print(botstate)
+            print(f"botstate={botstate}  on line={on_line}")
+            print(f"ballpos={ballpos}  goalpos={goalpos}  own goalpos={own_goalpos}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight = base_spin * abs(heading_error) if heading_error != 0 else base_spin
+            spin_weight = base_spin * max(0.1,min(abs(heading_error),2)) if heading_error != 0 else base_spin
             if abs(heading_error) < 0.01:
                 rot = 0
             else:
                 rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160))) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)))
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * ((100 - ball_distance) / 25)) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * (((abs(desired_pos[0]) + abs(desired_pos[1])) / 100) ** 2))
             if on_line:
                 maxspd = line_escape_speed
 
