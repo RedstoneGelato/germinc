@@ -740,13 +740,15 @@ def main():
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
 
-                ball_distance = ball_distance_total / ball_distance_count
+                ball_distance = ball_distance_total / ball_distance_count #average distance
+                ball_distance = max(min(ball_distance, 99), 1)
 
                 ir = [circular_mean(directionlist), ball_distance * 25]
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
             else:
                 ballpos = [0,0]
                 ir = [0,0]
+                ball_distance = 49
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
