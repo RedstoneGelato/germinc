@@ -33,11 +33,11 @@ log = logging.getLogger("robot_stop")
 # Same I2C addresses as MotorThread in main.py — keep these two files
 # in sync if the wiring/addresses ever change.
 MOTOR_ADDRESSES = {
-    "motor1": 28,
-    "motor2": 27,
-    "motor3": 25,
-    "motor4": 26,
-    "motor5": 32,  # dribbler
+    "motor1": 26,
+    "motor2": 32,
+    "motor3": 28,
+    "motor4": 27,
+    "motor5": 25,  # dribbler
 }
 
 PCB_I2C_ADDR = 0x64

@@ -1,6 +1,6 @@
 Yet to add or implement or do
-    motor driver i2c numbers for attack
     motor calibration numbers for attack
+    dribbler motor stuff for attack
 
 Test numbers or other already implemented thingys
     test camera and tune the numbers where it says tune in code
