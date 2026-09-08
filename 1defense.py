@@ -210,8 +210,8 @@ class PCBThread(threading.Thread):
 
         return [
             {
-                'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
-                'distance': data[i * 2 + 1] if data[i * 2 + 1] >= 2 else 0
+                'detected': data[i * 2] if data[i * 2 + 1] != 0 else 0,
+                'distance': data[i * 2 + 1]
             }
             for i in range(12)
         ]
@@ -709,11 +709,12 @@ def main():
 #            ir to ball pos, compass, camera to goal pos
 #----------------------------------------------------------------------
             for i, sensor in enumerate(ir_snapshot):
-                if sensor["detected"]:
-                    angle = i * math.pi / 6 + math.pi / 2
+                if sensor["detected"] == 1 and sensor["distance"] != 0:
+                    if sensor["distance"] >= 2:
+                        angle = i * math.pi / 6 + math.pi / 2
 
-                    irx += math.cos(angle)
-                    iry += math.sin(angle)
+                        irx += math.cos(angle)
+                        iry += math.sin(angle)
 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
@@ -749,6 +750,9 @@ def main():
                 ballpos = [0,0] #doesnt see ball
                 ir = [0,0]
                 ball_distance = 300
+
+                #DEBUG
+                testballdistance = 0
 
             compass = imu.heading - heading_offset #bot heading
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -882,7 +886,7 @@ def main():
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
             print(f"goalpos={goalpos}  own goalpos={own_goalpos}")
-            print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(goalpos))}")
+            print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(*goalpos))}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
