@@ -7,4 +7,5 @@ Test numbers or other already implemented thingys
 
     test comms
 
-    test ir reading numbers
+    test new ir reading numbers and ballpos and distance numbers where used in code
+    map ir distance to the same as camera distance

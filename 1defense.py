@@ -736,15 +736,19 @@ def main():
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
 
-                ball_distance = ball_distance_total / ball_distance_count #average distance
+                #DEBUG
+                testballdistance = ball_distance_total / ball_distance_count
+                
+                ball_distance = (ball_distance_total * 25) / ball_distance_count #average strength
                 ball_distance = max(min(ball_distance, 99), 1)
+                ball_distance = ((100 - ball_distance) * 0.3) ** 2 #strength to distance
 
-                ir = [circular_mean(directionlist), ball_distance * 25]
+                ir = [circular_mean(directionlist), ball_distance] #direction, distance
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
             else:
-                ballpos = [0,0]
+                ballpos = [0,0] #doesnt see ball
                 ir = [0,0]
-                ball_distance = 49
+                ball_distance = 300
 
             compass = imu.heading - heading_offset #bot heading
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -771,7 +775,7 @@ def main():
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state is None: #attack bot is off
                 raw_botstate = 1
-            elif comms_command == 1 or (ball_distance > 50 and own_goalpos != [0,-200]): #signal from other bot to go get ball
+            elif comms_command == 1 or (ball_distance < 180 and own_goalpos != [0,-200]): #signal from other bot to go get ball #TUNE: 180 to be not far from bot
                 raw_botstate = 2
             else: #chill in goals
                 raw_botstate = 3
@@ -783,21 +787,22 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: #do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 180] # align middle and go backwards
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
                 motors.motorspeed5 = 0
 
             elif botstate == 1: #go for ball then score
-                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
+                if (ball_distance < 80 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4: #TUNE: in bcz condition
                     raw_substate1 = 1  #ball in bcz
-                elif ballpos[1] < 40:
-                    raw_substate1 = 2 if ir[1] < 51 else 3  #far vs near backup
+                elif ballpos[1] < 40: #TUNE: 40 to be in the same line as bot horizontally
+                    raw_substate1 = 2 if ball_distance > 200 else 3  #far vs near backup #TUNE: 200 to be far
                 else:
                     raw_substate1 = 4  #pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
 
                 if substate1 == 1:
                     motors.motorspeed5 = dribblerspd
-                    desired_heading = 0
+                    desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = goalpos
                 elif substate1 == 2:
                     motors.motorspeed5 = 0
@@ -806,20 +811,21 @@ def main():
                 elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 40:
+                    if abs(ballpos[0]) < 40: #TUNE: 40 to be in the same vertical line as bot
                         desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
-                    desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 30]
+                    desired_heading = ir[0] - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_pos = ballpos
 
             elif botstate == 2: # go for ball then pass
-                if (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4:
+                if (ball_distance < 80 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4:
                     raw_substate2 = 1  # ball in bcz
                 elif ballpos[1] < 40:
-                    raw_substate2 = 2 if ir[1] < 51 else 3  # far vs near backup
+                    raw_substate2 = 2 if ball_distance > 200 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
                 substate2 = substate2_hyst.update(raw_substate2)
@@ -827,7 +833,7 @@ def main():
                 if substate2 == 1:
                     motors.motorspeed5 = dribblerspd
                     desired_heading = 0
-                    desired_pos = [0,200]
+                    desired_pos = goalpos
                 elif substate2 == 2:
                     motors.motorspeed5 = 0
                     desired_heading = 0
@@ -841,12 +847,21 @@ def main():
                         desired_pos = [0, -200]
                 elif substate2 == 4:
                     motors.motorspeed5 = 0
-                    desired_heading = 0
-                    desired_pos = [ballpos[0], ballpos[1] - 30]
+
+                    A = np.array([goalpos[0], goalpos[1]])
+                    B = np.array([ballpos[0], ballpos[1]])
+                    C = np.array([0, 0])
+                    AB = B - A
+                    denom = np.dot(AB, AB)
+                    t = np.dot(C - A, AB) / denom if denom > 1e-6 else 0
+
+                    desired_pos = A + t * AB #shortest path to point of interception between ball and goal
+                    desired_heading = ir[0] - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
                 motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
@@ -866,7 +881,8 @@ def main():
 
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
-            print(f"ballpos={ballpos}  goalpos={goalpos}  own goalpos={own_goalpos}")
+            print(f"goalpos={goalpos}  own goalpos={own_goalpos}")
+            print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(goalpos))}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
@@ -879,7 +895,10 @@ def main():
             else:
                 rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * ((100 - ball_distance) / 25)) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * (((abs(desired_pos[0]) + abs(desired_pos[1])) / 100) ** 2))
+            spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
+            spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
+            spd_multi = max(min(spd_multi,1),0)
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
             if on_line:
                 maxspd = line_escape_speed
 

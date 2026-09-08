@@ -740,15 +740,16 @@ def main():
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
 
-                ball_distance = ball_distance_total / ball_distance_count #average distance
+                ball_distance = (ball_distance_total * 25) / ball_distance_count #average distance
                 ball_distance = max(min(ball_distance, 99), 1)
+                ball_distance = ((100 - ball_distance) * 0.3) ** 2
 
-                ir = [circular_mean(directionlist), ball_distance * 25]
+                ir = [circular_mean(directionlist), ball_distance] #direction, distance
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
             else:
                 ballpos = [0,0]
                 ir = [0,0]
-                ball_distance = 49
+                ball_distance = 300
 
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -769,7 +770,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0 if goalie_bot_state == 1 else 3
-            elif (ir[1] >= 62 and ballpos[1] > 10 and abs(ballpos[0]) < 30) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone
+            elif (ball_distance < 80 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone #TUNE: distance and ballpos numbers
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -793,10 +794,10 @@ def main():
                 motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
-                if ballpos[1] < 0 and goalpos[1] < 200 and ir[1] < 51 and goalie_bot_state == 1: #tell goalie to get ball
+                if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 200 and goalie_bot_state == 1: #tell goalie to get ball #TUNE: 200 to be far
                     raw_substate = 1
                 elif ballpos[1] < 40:
-                    raw_substate = 2 if ir[1] < 51 else 3  # far vs near backup
+                    raw_substate = 2 if ball_distance > 200 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
                 substate = substate_hyst.update(raw_substate)
@@ -821,16 +822,15 @@ def main():
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
-                    goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0])
-                    desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
+                    desired_heading = ir[0] - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30] #TUNE: *30 to be reasonably behind ball in the extended direction of goal from ball
+                    desired_pos = ballpos
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
-                desired_pos = [goalpos[0], goalpos[1] - 80] # align middle and go backwards
+                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
                 motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
@@ -859,7 +859,10 @@ def main():
             else:
                 rot = spin_weight * heading_error
 
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * ((100 - ball_distance) / 25)) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * (((abs(desired_pos[0]) + abs(desired_pos[1])) / 100) ** 2))
+            spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
+            spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
+            spd_multi = max(min(spd_multi,1),0)
+            maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
             if on_line:
                 maxspd = line_escape_speed
 
