@@ -434,12 +434,51 @@ class Hysteresis:
             self.current = raw_value
             self._pending = None
 
+        return self.current
+
     def reset(self): #clear state so that unpause doesnt jitter
         self.current = None
         self._pending = None
         self._pending_since = None
 
-        return self.current
+class MotorSequence:
+    """
+    Open-loop, hand-timed sequence of robot-relative moves, for scripted
+    maneuvers (fast flicks, spin-releases)
+    """
+    def __init__(self, steps, break_condition):
+        self.steps = steps
+        self.break_condition = break_condition
+        self.active = False
+        self.step_index = 0
+        self.step_start = None
+
+    def start(self):
+        self.active = True
+        self.step_index = 0
+        self.step_start = time.monotonic()
+
+    def stop(self):
+        self.active = False
+        self.step_index = 0
+        self.step_start = None
+
+    def tick(self):
+        if self.break_condition():
+            self.stop()
+            return ("break", None)
+
+        duration, xvel, yvel, rot, maxspd, dribblerspd = self.steps[self.step_index]
+        if time.monotonic() - self.step_start >= duration:
+            self.step_index += 1
+            self.step_start = time.monotonic()
+            if self.step_index >= len(self.steps):
+                self.stop()
+                return ("done", None)
+            duration, xvel, yvel, rot, maxspd, dribblerspd = self.steps[self.step_index]
+
+        m1, m2, m3, m4 = VelocityToMotor(xvel, yvel, rot, maxspd)
+        return ("running", (m1, m2, m3, m4, dribblerspd))
 
 class GoalTracker: #camera to goal position
     def __init__(self, history=10, tolerance=60, lost_limit=40):
@@ -571,6 +610,19 @@ def main():
     comms = TeammateLinkThread()
     comms.start()
     CameraToGoal = GoalTracker()
+    flick_sequence = MotorSequence(
+        steps=[
+            # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
+            (0.03,        0,   0,     0,           0,             0),   # cut dribbler an instant before the snap
+            (0.06,        0,   0,   900000000,  500000000,        0),   # fast in-place snap-rotate to whip the ball
+            (0.04,        0, 300,     0,        300000000,        0),   # short forward pop to help release/follow-through
+        ],
+        break_condition=lambda: (
+            script_activate_pin.is_active #bot paused
+            or ballpos == [0, 0] #lost the ball mid-sequence
+            or on_line #crossing the line
+        ),
+    )
 
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready and pcb.ready):
@@ -672,15 +724,16 @@ def main():
                     robot_active = False
                     botstate_hyst.reset()
                     substate_hyst.reset()
+                    flick_sequence.stop()
                     x_robot = 0
-                    y_robot = 0
+                    y_robot = 0 
                     rot = 0
                     directionlist = []
                     CameraToGoal.goalx_list = []
                     CameraToGoal.goaly_list = []
                     CameraToGoal.own_goalx_list = []
                     CameraToGoal.own_goaly_list = []
-                    
+
                 motors.motorspeed1 = 0
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
@@ -766,6 +819,17 @@ def main():
             goalpos, own_goalpos = CameraToGoal.update(goal_colour, yellow, blue)
 
 #----------------------------------------------------------------------
+#            line detection
+#----------------------------------------------------------------------
+            for i, value in enumerate(colours_snapshot):
+                if value > line_threshold:
+                    angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
+                    excess = value - line_threshold
+                    linex += math.cos(angle) * excess
+                    liney += math.sin(angle) * excess
+            on_line = (linex != 0 or liney != 0)
+
+#----------------------------------------------------------------------
 #            comms from and to other bot
 #----------------------------------------------------------------------
             teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
@@ -800,7 +864,12 @@ def main():
                 desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                 desired_pos = goalpos
-                motors.motorspeed5 = dribblerspd
+
+                aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
+                if not flick_sequence.active and abs(aim_error) < 0.02:  #TUNE: 0.02rad angle
+                    flick_sequence.start()
+                else:
+                    motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
                 if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 200 and goalie_bot_state == 1: #tell goalie to get ball #TUNE: 200 to be far
@@ -843,47 +912,42 @@ def main():
                 motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------
-#            line detection
-#----------------------------------------------------------------------
-            for i, value in enumerate(colours_snapshot):
-                if value > line_threshold:
-                    angle = i * (math.pi / 16) + math.pi / 2   # colour1 = front, spread anticlockwise
-                    excess = value - line_threshold
-                    linex += math.cos(angle) * excess
-                    liney += math.sin(angle) * excess
-
-            on_line = (linex != 0 or liney != 0)
-            if on_line:
-                mag = math.hypot(linex, liney)
-                desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
-
-#----------------------------------------------------------------------
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
-            heading_error = desired_heading - compass
-            heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-            spin_weight = base_spin * max(0.1,min(abs(heading_error),2)) if heading_error != 0 else base_spin
-            if abs(heading_error) < 0.01:
-                rot = 0
-            else:
-                rot = spin_weight * heading_error
+            sequence_ran_this_tick = False
+            if flick_sequence.active:
+                status, cmds = flick_sequence.tick()
+                if status == "running":
+                    motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds
+                    sequence_ran_this_tick = True
 
-            spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
-            spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
-            spd_multi = max(min(spd_multi,1),0)
-            maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
-            if on_line:
-                maxspd = line_escape_speed
+            if not sequence_ran_this_tick:
+                heading_error = desired_heading - compass
+                heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+                spin_weight = base_spin * max(0.1,min(abs(heading_error),2)) if heading_error != 0 else base_spin
+                if abs(heading_error) < 0.01:
+                    rot = 0
+                else:
+                    rot = spin_weight * heading_error
 
-            xvel = desired_pos[0]
-            yvel = desired_pos[1]
-            x_field = -yvel
-            y_field = xvel
-            angle = -compass
-            x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
-            y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
+                spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
+                spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
+                spd_multi = max(min(spd_multi,1),0)
+                maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
+                if on_line:
+                    mag = math.hypot(linex, liney)
+                    desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+                    maxspd = line_escape_speed
 
-            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+                xvel = desired_pos[0]
+                yvel = desired_pos[1]
+                x_field = -yvel
+                y_field = xvel
+                angle = -compass
+                x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
+                y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
+
+                motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
 
             # Maintain a fixed 100 Hz loop
             next_loop += CONTROL_PERIOD

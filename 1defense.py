@@ -430,12 +430,12 @@ class Hysteresis:
             self.current = raw_value
             self._pending = None
 
+        return self.current
+
     def reset(self): #clear state so that unpause doesnt jitter
         self.current = None
         self._pending = None
         self._pending_since = None
-
-        return self.current
 
 class GoalTracker: #camera to goal position
     def __init__(self, history=10, tolerance=60, lost_limit=40):
@@ -678,7 +678,7 @@ def main():
                     CameraToGoal.goaly_list = []
                     CameraToGoal.own_goalx_list = []
                     CameraToGoal.own_goaly_list = []
-                    
+
                 motors.motorspeed1 = 0
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
@@ -767,6 +767,17 @@ def main():
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
             goalpos, own_goalpos = CameraToGoal.update(goal_colour, yellow, blue)
+
+#----------------------------------------------------------------------
+#            line detection
+#----------------------------------------------------------------------
+            for i, value in enumerate(colours_snapshot):
+                if value > line_threshold:
+                    angle = i * (math.pi / 16) + math.pi / 2 #colour1 = front, spread anticlockwise
+                    excess = value - line_threshold
+                    linex += math.cos(angle) * excess
+                    liney += math.sin(angle) * excess
+            on_line = (linex != 0 or liney != 0)
 
 #----------------------------------------------------------------------
 #            comms from and to other bot
@@ -877,21 +888,6 @@ def main():
                 desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
                 motors.motorspeed5 = 0
 
-#----------------------------------------------------------------------
-#            line detection
-#----------------------------------------------------------------------
-            for i, value in enumerate(colours_snapshot):
-                if value > line_threshold:
-                    angle = i * (math.pi / 16) + math.pi / 2 #colour1 = front, spread anticlockwise
-                    excess = value - line_threshold
-                    linex += math.cos(angle) * excess
-                    liney += math.sin(angle) * excess
-
-            on_line = (linex != 0 or liney != 0)
-            if on_line:
-                mag = math.hypot(linex, liney)
-                desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
-
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
             print(f"goalpos={goalpos}  own goalpos={own_goalpos}")
@@ -913,6 +909,8 @@ def main():
             spd_multi = max(min(spd_multi,1),0)
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
             if on_line:
+                mag = math.hypot(linex, liney)
+                desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
                 maxspd = line_escape_speed
 
             xvel = desired_pos[0]
