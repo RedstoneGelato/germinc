@@ -430,6 +430,11 @@ class Hysteresis:
             self.current = raw_value
             self._pending = None
 
+    def reset(self): #clear state so that unpause doesnt jitter
+        self.current = None
+        self._pending = None
+        self._pending_since = None
+
         return self.current
 
 class GoalTracker: #camera to goal position
@@ -662,19 +667,23 @@ def main():
                 if robot_active:
                     print("Paused")
                     robot_active = False
+                    botstate_hyst.reset()
+                    substate1_hyst.reset()
+                    substate2_hyst.reset()
+                    x_robot = 0
+                    y_robot = 0
+                    rot = 0
+                    directionlist = []
+                    CameraToGoal.goalx_list = []
+                    CameraToGoal.goaly_list = []
+                    CameraToGoal.own_goalx_list = []
+                    CameraToGoal.own_goaly_list = []
+                    
                 motors.motorspeed1 = 0
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
                 motors.motorspeed5 = 0
-                x_robot = 0
-                y_robot = 0
-                rot = 0
-                directionlist = []
-                CameraToGoal.goalx_list = []
-                CameraToGoal.goaly_list = []
-                CameraToGoal.own_goalx_list = []
-                CameraToGoal.own_goaly_list = []
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock: #pull variables from threads
@@ -713,8 +722,8 @@ def main():
                     if sensor["distance"] >= 2:
                         angle = i * math.pi / 6 + math.pi / 2
 
-                        irx += math.cos(angle)
-                        iry += math.sin(angle)
+                        irx += math.cos(angle) * (sensor["distance"] - 1)
+                        iry += math.sin(angle) * (sensor["distance"] - 1)
 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
