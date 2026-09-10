@@ -661,11 +661,11 @@ def main():
             if user_input == "5": basespd = 150000000
             if user_input == "6": basespd = 300000000
             #TEST: dribbler spd
-            if user_input == "'": dribblerspd = 0
-            if user_input == ",": dribblerspd = 5000000
-            if user_input == ".": dribblerspd = 20000000
-            if user_input == "p": dribblerspd = 100000000
-            if user_input == "y": dribblerspd = 500000000
+            if user_input == "'": motors.motorspeed5 = 0
+            if user_input == ",": motors.motorspeed5 = 5000000
+            if user_input == ".": motors.motorspeed5 = 20000000
+            if user_input == "p": motors.motorspeed5 = 100000000
+            if user_input == "y": motors.motorspeed5 = 500000000
 
 #----------------------------------------------------------------------
 #            pause and unpause bot
@@ -690,7 +690,6 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                motors.motorspeed5 = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock: #pull variables from threads
