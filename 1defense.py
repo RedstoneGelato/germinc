@@ -250,6 +250,7 @@ class PCBThread(threading.Thread):
             except IOError as e:
                 print(f"PCB I2C error: {e}")
                 self.ready = False
+            time.sleep(0.01)
 
         self.bus.close()
 
@@ -896,6 +897,7 @@ def main():
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
             print(f"goalpos={goalpos}  own goalpos={own_goalpos}  ballpos={ballpos}")
+            print(ir_snapshot)
             print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(goalpos[0],goalpos[1]))}")
 
 #----------------------------------------------------------------------
