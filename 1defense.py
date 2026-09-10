@@ -206,7 +206,6 @@ class PCBThread(threading.Thread):
 
     def _read_ir(self): #read ir sensors
         data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
-        print("RAW IR:", list(data))
 
         return [
             {
@@ -896,9 +895,7 @@ def main():
 
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
-            print(ir_snapshot)
-            print(ballpos)
-            print(f"goalpos={goalpos}  own goalpos={own_goalpos}")
+            print(f"goalpos={goalpos}  own goalpos={own_goalpos}  ballpos={ballpos}")
             print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(goalpos[0],goalpos[1]))}")
 
 #----------------------------------------------------------------------
