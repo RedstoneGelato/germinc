@@ -826,8 +826,7 @@ def main():
 
                 if substate1 == 1:
                     motors.motorspeed5 = dribblerspd
-                    desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_heading = 0
                     desired_pos = goalpos
                 elif substate1 == 2:
                     motors.motorspeed5 = 0
@@ -842,7 +841,7 @@ def main():
                         desired_pos = [0, -200]
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
-                    desired_heading = ir[0] - math.pi/2
+                    desired_heading = 0
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = ballpos
 
