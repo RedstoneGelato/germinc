@@ -842,8 +842,7 @@ def main():
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = ballpos
+                    desired_pos = [ballpos[0],ballpos[1] - 50]
 
             elif botstate == 2: # go for ball then pass
                 if (ball_distance < 80 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4:
