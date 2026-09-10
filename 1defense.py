@@ -207,6 +207,7 @@ class PCBThread(threading.Thread):
 
     def _read_ir(self): #read ir sensors
         data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
+        print("RAW IR:", list(data))
 
         return [
             {
@@ -242,9 +243,8 @@ class PCBThread(threading.Thread):
     def run(self):
         while self.running:
             try:
-                new_colours = self._read_colours()
-                time.sleep(0.01)
                 new_ir = self._read_ir()
+                new_colours = self._read_colours()
                 with self.lock:
                     self.ir = new_ir
                     self.colours = new_colours
