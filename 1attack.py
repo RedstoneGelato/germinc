@@ -729,11 +729,11 @@ def main():
             if user_input == "5": basespd = 150000000
             if user_input == "6": basespd = 300000000
             #TEST: dribbler spd
-            if user_input == "'": dribblerspd = 0
-            if user_input == ",": dribblerspd = 5000000
-            if user_input == ".": dribblerspd = 20000000
-            if user_input == "p": dribblerspd = 100000000
-            if user_input == "y": dribblerspd = 500000000
+            if user_input == "'": motors.motorspeed5 = 0
+            if user_input == ",": motors.motorspeed5 = 5000000
+            if user_input == ".": motors.motorspeed5 = 20000000
+            if user_input == "p": motors.motorspeed5 = 100000000
+            if user_input == "y": motors.motorspeed5 = 500000000
             #TEST: flick
             if user_input == "z" and not flick_sequence_left.active and not flick_sequence_right.active: flick_sequence_right.start()
             if user_input == "v" and not flick_sequence_left.active and not flick_sequence_right.active: flick_sequence_left.start()
