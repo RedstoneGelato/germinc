@@ -623,7 +623,7 @@ def main():
         else:
             pass
 
-        if max(colours_snapshot) - 500 > line_threshold: # calibrate pcb leds
+        if max(colours_snapshot) - 3000 > line_threshold: # calibrate pcb leds
             led_brightness += 50
         elif max(colours_snapshot) < line_threshold:
             led_brightness -= 50
@@ -706,7 +706,7 @@ def main():
                 else:
                     pass
 
-                if max(colours_snapshot) - 500 > line_threshold: # calibrate pcb leds
+                if max(colours_snapshot) - 3000 > line_threshold: # calibrate pcb leds
                     led_brightness += 50
                 elif max(colours_snapshot) < line_threshold:
                     led_brightness -= 50
