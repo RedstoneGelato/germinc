@@ -897,10 +897,10 @@ def main():
 
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
-            print(colours_snapshot)
-            print(led_brightness)
+            print(ir_snapshot)
+            print(ballpos)
             print(f"goalpos={goalpos}  own goalpos={own_goalpos}")
-            print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(*goalpos))}")
+            print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(goalpos[0],goalpos[1]))}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
