@@ -653,6 +653,13 @@ def main():
             blue = camera.blue[:]
 
             user_input = read_input()
+            # TESTING speed
+            if user_input == "1": basespd = 0
+            if user_input == "2": basespd = 5000000
+            if user_input == "3": basespd = 50000000
+            if user_input == "4": basespd = 80000000
+            if user_input == "5": basespd = 150000000
+            if user_input == "6": basespd = 300000000
             #TEST: dribbler spd
             if user_input == "'": dribblerspd = 0
             if user_input == ",": dribblerspd = 5000000

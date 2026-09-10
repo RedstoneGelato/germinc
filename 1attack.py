@@ -610,12 +610,27 @@ def main():
     comms = TeammateLinkThread()
     comms.start()
     CameraToGoal = GoalTracker()
-    flick_sequence = MotorSequence(
+    flick_sequence_left = MotorSequence(
         steps=[
             # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
-            (0.03,        0,   0,     0,           0,             0),   # cut dribbler an instant before the snap
-            (0.06,        0,   0,   900000000,  500000000,        0),   # fast in-place snap-rotate to whip the ball
-            (0.04,        0, 300,     0,        300000000,        0),   # short forward pop to help release/follow-through
+            (0.03,        100,   0,     100,    30000000,        500000000), #turn around
+            (0.03,       -100,   0,     100,    30000000,        500000000),
+            (0.06,        0,   0,   900000000,  50000000,        500000000), #fast in-place snap-rotate to whip the ball
+            (0.04,        0, 300,     0,        30000000,        0), #short forward pop to help release/follow-through
+        ],
+        break_condition=lambda: (
+            script_activate_pin.is_active #bot paused
+            or ballpos == [0, 0] #lost the ball mid-sequence
+            or on_line #crossing the line
+        ),
+    )
+    flick_sequence_right = MotorSequence(
+        steps=[
+            # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
+            (0.03,       -100,   0,    -100,    30000000,        500000000), #turn around
+            (0.03,        100,   0,    -100,    30000000,        500000000),
+            (0.06,        0,   0,  -900000000,  50000000,        500000000), #fast in-place snap-rotate to whip the ball
+            (0.04,        0, 300,     0,        30000000,        0), #short forward pop to help release/follow-through
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -634,7 +649,7 @@ def main():
     xvel = 0
     yvel = 0
     heading_error = 0
-    rot = 0
+    rot = 0 #positive ccw, negative cw
     heading_offset = imu.heading
     desired_heading = 0
 
@@ -708,12 +723,22 @@ def main():
             blue = camera.blue[:]
 
             user_input = read_input()
+            # TESTING speed
+            if user_input == "1": basespd = 0
+            if user_input == "2": basespd = 5000000
+            if user_input == "3": basespd = 50000000
+            if user_input == "4": basespd = 80000000
+            if user_input == "5": basespd = 150000000
+            if user_input == "6": basespd = 300000000
             #TEST: dribbler spd
             if user_input == "'": dribblerspd = 0
             if user_input == ",": dribblerspd = 5000000
             if user_input == ".": dribblerspd = 20000000
             if user_input == "p": dribblerspd = 100000000
             if user_input == "y": dribblerspd = 500000000
+            #TEST: flick
+            if user_input == "z" and not flick_sequence_left.active and not flick_sequence_right.active: flick_sequence_right.start()
+            if user_input == "v" and not flick_sequence_left.active and not flick_sequence_right.active: flick_sequence_left.start()
 
 #----------------------------------------------------------------------
 #            pause and unpause bot
@@ -724,7 +749,8 @@ def main():
                     robot_active = False
                     botstate_hyst.reset()
                     substate_hyst.reset()
-                    flick_sequence.stop()
+                    flick_sequence_left.stop()
+                    flick_sequence_right.stop()
                     x_robot = 0
                     y_robot = 0 
                     rot = 0
@@ -866,8 +892,8 @@ def main():
                 desired_pos = goalpos
 
                 aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
-                if not flick_sequence.active and abs(aim_error) < 0.02:  #TUNE: 0.02rad angle
-                    flick_sequence.start()
+                if not flick_sequence_left.active and not flick_sequence_right.active and abs(aim_error) < 0.02 and abs(math.hypot(goalpos[0],goalpos[1])) > 100:  #TUNE: 0.02rad angle, 100 distance far
+                    flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
 
@@ -915,8 +941,13 @@ def main():
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
             sequence_ran_this_tick = False
-            if flick_sequence.active:
-                status, cmds = flick_sequence.tick()
+            if flick_sequence_left.active:
+                status, cmds = flick_sequence_left.tick()
+                if status == "running":
+                    motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds
+                    sequence_ran_this_tick = True
+            elif flick_sequence_right.active:
+                status, cmds = flick_sequence_right.tick()
                 if status == "running":
                     motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds
                     sequence_ran_this_tick = True
