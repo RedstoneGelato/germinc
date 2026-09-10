@@ -818,7 +818,7 @@ def main():
             elif botstate == 1: #go for ball then score
                 if (ball_distance < 120 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4:
                     raw_substate1 = 1  #ball in bcz
-                elif ballpos[1] < 80:
+                elif ballpos[1] < 50:
                     raw_substate1 = 2 if ball_distance > 200 else 3  #far vs near backup #TUNE: 200 to be far
                 else:
                     raw_substate1 = 4  #pathfind to ball
