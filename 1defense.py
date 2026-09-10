@@ -129,7 +129,7 @@ class IMUThread(threading.Thread):
         self.daemon = True
         self.running = True
 
-        self.i2c = busio.I2C(board.SCL, board.SDA, frequency = 400000)
+        self.i2c = busio.I2C(board.SCL, board.SDA)
         self.imu = BNO08X_I2C(self.i2c)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
 
