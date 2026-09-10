@@ -615,7 +615,6 @@ def main():
             # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
             (0.1,        0,   0,  -10000,     100000000,        500000000), #turn around
             (0.06,        0,   0,   10000,     500000000,        500000000), #fast in-place snap-rotate to whip the ball
-            (0.05,        0, 300,     0,       100000000,        0), #short forward pop to help release/follow-through
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -628,7 +627,6 @@ def main():
             # (duration, xvel, yvel,   rot,        maxspd,      dribblerspd)  -- all TUNE
             (0.1,       -100,   0,   10000,    100000000,        500000000), #turn around
             (0.06,        0,   0,    -10000,     500000000,        500000000), #fast in-place snap-rotate to whip the ball
-            (0.05,        0, 300,     0,        100000000,        0), #short forward pop to help release/follow-through
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -801,8 +799,8 @@ def main():
                     if sensor["distance"] >= 2:
                         angle = i * math.pi / 6 + math.pi / 2
 
-                        irx += math.cos(angle) * (sensor["distance"] - 1)
-                        iry += math.sin(angle) * (sensor["distance"] - 1)
+                        irx += math.cos(angle)
+                        iry += math.sin(angle)
 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
@@ -866,7 +864,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0 if goalie_bot_state == 1 else 3
-            elif (ball_distance < 170 and ballpos[1] > 0 and abs(ballpos[0]) < 60 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone #TUNE: distance and ballpos numbers
+            elif (ball_distance < 120 and ballpos[1] > 0 and abs(ballpos[0]) < 40 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4 or (ballpos[1] < 160 and botstate == 1): # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -895,9 +893,9 @@ def main():
                     motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
-                if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 200 and goalie_bot_state == 1: #tell goalie to get ball #TUNE: 200 to be far
+                if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 220 and goalie_bot_state == 1: #tell goalie to get ball #TUNE: 200 to be far
                     raw_substate = 1
-                elif ballpos[1] < 40:
+                elif (ballpos[1] < 60 and (substate == 1 or substate == 4)) or (ballpos[1] < 80):
                     raw_substate = 2 if ball_distance > 200 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
@@ -916,22 +914,28 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 40:
+                    if abs(ballpos[0]) < 60:
                         desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
-                    desired_heading = ir[0] - math.pi/2
+                    goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0])
+                    desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = ballpos
+                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30] #TUNE: *30 to be reasonably behind ball in the extended direction of goal from ball
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 80] # align middle and go backwards
+                if own_goalpos != [0,-200]: #align middle and go backwards
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100]
+                    ingoalspd = 10000000
+                else:
+                    desired_pos = [goalpos[0], -200]
+                    ingoalspd = basespd
                 motors.motorspeed5 = 0
 
 #----------------------------------------------------------------------

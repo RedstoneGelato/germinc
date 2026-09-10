@@ -603,7 +603,7 @@ def main():
     ball_distance_total = 0
 
     led_brightness = 10000  # pcb led brightness: 0 - 65535
-    line_threshold = 1500 # tune for colour sensor readings
+    line_threshold = 1500
     pcb.set_brightness(led_brightness)
 
     botstate_hyst = Hysteresis(hold_time=0.1)
@@ -729,8 +729,8 @@ def main():
                     if sensor["distance"] >= 2:
                         angle = i * math.pi / 6 + math.pi / 2
 
-                        irx += math.cos(angle) * (sensor["distance"] - 1)
-                        iry += math.sin(angle) * (sensor["distance"] - 1)
+                        irx += math.cos(angle)
+                        iry += math.sin(angle)
 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
@@ -800,7 +800,7 @@ def main():
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state is None: #attack bot is off
                 raw_botstate = 1
-            elif comms_command == 1 or (ball_distance < 180 and own_goalpos != [0,-200]): #signal from other bot to go get ball #TUNE: 180 to be not far from bot
+            elif comms_command == 1 or (ball_distance < 220 and own_goalpos != [0,-200]): #signal from other bot to go get ball
                 raw_botstate = 2
             else: #chill in goals
                 raw_botstate = 3
@@ -812,14 +812,19 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: #do not see ball
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
+                if own_goalpos != [0,-200]: # align middle and go backwards
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100]
+                    ingoalspd = 10000000
+                else:
+                    desired_pos = [goalpos[0], -200]
+                    ingoalspd = basespd
                 motors.motorspeed5 = 0
 
             elif botstate == 1: #go for ball then score
-                if (ball_distance < 150 and ballpos[1] > 0 and abs(ballpos[0]) < 40 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4:
+                if (ball_distance < 120 and ballpos[1] > 0 and abs(ballpos[0]) < 40 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4 or (ballpos[1] < 160 and substate1 == 1):
                     raw_substate1 = 1  #ball in bcz
-                elif ballpos[1] < 60:
-                    raw_substate1 = 2 if ball_distance > 200 else 3  #far vs near backup #TUNE: 200 to be far
+                elif (ballpos[1] < 60 and (substate1 == 1 or substate1 == 4)) or (ballpos[1] < 80):
+                    raw_substate1 = 2 if ball_distance > 200 else 3
                 else:
                     raw_substate1 = 4  #pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
@@ -835,14 +840,14 @@ def main():
                 elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 60: #TUNE: 40 to be in the same vertical line as bot
+                    if abs(ballpos[0]) < 60:
                         desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate1 == 4:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    desired_pos = [ballpos[0],ballpos[1] - 100]
+                    desired_pos = [ballpos[0],ballpos[1] - 50]
 
             elif botstate == 2: # go for ball then pass
                 if (ball_distance < 80 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4:
@@ -884,7 +889,12 @@ def main():
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
-                desired_pos = [own_goalpos[0], own_goalpos[1] + 100] # align middle and go backwards
+                if own_goalpos != [0,-200]: # align middle and go backwards
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100]
+                    ingoalspd = 10000000
+                else:
+                    desired_pos = [goalpos[0], -200]
+                    ingoalspd = basespd
                 motors.motorspeed5 = 0
 
             #DEBUG
