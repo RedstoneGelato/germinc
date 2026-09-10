@@ -613,10 +613,9 @@ def main():
     flick_sequence_left = MotorSequence(
         steps=[
             # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
-            (0.03,        100,   0,     100,    30000000,        500000000), #turn around
-            (0.03,       -100,   0,     100,    30000000,        500000000),
-            (0.06,        0,   0,   900000000,  50000000,        500000000), #fast in-place snap-rotate to whip the ball
-            (0.04,        0, 300,     0,        30000000,        0), #short forward pop to help release/follow-through
+            (0.08,        0,   0,  -10000,     100000000,        500000000), #turn around
+            (0.06,        0,   0,   10000,     300000000,        500000000), #fast in-place snap-rotate to whip the ball
+            (0.05,        0, 300,     0,       100000000,        0), #short forward pop to help release/follow-through
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -626,11 +625,10 @@ def main():
     )
     flick_sequence_right = MotorSequence(
         steps=[
-            # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
-            (0.03,       -100,   0,    -100,    30000000,        500000000), #turn around
-            (0.03,        100,   0,    -100,    30000000,        500000000),
-            (0.06,        0,   0,  -900000000,  50000000,        500000000), #fast in-place snap-rotate to whip the ball
-            (0.04,        0, 300,     0,        30000000,        0), #short forward pop to help release/follow-through
+            # (duration, xvel, yvel,   rot,        maxspd,      dribblerspd)  -- all TUNE
+            (0.08,       -100,   0,   10000,    100000000,        500000000), #turn around
+            (0.06,        0,   0,    -10000,     300000000,        500000000), #fast in-place snap-rotate to whip the ball
+            (0.05,        0, 300,     0,        100000000,        0), #short forward pop to help release/follow-through
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
