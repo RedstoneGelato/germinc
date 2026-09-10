@@ -613,8 +613,8 @@ def main():
     flick_sequence_left = MotorSequence(
         steps=[
             # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
-            (0.08,        0,   0,  -10000,     100000000,        500000000), #turn around
-            (0.06,        0,   0,   10000,     300000000,        500000000), #fast in-place snap-rotate to whip the ball
+            (0.1,        0,   0,  -10000,     100000000,        500000000), #turn around
+            (0.06,        0,   0,   10000,     500000000,        500000000), #fast in-place snap-rotate to whip the ball
             (0.05,        0, 300,     0,       100000000,        0), #short forward pop to help release/follow-through
         ],
         break_condition=lambda: (
@@ -626,8 +626,8 @@ def main():
     flick_sequence_right = MotorSequence(
         steps=[
             # (duration, xvel, yvel,   rot,        maxspd,      dribblerspd)  -- all TUNE
-            (0.08,       -100,   0,   10000,    100000000,        500000000), #turn around
-            (0.06,        0,   0,    -10000,     300000000,        500000000), #fast in-place snap-rotate to whip the ball
+            (0.1,       -100,   0,   10000,    100000000,        500000000), #turn around
+            (0.06,        0,   0,    -10000,     500000000,        500000000), #fast in-place snap-rotate to whip the ball
             (0.05,        0, 300,     0,        100000000,        0), #short forward pop to help release/follow-through
         ],
         break_condition=lambda: (
