@@ -583,7 +583,7 @@ def main():
     desired_heading = 0
 
     basespd = 80000000 # ideal speed
-    ingoalspd = 1500000
+    ingoalspd = 10000000
     dribblerspd = 5000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_escape_speed = basespd * 1.5
