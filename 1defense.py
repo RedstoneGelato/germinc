@@ -166,7 +166,7 @@ class PCBThread(threading.Thread):
         self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
         self.IR_SENSOR_COUNT = 12
         self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT * 2
-        self.CMD_TO_RESPONSE_DELAY = 0.05
+        self.CMD_TO_RESPONSE_DELAY = 0.005
         self.READ_RETRIES = 3
         self.RETRY_DELAY = 0.02
         self.bus = SMBus(self.I2C_BUS)
@@ -194,6 +194,7 @@ class PCBThread(threading.Thread):
             try:
                 with self.lock:
                     self._send_command(cmd)
+                    time.sleep(self.CMD_TO_RESPONSE_DELAY)
                     data = self._read_raw(length)
                 if len(data) == length:
                     return data
