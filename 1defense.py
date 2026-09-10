@@ -192,10 +192,10 @@ class PCBThread(threading.Thread):
 
         for _ in range(self.READ_RETRIES):
             try:
-                self._send_command(cmd)
-                time.sleep(self.CMD_TO_RESPONSE_DELAY)
-
-                data = self._read_raw(length)
+                with self.lock:
+                    self._send_command(cmd)
+                    time.sleep(self.CMD_TO_RESPONSE_DELAY)
+                    data = self._read_raw(length)
                 if len(data) == length:
                     return data
 
@@ -236,7 +236,8 @@ class PCBThread(threading.Thread):
         val = int(max(0.0, min(65535.0, value)))
         lo  = val & 0xFF
         hi  = (val >> 8) & 0xFF
-        self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
+        with self.lock:
+            self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
 
     def run(self):
         while self.running:
