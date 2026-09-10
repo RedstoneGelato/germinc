@@ -752,9 +752,6 @@ def main():
                 else:
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
-
-                #DEBUG
-                testballdistance = ball_distance_total / ball_distance_count
                 
                 ball_distance = (ball_distance_total * 25) / ball_distance_count #average strength
                 ball_distance = max(min(ball_distance, 99), 1)
@@ -766,9 +763,6 @@ def main():
                 ballpos = [0,0] #doesnt see ball
                 ir = [0,0]
                 ball_distance = 300
-
-                #DEBUG
-                testballdistance = 0
 
             compass = imu.heading - heading_offset #bot heading
             compass = (compass + math.pi) % (2*math.pi) - math.pi
@@ -898,8 +892,6 @@ def main():
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
             print(f"goalpos={goalpos}  own goalpos={own_goalpos}  ballpos={ballpos}")
-            print(ir_snapshot)
-            print(f"ball distance={testballdistance}  goal distance={abs(math.hypot(goalpos[0],goalpos[1]))}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
