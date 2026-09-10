@@ -194,7 +194,6 @@ class PCBThread(threading.Thread):
             try:
                 with self.lock:
                     self._send_command(cmd)
-                    time.sleep(self.CMD_TO_RESPONSE_DELAY)
                     data = self._read_raw(length)
                 if len(data) == length:
                     return data
@@ -252,8 +251,6 @@ class PCBThread(threading.Thread):
             except IOError as e:
                 print(f"PCB I2C error: {e}")
                 self.ready = False
-
-            time.sleep(0.05)
 
         self.bus.close()
 
