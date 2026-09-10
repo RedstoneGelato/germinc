@@ -129,7 +129,7 @@ class IMUThread(threading.Thread):
         self.daemon = True
         self.running = True
 
-        self.i2c = busio.I2C(board.SCL, board.SDA, frequency = 400000)
+        self.i2c = busio.I2C(board.SCL, board.SDA)
         self.imu = BNO08X_I2C(self.i2c)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
 
@@ -166,7 +166,7 @@ class PCBThread(threading.Thread):
         self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
         self.IR_SENSOR_COUNT = 12
         self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT * 2
-        self.CMD_TO_RESPONSE_DELAY = 0.05
+        self.CMD_TO_RESPONSE_DELAY = 0.02
         self.READ_RETRIES = 3
         self.RETRY_DELAY = 0.02
         self.bus = SMBus(self.I2C_BUS)
@@ -245,8 +245,8 @@ class PCBThread(threading.Thread):
     def run(self):
         while self.running:
             try:
-                new_colours = self._read_colours()
                 new_ir = self._read_ir()
+                new_colours = self._read_colours()
                 with self.lock:
                     self.ir = new_ir
                     self.colours = new_colours
@@ -274,7 +274,7 @@ class MotorThread(threading.Thread):
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
 
-        self.motor1 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor1 = PowerfulBLDCDriver(self.i2c, 26)
         self.motor1.set_current_limit_foc(262144)  # max 8 amps is 524288
         self.motor1.set_id_pid_constants(1500, 200)
         self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -286,7 +286,7 @@ class MotorThread(threading.Thread):
         self.motor1.configure_operating_mode_and_sensor(3, 1)
         self.motor1.configure_command_mode(12)
 
-        self.motor2 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 32)
         self.motor2.set_current_limit_foc(262144)  # 4 amps
         self.motor2.set_id_pid_constants(1500, 200)
         self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -298,7 +298,7 @@ class MotorThread(threading.Thread):
         self.motor2.configure_operating_mode_and_sensor(3, 1)
         self.motor2.configure_command_mode(12)
 
-        self.motor3 = PowerfulBLDCDriver(self.i2c, 25)
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 28)
         self.motor3.set_current_limit_foc(262144)
         self.motor3.set_id_pid_constants(1500, 200)
         self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -310,7 +310,7 @@ class MotorThread(threading.Thread):
         self.motor3.configure_operating_mode_and_sensor(3, 1)
         self.motor3.configure_command_mode(12)
 
-        self.motor4 = PowerfulBLDCDriver(self.i2c, 26)
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 27)
         self.motor4.set_current_limit_foc(262144)
         self.motor4.set_id_pid_constants(1500, 200)
         self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -322,7 +322,7 @@ class MotorThread(threading.Thread):
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
-        self.motor5 = PowerfulBLDCDriver(self.i2c, 32) #dribbler motor
+        self.motor5 = PowerfulBLDCDriver(self.i2c, 25) #dribbler motor
         self.motor5.set_current_limit_foc(262144)
         self.motor5.set_id_pid_constants(1500, 200)
         self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
@@ -654,7 +654,7 @@ def main():
     desired_heading = 0
 
     basespd = 80000000 #ideal speed
-    ingoalspd = 1500000
+    ingoalspd = 10000000
     dribblerspd = 5000000
     base_spin = 50 #bigger number = bot spins more instead of moves more
     line_escape_speed = basespd * 1.5
@@ -869,7 +869,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0 if goalie_bot_state == 1 else 3
-            elif (ball_distance < 80 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone #TUNE: distance and ballpos numbers
+            elif (ball_distance < 170 and ballpos[1] > 0 and abs(ballpos[0]) < 60 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4: # ball in ball capture zone #TUNE: distance and ballpos numbers
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
