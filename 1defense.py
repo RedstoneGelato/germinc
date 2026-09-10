@@ -818,7 +818,7 @@ def main():
             elif botstate == 1: #go for ball then score
                 if (ball_distance < 170 and ballpos[1] > 0 and abs(ballpos[0]) < 60 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4:
                     raw_substate1 = 1  #ball in bcz
-                elif ballpos[1] < 50:
+                elif ballpos[1] < 20:
                     raw_substate1 = 2 if ball_distance > 200 else 3  #far vs near backup #TUNE: 200 to be far
                 else:
                     raw_substate1 = 4  #pathfind to ball
@@ -835,7 +835,7 @@ def main():
                 elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 40: #TUNE: 40 to be in the same vertical line as bot
+                    if abs(ballpos[0]) < 60: #TUNE: 40 to be in the same vertical line as bot
                         desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]
