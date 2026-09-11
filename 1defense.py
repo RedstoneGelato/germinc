@@ -609,6 +609,9 @@ def main():
     botstate_hyst = Hysteresis(hold_time=0.1)
     substate1_hyst = Hysteresis(hold_time=0.05, instant_enter=lambda v: v == 1)
     substate2_hyst = Hysteresis(hold_time=0.05, instant_enter=lambda v: v == 1)
+    botstate = 3
+    substate1 = 4
+    substate2 = 4
 
     CONTROL_PERIOD = 0.01
 
@@ -823,7 +826,7 @@ def main():
             elif botstate == 1: #go for ball then score
                 if (ball_distance < 120 and ballpos[1] > 0 and abs(ballpos[0]) < 40 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4 or (ballpos[1] < 160 and substate1 == 1):
                     raw_substate1 = 1  #ball in bcz
-                elif (ballpos[1] < 60 and (substate1 == 1 or substate1 == 4)) or (ballpos[1] < 80):
+                elif (ballpos[1] < 60 and (substate1 == 1 or substate1 == 4)) or ballpos[1] < 80:
                     raw_substate1 = 2 if ball_distance > 200 else 3
                 else:
                     raw_substate1 = 4  #pathfind to ball
@@ -850,9 +853,9 @@ def main():
                     desired_pos = [ballpos[0],ballpos[1] - 50]
 
             elif botstate == 2: # go for ball then pass
-                if (ball_distance < 80 and ballpos[1] > 0 and abs(ballpos[0]) < 50) or ir_snapshot[0].get("distance") == 4:
+                if (ball_distance < 120 and ballpos[1] > 0 and abs(ballpos[0]) < 40 and ir_snapshot[0].get("distance") > 2) or ir_snapshot[0].get("distance") == 4 or (ballpos[1] < 160 and substate2 == 1):
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < 40:
+                elif (ballpos[1] < 60 and (substate2 == 1 or substate2 == 4)) or ballpos[1] < 80:
                     raw_substate2 = 2 if ball_distance > 200 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
@@ -869,7 +872,7 @@ def main():
                 elif substate2 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 40:
+                    if abs(ballpos[0]) < 60:
                         desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
                     else:
                         desired_pos = [0, -200]

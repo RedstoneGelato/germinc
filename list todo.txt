@@ -3,9 +3,7 @@ Yet to add or implement or do
     dribbler motor stuff for attack
 
 Test numbers or other already implemented thingys
-    test camera and tune the numbers where it says tune in code
-
     test comms
 
-    test new ir reading numbers and ballpos and distance numbers where used in code
-    map ir distance to the same as camera distance
+    test attack 2,4 and defense 2,4
+    test flick patterns
