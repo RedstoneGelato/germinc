@@ -280,56 +280,56 @@ class MotorThread(threading.Thread):
         self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
         self.motor1.set_position_pid_constants(275, 0, 0)
         self.motor1.set_position_region_boundary(250000)
-        self.motor1.set_ELECANGLEOFFSET(1161314304)
-        self.motor1.set_SINCOSCENTRE(1244)
+        self.motor1.set_ELECANGLEOFFSET(1559051008)
+        self.motor1.set_SINCOSCENTRE(1258)
         self.motor1.set_speed_limit(self.speedlimit)
         self.motor1.configure_operating_mode_and_sensor(3, 1)
         self.motor1.configure_command_mode(12)
 
-        self.motor2 = PowerfulBLDCDriver(self.i2c, 32)
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 25)
         self.motor2.set_current_limit_foc(262144)  # 4 amps
         self.motor2.set_id_pid_constants(1500, 200)
         self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
         self.motor2.set_position_pid_constants(275, 0, 0)
         self.motor2.set_position_region_boundary(250000)
-        self.motor2.set_ELECANGLEOFFSET(1304942336)
-        self.motor2.set_SINCOSCENTRE(1239)
+        self.motor2.set_ELECANGLEOFFSET(1349926656)
+        self.motor2.set_SINCOSCENTRE(1247)
         self.motor2.set_speed_limit(self.speedlimit)
         self.motor2.configure_operating_mode_and_sensor(3, 1)
         self.motor2.configure_command_mode(12)
 
-        self.motor3 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 27)
         self.motor3.set_current_limit_foc(262144)
         self.motor3.set_id_pid_constants(1500, 200)
         self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
         self.motor3.set_position_pid_constants(275, 0, 0)
         self.motor3.set_position_region_boundary(250000)
-        self.motor3.set_ELECANGLEOFFSET(1772804352)
-        self.motor3.set_SINCOSCENTRE(1251)
+        self.motor3.set_ELECANGLEOFFSET(1769756160)
+        self.motor3.set_SINCOSCENTRE(1247)
         self.motor3.set_speed_limit(self.speedlimit)
         self.motor3.configure_operating_mode_and_sensor(3, 1)
         self.motor3.configure_command_mode(12)
 
-        self.motor4 = PowerfulBLDCDriver(self.i2c, 27)
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 28)
         self.motor4.set_current_limit_foc(262144)
         self.motor4.set_id_pid_constants(1500, 200)
         self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
         self.motor4.set_position_pid_constants(275, 0, 0)
         self.motor4.set_position_region_boundary(250000)
-        self.motor4.set_ELECANGLEOFFSET(1352689664)
-        self.motor4.set_SINCOSCENTRE(1251)
+        self.motor4.set_ELECANGLEOFFSET(1790054912)
+        self.motor4.set_SINCOSCENTRE(1227)
         self.motor4.set_speed_limit(self.speedlimit)
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
-        self.motor5 = PowerfulBLDCDriver(self.i2c, 25) #dribbler motor
+        self.motor5 = PowerfulBLDCDriver(self.i2c, 32) #dribbler motor
         self.motor5.set_current_limit_foc(262144)
         self.motor5.set_id_pid_constants(1500, 200)
         self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
         self.motor5.set_position_pid_constants(275, 0, 0)
         self.motor5.set_position_region_boundary(250000)
-        self.motor5.set_ELECANGLEOFFSET(1326110464)
-        self.motor5.set_SINCOSCENTRE(1221)
+        self.motor5.set_ELECANGLEOFFSET(1431223552)
+        self.motor5.set_SINCOSCENTRE(1245)
         self.motor5.set_speed_limit(self.speedlimit)
         self.motor5.configure_operating_mode_and_sensor(3, 1)
         self.motor5.configure_command_mode(12)
@@ -596,6 +596,14 @@ def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
 
     print("Robot stopped.")
 
+
+#==========================================================================================#
+#                                                                                          #
+#                                   START OF ACTUAL CODE                                   #
+#                                                                                          #
+#==========================================================================================#
+
+
 def main():
     grabber = FrameGrabber()
     grabber.start()
@@ -612,9 +620,9 @@ def main():
     CameraToGoal = GoalTracker()
     flick_sequence_left = MotorSequence(
         steps=[
-            # (duration, xvel, yvel, rot,        maxspd,      dribblerspd)  -- all TUNE
-            (0.1,        0,   0,  -10000,     100000000,        500000000), #turn around
-            (0.06,        0,   0,   10000,     500000000,        500000000), #fast in-place snap-rotate to whip the ball
+        #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
+            (0.1,      0,    0,    -10000, 100000000, 500000000), #turn around
+            (0.06,     0,    0,    10000,  500000000, 500000000), #fast in-place snap-rotate to whip the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -624,9 +632,9 @@ def main():
     )
     flick_sequence_right = MotorSequence(
         steps=[
-            # (duration, xvel, yvel,   rot,        maxspd,      dribblerspd)  -- all TUNE
-            (0.1,       -100,   0,   10000,    100000000,        500000000), #turn around
-            (0.06,        0,   0,    -10000,     500000000,        500000000), #fast in-place snap-rotate to whip the ball
+        #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
+            (0.1,        -100, 0,    10000,  100000000, 500000000), #turn around
+            (0.06,       0,    0,    -10000, 500000000, 500000000), #fast in-place snap-rotate to whip the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
