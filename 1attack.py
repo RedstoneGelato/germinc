@@ -900,7 +900,10 @@ def main():
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
                 if time.time() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
-                    desired_pos = [ballpos[0], ballpos[1] - 70]
+                    if ballpos[1] < 160 and abs(ballpos[0]) > 100:
+                        desired_pos = [ballpos[0], 0]
+                    else:
+                        desired_pos = [ballpos[0],ballpos[1] - 80]
                     desired_heading = 0
                     aim_error = 1
                 else:
