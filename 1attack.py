@@ -945,7 +945,7 @@ def main():
                     goal_to_ball_angle = max(min(math.atan2(ballpos[1] * 3 - goalpos[1], ballpos[0] * 3 - goalpos[0]), math.pi/4),-math.pi/4)
                     desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 15, ballpos[1] + math.sin(goal_to_ball_angle) * 30]
+                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30]
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
@@ -992,7 +992,7 @@ def main():
                 spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
                 spd_multi = max(min(spd_multi,1),0)
                 maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
-                if on_line:
+                if False: #DEBUG
                     mag = math.hypot(linex, liney)
                     desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
                     maxspd = line_escape_speed
