@@ -919,7 +919,7 @@ def main():
                 if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 220 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
                 elif (ballpos[1] < 60 and (substate == 1 or substate == 4)) or ballpos[1] < 80:
-                    raw_substate = 2 if ball_distance > 200 else 3  # far vs near backup
+                    raw_substate = 2 if ballpos[1] < -200 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
                 substate = substate_hyst.update(raw_substate)
@@ -945,10 +945,10 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if ballpos[1] < 150 and abs(ballpos[0]) > 150:
+                    if ballpos[1] < 160 and abs(ballpos[0]) > 100:
                         desired_pos = [ballpos[0], 0]
                     else:
-                        desired_pos = [ballpos[0],ballpos[1] - 70]
+                        desired_pos = [ballpos[0],ballpos[1] - 80]
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
