@@ -942,7 +942,7 @@ def main():
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
-                    goal_to_ball_angle = max(min(math.atan2(ballpos[1] * 3 - goalpos[1], ballpos[0] * 3 - goalpos[0]), math.pi/4),-math.pi/4)
+                    goal_to_ball_angle = max(min(math.atan2(ballpos[1] * 1.5 - goalpos[1], ballpos[0] * 1.5 - goalpos[0]), math.pi/4),-math.pi/4)
                     desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30]
