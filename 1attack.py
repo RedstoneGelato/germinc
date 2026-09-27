@@ -899,14 +899,16 @@ def main():
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
-                desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
-                desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                 if time.time() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
                     desired_pos = [ballpos[0], ballpos[1] - 70]
+                    desired_heading = 0
+                    aim_error = 1
                 else:
                     desired_pos = goalpos
+                    desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
 
-                aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
                 if not flick_sequence_left.active and not flick_sequence_right.active and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.time() - has_ball_time > 0.1:  #TUNE: 0.02rad angle, 100 distance far
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
@@ -942,10 +944,8 @@ def main():
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
-                    goal_to_ball_angle = max(min(math.atan2(ballpos[1] * 1.5 - goalpos[1], ballpos[0] * 1.5 - goalpos[0]), math.pi/4),-math.pi/4)
-                    desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30]
+                    desired_heading = 0
+                    desired_pos = [ballpos[0],ballpos[1] - 70] if ballpos[1] > 100 else [ballpos[0], 0]
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
