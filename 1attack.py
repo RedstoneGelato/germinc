@@ -907,7 +907,7 @@ def main():
                     desired_pos = goalpos
 
                 aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
-                if not flick_sequence_left.active and not flick_sequence_right.active and abs(aim_error) < 0.02 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.time() - has_ball_time > 0.2:  #TUNE: 0.02rad angle, 100 distance far
+                if not flick_sequence_left.active and not flick_sequence_right.active and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.time() - has_ball_time > 0.1:  #TUNE: 0.02rad angle, 100 distance far
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
@@ -945,7 +945,7 @@ def main():
                     goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0])
                     desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 50]
+                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 10, ballpos[1] + math.sin(goal_to_ball_angle) * 20]
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
