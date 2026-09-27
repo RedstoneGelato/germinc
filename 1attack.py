@@ -508,7 +508,7 @@ class GoalTracker: #camera to goal position
         else:
             self.lostgoalcount = 0
             gx = primary[0] + primary[2]/2 - 120
-            gy = 160 - (primary[1] + primary[3]/2)
+            gy = 160 - (primary[1] + primary[3])
             self.unc_gx = self._update_axis(gx, self.goalx_list, self.unc_gx)
             self.unc_gy = self._update_axis(gy, self.goaly_list, self.unc_gy)
 
@@ -517,7 +517,7 @@ class GoalTracker: #camera to goal position
         else:
             self.lostowngoalcount = 0
             ogx = secondary[0] + secondary[2]/2 - 120
-            ogy = 160 - (secondary[1] + secondary[3]/2)
+            ogy = 160 - (secondary[1] + secondary[3])
             self.unc_ogx = self._update_axis(ogx, self.own_goalx_list, self.unc_ogx)
             self.unc_ogy = self._update_axis(ogy, self.own_goaly_list, self.unc_ogy)
 
@@ -845,7 +845,7 @@ def main():
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
-            goalpos, own_goalpos = CameraToGoal.update(goal_colour, yellow, blue)
+            goalpos, own_goalpos = CameraToGoal.update(goal_colour, yellow, blue) #middle bottom of goal
 
 #----------------------------------------------------------------------
 #            line detection
@@ -893,7 +893,10 @@ def main():
                 comms.my_state.update({"command": 0})
                 desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                desired_pos = goalpos if time.time() - has_ball_time > 0.2 else [ballpos[0], ballpos[1] - 70]
+                if time.time() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
+                    desired_pos = [ballpos[0], ballpos[1] - 70]
+                else:
+                    desired_pos = goalpos
 
                 aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
                 if not flick_sequence_left.active and not flick_sequence_right.active and abs(aim_error) < 0.02 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.time() - has_ball_time > 0.2:  #TUNE: 0.02rad angle, 100 distance far
@@ -934,7 +937,7 @@ def main():
                     goal_to_ball_angle = math.atan2(ballpos[1] - goalpos[1], ballpos[0] - goalpos[0])
                     desired_heading = math.atan2(goalpos[1], goalpos[0]) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 30] #TUNE: *30 to be reasonably behind ball in the extended direction of goal from ball
+                    desired_pos = [ballpos[0] + math.cos(goal_to_ball_angle) * 30, ballpos[1] + math.sin(goal_to_ball_angle) * 50]
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
