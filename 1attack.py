@@ -744,8 +744,8 @@ def main():
     line_spd_multi = 1
     pcb.set_brightness(led_brightness)
 
-    botstate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
-    substate_hyst = Hysteresis(hold_time=0.05, instant_enter=lambda v: v == 1)
+    botstate_hyst = Hysteresis(hold_time=0.1)
+    substate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 4)
     botstate = 2
     substate = 4
     has_ball_time = time.monotonic()
@@ -980,7 +980,7 @@ def main():
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
-                if time.monotonic() - has_ball_time < 0.15 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
+                if time.monotonic() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
                     if ballpos[1] < 150 and abs(ballpos[0]) > 150:
                         desired_pos = [ballpos[0], -10]
                     else:
@@ -993,7 +993,7 @@ def main():
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
 
-                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.15:
+                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.2:
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
