@@ -583,6 +583,7 @@ def main():
     desired_heading = 0
 
     basespd = 80000000 # ideal speed
+    new_maxspd = 0
     ingoalspd = 10000000
     dribblerspd = 5000000
     base_spin = 50 # bigger number = bot spins more instead of moves more
@@ -606,6 +607,10 @@ def main():
 
     led_brightness = 40000  # pcb led brightness: 0 - 65535
     line_threshold = 1500
+    on_line = False
+    was_on_line = False
+    line_list = []
+    line_spd_multi = 1
     pcb.set_brightness(led_brightness)
 
     botstate_hyst = Hysteresis(hold_time=0.1)
@@ -614,7 +619,7 @@ def main():
     botstate = 3
     substate1 = 4
     substate2 = 4
-    has_ball_time = time.time()
+    has_ball_time = time.monotonic()
 
     CONTROL_PERIOD = 0.01
 
@@ -637,7 +642,7 @@ def main():
         pcb.set_brightness(led_brightness)
 
         heading_offset = imu.heading #calibrate heading
-        has_ball_time= time.time()
+        has_ball_time= time.monotonic()
         time.sleep(0.01)
 
     print("running")
@@ -699,6 +704,7 @@ def main():
                 motors.motorspeed4 = 0
                 motors.motorspeed5 = 0
                 new_desired_pos = [0,0]
+                new_maxspd = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock: #pull variables from threads
@@ -722,7 +728,7 @@ def main():
                 pcb.set_brightness(led_brightness)
 
                 heading_offset = imu.heading #calibrate imu heading
-                has_ball_time = time.time()
+                has_ball_time = time.monotonic()
 
                 time.sleep(0.02)
                 continue
@@ -788,11 +794,17 @@ def main():
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
             on_line = (linex != 0 or liney != 0)
+            if on_line and not was_on_line:
+                line_list.append(time.monotonic())
+            was_on_line = on_line
+            while line_list and time.monotonic() - line_list[0] > 1:
+                line_list.pop(0)
+            line_spd_multi = {0: 1, 1: 0.9, 2: 0.7, 3: 0.5, 4: 0.2}.get(len(line_list), 0.1)
 
 #----------------------------------------------------------------------
 #            comms from and to other bot
 #----------------------------------------------------------------------
-            teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 #checks if the bots are still connected
+            teammate_fresh = (time.monotonic() - comms.teammate_last_seen) < 0.5 #checks if the bots are still connected
             if isinstance(comms.teammate_state, dict) and teammate_fresh:
                 comms_command = comms.teammate_state.get("command") #1 for go get ball, 0 for chill in goals
                 attack_bot_state = comms.teammate_state.get("bot active") #0 for bot off, 1 for bot on
@@ -841,14 +853,14 @@ def main():
                 if substate1 == 1:
                     motors.motorspeed5 = dribblerspd if abs(math.hypot(goalpos[0],goalpos[1])) > 120 else -dribblerspd
                     desired_heading = 0
-                    desired_pos = goalpos if time.time() - has_ball_time > 0.2 else [ballpos[0], ballpos[1] - 70]
+                    desired_pos = goalpos if time.monotonic() - has_ball_time > 0.2 else [ballpos[0], ballpos[1] - 70]
                 elif substate1 == 2:
-                    has_ball_time = time.time()
+                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = ballpos
                 elif substate1 == 3:
-                    has_ball_time = time.time()
+                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     if abs(ballpos[0]) < 60:
@@ -856,7 +868,7 @@ def main():
                     else:
                         desired_pos = [0, -200]
                 elif substate1 == 4:
-                    has_ball_time = time.time()
+                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [ballpos[0],ballpos[1] - 70] if ballpos[1] > 100 else [ballpos[0], 0]
@@ -873,14 +885,14 @@ def main():
                 if substate2 == 1:
                     motors.motorspeed5 = dribblerspd if abs(math.hypot(goalpos[0],goalpos[1])) > 120 else -dribblerspd
                     desired_heading = 0
-                    desired_pos = goalpos if time.time() - has_ball_time > 0.2 else [ballpos[0], ballpos[1] - 70]
+                    desired_pos = goalpos if time.monotonic() - has_ball_time > 0.2 else [ballpos[0], ballpos[1] - 70]
                 elif substate2 == 2:
-                    has_ball_time = time.time()
+                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [0, -200]
                 elif substate2 == 3:
-                    has_ball_time = time.time()
+                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     if abs(ballpos[0]) < 60:
@@ -888,7 +900,7 @@ def main():
                     else:
                         desired_pos = [0, -200]
                 elif substate2 == 4:
-                    has_ball_time = time.time()
+                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
 
                     A = np.array([goalpos[0], goalpos[1]])
@@ -931,12 +943,14 @@ def main():
             spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
             spd_multi = max(min(spd_multi,1),0)
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
+            maxspd *= line_spd_multi
+            new_maxspd = new_maxspd * 0.9 + maxspd * 0.1
 
             new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9]
             if False: #DEBUG, change to on_line
                 mag = math.hypot(linex, liney)
-                desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
-                maxspd = line_escape_speed
+                new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+                new_maxspd = line_escape_speed
 
             xvel = new_desired_pos[0]
             yvel = new_desired_pos[1]
@@ -946,7 +960,7 @@ def main():
             x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
-            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,new_maxspd)
 
             # Maintain a fixed 100 Hz loop
             next_loop += CONTROL_PERIOD

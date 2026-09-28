@@ -1,4 +1,5 @@
 import threading
+import random
 import math
 import cv2
 import picamera2
@@ -192,10 +193,10 @@ class PCBThread(threading.Thread):
 
         for _ in range(self.READ_RETRIES):
             try:
-                self._send_command(cmd)
-                time.sleep(self.CMD_TO_RESPONSE_DELAY)
-
-                data = self._read_raw(length)
+                with self.lock:
+                    self._send_command(cmd)
+                    time.sleep(self.CMD_TO_RESPONSE_DELAY)
+                    data = self._read_raw(length)
                 if len(data) == length:
                     return data
 
@@ -238,9 +239,8 @@ class PCBThread(threading.Thread):
         val = int(max(0.0, min(65535.0, value)))
         lo  = val & 0xFF
         hi  = (val >> 8) & 0xFF
-        # write_i2c_block_data sends: START, ADDR+W, 0x03 (reg), lo, hi, STOP
-        # STM32 receives 0x03 first (1 byte), then queues receive of 2 more bytes
-        self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
+        with self.lock:
+            self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
 
     def run(self):
         while self.running:
@@ -480,6 +480,34 @@ class MotorSequence:
         m1, m2, m3, m4 = VelocityToMotor(xvel, yvel, rot, maxspd)
         return ("running", (m1, m2, m3, m4, dribblerspd))
 
+class SequenceRunner:
+    """Groups several MotorSequence objects so main() can treat them as one thing."""
+    def __init__(self, *sequences):
+        self.sequences = sequences
+
+    def busy(self):
+        """True if any sequence is currently running."""
+        return any(s.active for s in self.sequences)
+
+    def stop_all(self):
+        """Stop every sequence (used when pausing)."""
+        for s in self.sequences:
+            s.stop()
+
+    def tick(self):
+        """
+        Call once per loop. If a sequence is running, advance it and return its
+        motor speeds as (m1, m2, m3, m4, m5). Returns None if no sequence is
+        driving the motors this tick.
+        """
+        for s in self.sequences:
+            if s.active:
+                status, cmds = s.tick()
+                if status == "running":
+                    return cmds
+                return None
+        return None
+
 class GoalTracker: #camera to goal position
     def __init__(self, history=10, tolerance=60, lost_limit=40):
         self.history, self.tolerance, self.lost_limit = history, tolerance, lost_limit
@@ -642,6 +670,34 @@ def main():
             or on_line #crossing the line
         ),
     )
+    start_sequence_left = MotorSequence(
+        steps=[
+        #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
+            (0.1,        0,  100,    0,  100000000, 500000000), #forwards and get the ball
+            (0.1,     -100,   200,  -50,  500000000, 500000000), #go around potential first enemy bot
+            (0.06,     0,    0,    10000,  500000000, 500000000), #fast in-place snap-rotate to whip the ball
+        ],
+        break_condition=lambda: (
+            script_activate_pin.is_active #bot paused
+            or not (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3) #lost the ball mid-sequence
+            or on_line #crossing the line
+        ),
+    )
+    start_sequence_right = MotorSequence(
+        steps=[
+        #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
+            (0.1,        0,  100,    0,  100000000, 500000000), #forwards and get the ball
+            (0.1,      100,   200,  50,  500000000, 500000000), #go around potential first enemy bot
+            (0.06,     0,    0,    -10000,  500000000, 500000000), #fast in-place snap-rotate to whip the ball
+        ],
+        break_condition=lambda: (
+            script_activate_pin.is_active #bot paused
+            or not (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3) #lost the ball mid-sequence
+            or on_line #crossing the line
+        ),
+    )
+    sequences = SequenceRunner(flick_sequence_left, flick_sequence_right,
+                            start_sequence_left, start_sequence_right)
 
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready and pcb.ready):
@@ -658,6 +714,7 @@ def main():
     desired_heading = 0
 
     basespd = 80000000 #ideal speed
+    new_maxspd = 0
     ingoalspd = 10000000
     dribblerspd = 5000000
     base_spin = 50 #bigger number = bot spins more instead of moves more
@@ -670,7 +727,7 @@ def main():
     unconcordantdirection = 0
 
     desired_pos = [0,200]
-    new_desired_pos = [0,200]
+    new_desired_pos = [0,0]
     goalpos = [0,250] #cartesian plane coord relative of bot
     own_goalpos = [0,-250] #cartesian plane coord relative of bot
     goal_colour = 0 #0 shoot for yellow, 1 shoot for blue
@@ -681,13 +738,17 @@ def main():
 
     led_brightness = 40000  #pcb led brightness: 0 - 65535
     line_threshold = 1500 #threshold for white line
+    on_line = False
+    was_on_line = False
+    line_list = []
+    line_spd_multi = 1
     pcb.set_brightness(led_brightness)
 
     botstate_hyst = Hysteresis(hold_time=0.1)
     substate_hyst = Hysteresis(hold_time=0.05, instant_enter=lambda v: v == 1)
     botstate = 2
     substate = 4
-    has_ball_time = time.time()
+    has_ball_time = time.monotonic()
 
     CONTROL_PERIOD = 0.01
 
@@ -710,7 +771,7 @@ def main():
         pcb.set_brightness(led_brightness)
 
         heading_offset = imu.heading #calibrate heading
-        has_ball_time = time.time()
+        has_ball_time = time.monotonic()
         time.sleep(0.01)
 
     print("running")
@@ -746,9 +807,9 @@ def main():
             if user_input == ".": dribblerspd = 20000000
             if user_input == "p": dribblerspd = 100000000
             if user_input == "y": dribblerspd = 500000000
-            #TEST: flick
-            if user_input == "z" and not flick_sequence_left.active and not flick_sequence_right.active: flick_sequence_right.start()
-            if user_input == "v" and not flick_sequence_left.active and not flick_sequence_right.active: flick_sequence_left.start()
+            #TEST: start sequence
+            if user_input == "z" and not sequences.busy(): start_sequence_right.start()
+            if user_input == "v" and not sequences.busy(): start_sequence_left.start()
 
 #----------------------------------------------------------------------
 #            pause and unpause bot
@@ -759,8 +820,7 @@ def main():
                     robot_active = False
                     botstate_hyst.reset()
                     substate_hyst.reset()
-                    flick_sequence_left.stop()
-                    flick_sequence_right.stop()
+                    sequences.stop_all()
                     x_robot = 0
                     y_robot = 0
                     rot = 0
@@ -776,6 +836,7 @@ def main():
                 motors.motorspeed4 = 0
                 motors.motorspeed5 = 0
                 new_desired_pos = [0,0]
+                new_maxspd = 0
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
                 comms.my_state.update({"command": 1}) #tell goalie to get ball
 
@@ -800,11 +861,17 @@ def main():
                 pcb.set_brightness(led_brightness)
 
                 heading_offset = imu.heading
-                has_ball_time = time.time()
+                has_ball_time = time.monotonic()
 
                 time.sleep(0.02)
                 continue
             else:
+                if robot_active == False:
+                    if not sequences.busy() and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3):
+                        if random.randint(0,1):
+                            start_sequence_left.start()
+                        else:
+                            start_sequence_right.start()
                 robot_active = True #running bot
                 comms.my_state.update({"bot active": 1})
 
@@ -826,7 +893,7 @@ def main():
                 irdirection = math.atan2(iry, irx) # direction
     
                 if len(directionlist) > 10: # smoothing
-                    if unconcordantdirection > 10: # 40ms
+                    if unconcordantdirection > 10:
                         directionlist.clear()
                         directionlist.append(irdirection)
                         unconcordantdirection = 0
@@ -866,11 +933,17 @@ def main():
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
             on_line = (linex != 0 or liney != 0)
+            if on_line and not was_on_line:
+                line_list.append(time.monotonic())
+            was_on_line = on_line
+            while line_list and time.monotonic() - line_list[0] > 1:
+                line_list.pop(0)
+            line_spd_multi = {0: 1, 1: 0.9, 2: 0.7, 3: 0.5, 4: 0.2}.get(len(line_list), 0.1)
 
 #----------------------------------------------------------------------
 #            comms from and to other bot
 #----------------------------------------------------------------------
-            teammate_fresh = (time.time() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
+            teammate_fresh = (time.monotonic() - comms.teammate_last_seen) < 0.5 # checks if the bots are still connected
             if isinstance(comms.teammate_state, dict) and teammate_fresh:
                 goalie_bot_state = comms.teammate_state.get("bot active") # 0 for bot off, 1 for bot on
             else:
@@ -893,7 +966,7 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 comms.my_state.update({"command": 1})
-                has_ball_time = time.time()
+                has_ball_time = time.monotonic()
                 desired_heading = 0
                 if goalpos != [0,250]:
                     desired_pos = [goalpos[0], goalpos[1] - 180] # go midfield
@@ -905,7 +978,7 @@ def main():
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
-                if time.time() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
+                if time.monotonic() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
                     if ballpos[1] < 160 and abs(ballpos[0]) > 100:
                         desired_pos = [ballpos[0], -10]
                     else:
@@ -918,13 +991,13 @@ def main():
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
 
-                if not flick_sequence_left.active and not flick_sequence_right.active and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.time() - has_ball_time > 0.2:
+                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.2:
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
-                has_ball_time = time.time()
+                has_ball_time = time.monotonic()
                 if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 220 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
                 elif (ballpos[1] < 60 and (substate == 1 or substate == 4)) or ballpos[1] < 80:
@@ -961,7 +1034,7 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 3:
-                has_ball_time = time.time()
+                has_ball_time = time.monotonic()
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
                 if own_goalpos != [0,-250]: #align middle and go backwards
@@ -980,16 +1053,10 @@ def main():
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
             sequence_ran_this_tick = False
-            if flick_sequence_left.active:
-                status, cmds = flick_sequence_left.tick()
-                if status == "running":
-                    motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds
-                    sequence_ran_this_tick = True
-            elif flick_sequence_right.active:
-                status, cmds = flick_sequence_right.tick()
-                if status == "running":
-                    motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds
-                    sequence_ran_this_tick = True
+            cmds = sequences.tick()
+            sequence_ran_this_tick = cmds is not None
+            if sequence_ran_this_tick:
+                motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds
 
             if not sequence_ran_this_tick:
                 heading_error = desired_heading - compass
@@ -1004,12 +1071,14 @@ def main():
                 spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
                 spd_multi = max(min(spd_multi,1),0)
                 maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
+                maxspd *= line_spd_multi
+                new_maxspd = new_maxspd * 0.9 + maxspd * 0.1
 
                 new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9]
                 if False: #DEBUG
                     mag = math.hypot(linex, liney)
-                    desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
-                    maxspd = line_escape_speed
+                    new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+                    new_maxspd = line_escape_speed
 
                 xvel = new_desired_pos[0]
                 yvel = new_desired_pos[1]
@@ -1019,7 +1088,7 @@ def main():
                 x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
                 y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
-                motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,maxspd)
+                motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,new_maxspd)
 
             # Maintain a fixed 100 Hz loop
             next_loop += CONTROL_PERIOD
