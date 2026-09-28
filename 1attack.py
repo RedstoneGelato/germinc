@@ -1022,15 +1022,15 @@ def main():
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     if abs(ballpos[0]) < 60:
-                        desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
+                        desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if ballpos[1] < 160 and abs(ballpos[0]) > 100:
-                        desired_pos = [ballpos[0], -10]
+                    if ballpos[1] < 120 and abs(ballpos[0]) > 100:
+                        desired_pos = [ballpos[0], 0]
                     else:
                         desired_pos = [ballpos[0],ballpos[1] - 80]
                 motors.motorspeed5 = 0
