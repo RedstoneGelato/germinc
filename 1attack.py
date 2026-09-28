@@ -953,7 +953,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0 if goalie_bot_state == 1 else 3
-            elif ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3: # ball in ball capture zone
+            elif (botstate == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3): # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -977,7 +977,7 @@ def main():
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
                 desired_pos = goalpos
-                desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
+                desired_heading = math.atan2(goalpos[1], goalpos[0] * 1.6) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
 
                 if not sequences.busy() and abs(goalpos[0]) - goalpos[1] > 100:
@@ -1014,7 +1014,7 @@ def main():
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
-                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.5) - math.pi/2
+                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     if ballpos[1] < 150 and abs(ballpos[0]) > 150:
                         desired_pos = [ballpos[0], -10]
