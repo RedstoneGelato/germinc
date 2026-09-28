@@ -980,7 +980,7 @@ def main():
                 desired_heading = math.atan2(goalpos[1], goalpos[0] * 1.6) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
 
-                if not sequences.busy() and abs(goalpos[0]) - goalpos[1] > -40:
+                if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120:
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
@@ -1019,7 +1019,7 @@ def main():
                     if ballpos[1] < 120 and abs(ballpos[0]) > 120:
                         desired_pos = [ballpos[0], -10]
                     else:
-                        desired_pos = [ballpos[0],ballpos[1] - 60]
+                        desired_pos = [ballpos[0] + math.sin(desired_heading) * 30, ballpos[1] - 60]
 
                     if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
                         motors.motorspeed5 = dribblerspd
