@@ -744,7 +744,7 @@ def main():
     line_spd_multi = 1
     pcb.set_brightness(led_brightness)
 
-    botstate_hyst = Hysteresis(hold_time=0.1)
+    botstate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
     substate_hyst = Hysteresis(hold_time=0.05, instant_enter=lambda v: v == 1)
     botstate = 2
     substate = 4
@@ -799,8 +799,8 @@ def main():
             if user_input == "2": basespd = 5000000
             if user_input == "3": basespd = 50000000
             if user_input == "4": basespd = 80000000
-            if user_input == "5": basespd = 150000000
-            if user_input == "6": basespd = 300000000
+            if user_input == "5": basespd = 110000000
+            if user_input == "6": basespd = 150000000
             #TEST: dribbler spd
             if user_input == "'": dribblerspd = 0
             if user_input == ",": dribblerspd = 5000000
@@ -981,10 +981,10 @@ def main():
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
                 if time.monotonic() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
-                    if ballpos[1] < 160 and abs(ballpos[0]) > 100:
+                    if ballpos[1] < 150 and abs(ballpos[0]) > 150:
                         desired_pos = [ballpos[0], -10]
                     else:
-                        desired_pos = ballpos
+                        desired_pos = [ballpos[0],ballpos[1] - 80]
                     desired_heading = 0
                     aim_error = 1
                 else:
