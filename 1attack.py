@@ -554,8 +554,8 @@ class GoalTracker: #camera to goal position
         if self.lostowngoalcount > self.lost_limit:
             self.own_goalx_list.clear(); self.own_goaly_list.clear()
 
-        goalpos = [np.mean(self.goalx_list), np.mean(self.goaly_list)] if self.goalx_list else [0, 250]
-        own_goalpos = [np.mean(self.own_goalx_list), np.mean(self.own_goaly_list)] if self.own_goalx_list else [0, -250]
+        goalpos = [int(np.mean(self.goalx_list)), int(np.mean(self.goaly_list))] if self.goalx_list else [0, 250]
+        own_goalpos = [int(np.mean(self.own_goalx_list)), int(np.mean(self.own_goaly_list))] if self.own_goalx_list else [0, -250]
         return goalpos, own_goalpos
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
@@ -744,8 +744,8 @@ def main():
     line_spd_multi = 1
     pcb.set_brightness(led_brightness)
 
-    botstate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
-    substate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 4)
+    botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
+    substate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 4)
     botstate = 2
     substate = 4
 
