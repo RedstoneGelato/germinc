@@ -956,7 +956,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0 if goalie_bot_state == 1 else 3
-            elif ir_snapshot[0].get("distance") == 3 and (ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3) and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3: # ball in ball capture zone
+            elif ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -1003,7 +1003,7 @@ def main():
                 if ballpos[1] < 0 and goalpos[1] < 200 and ball_distance > 220 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
                 elif (ballpos[1] < 60 and (substate == 1 or substate == 4)) or ballpos[1] < 80:
-                    raw_substate = 2 if ballpos[1] < -200 else 3  # far vs near backup
+                    raw_substate = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
                 substate = substate_hyst.update(raw_substate)
@@ -1021,7 +1021,7 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 60:
+                    if abs(ballpos[0]) < 100:
                         desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
@@ -1029,8 +1029,8 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if ballpos[1] < 120 and abs(ballpos[0]) > 100:
-                        desired_pos = [ballpos[0], 0]
+                    if ballpos[1] < 150 and abs(ballpos[0]) > 150:
+                        desired_pos = [ballpos[0], -10]
                     else:
                         desired_pos = [ballpos[0],ballpos[1] - 80]
                 motors.motorspeed5 = 0
