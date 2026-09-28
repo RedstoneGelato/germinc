@@ -869,9 +869,11 @@ def main():
                 if robot_active == False:
                     if not sequences.busy() and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3):
                         if random.randint(0,1):
-                            start_sequence_left.start()
+                            #start_sequence_left.start()
+                            pass
                         else:
-                            start_sequence_right.start()
+                            #start_sequence_right.start()
+                            pass
                 robot_active = True #running bot
                 comms.my_state.update({"bot active": 1})
 
