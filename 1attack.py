@@ -748,7 +748,6 @@ def main():
     substate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 4)
     botstate = 2
     substate = 4
-    has_ball_time = time.monotonic()
 
     CONTROL_PERIOD = 0.01
 
@@ -771,7 +770,6 @@ def main():
         pcb.set_brightness(led_brightness)
 
         heading_offset = imu.heading #calibrate heading
-        has_ball_time = time.monotonic()
         time.sleep(0.01)
 
     print("running")
@@ -861,7 +859,6 @@ def main():
                 pcb.set_brightness(led_brightness)
 
                 heading_offset = imu.heading
-                has_ball_time = time.monotonic()
 
                 time.sleep(0.02)
                 continue
@@ -968,7 +965,6 @@ def main():
 #----------------------------------------------------------------------
             if botstate == 0: # do not see ball
                 comms.my_state.update({"command": 1})
-                has_ball_time = time.monotonic()
                 desired_heading = 0
                 if goalpos != [0,250]:
                     desired_pos = [goalpos[0], goalpos[1] - 180] # go midfield
@@ -983,15 +979,13 @@ def main():
                 desired_pos = goalpos
                 desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
 
-                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.1:
+                if not sequences.busy() and abs(goalpos[0]) - goalpos[1] > 100:
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
 
             elif botstate == 2: # go for ball
-                has_ball_time = time.monotonic()
                 if ballpos[1] < -220 and goalpos[1] < 200 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
                 elif (ballpos[1] < 60 and (substate == 1 or substate == 4)) or ballpos[1] < 80:
@@ -1034,7 +1028,6 @@ def main():
                 
 
             elif botstate == 3:
-                has_ball_time = time.monotonic()
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
                 if own_goalpos != [0,-250]: #align middle and go backwards
