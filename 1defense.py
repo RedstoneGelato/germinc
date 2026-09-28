@@ -465,7 +465,7 @@ class GoalTracker: #camera to goal position
         else:
             self.lostgoalcount = 0
             gx = primary[0] + primary[2]/2 - 120
-            gy = 160 - (primary[1] + primary[3]/2)
+            gy = 160 - (primary[1] + primary[3])
             self.unc_gx = self._update_axis(gx, self.goalx_list, self.unc_gx)
             self.unc_gy = self._update_axis(gy, self.goaly_list, self.unc_gy)
 
@@ -474,7 +474,7 @@ class GoalTracker: #camera to goal position
         else:
             self.lostowngoalcount = 0
             ogx = secondary[0] + secondary[2]/2 - 120
-            ogy = 160 - (secondary[1] + secondary[3]/2)
+            ogy = 160 - secondary[1]
             self.unc_ogx = self._update_axis(ogx, self.own_goalx_list, self.unc_ogx)
             self.unc_ogy = self._update_axis(ogy, self.own_goaly_list, self.unc_ogy)
 
@@ -594,6 +594,8 @@ def main():
     irdirection = 0
     unconcordantdirection = 0
 
+    desired_pos = [0,0]
+    new_desired_pos = [0,0]
     goalpos = [0,250] # cartesian plane coord relative of bot
     own_goalpos = [0,-250] # cartesian plane coord relative of bot
     goal_colour = 0 # 0 shoot for yellow, 1 shoot for blue
@@ -602,7 +604,7 @@ def main():
     ball_distance_count = 0
     ball_distance_total = 0
 
-    led_brightness = 10000  # pcb led brightness: 0 - 65535
+    led_brightness = 40000  # pcb led brightness: 0 - 65535
     line_threshold = 1500
     pcb.set_brightness(led_brightness)
 
@@ -632,7 +634,6 @@ def main():
         elif max(colours_snapshot) < line_threshold:
             led_brightness -= 50
         led_brightness = max(min(led_brightness,65535),0)
-        led_brightness = 40000
         pcb.set_brightness(led_brightness)
 
         heading_offset = imu.heading #calibrate heading
@@ -697,6 +698,7 @@ def main():
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
                 motors.motorspeed5 = 0
+                new_desired_pos = [0,0]
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
 
                 with pcb.lock: #pull variables from threads
@@ -717,7 +719,6 @@ def main():
                 elif max(colours_snapshot) < line_threshold:
                     led_brightness -= 50
                 led_brightness = max(min(led_brightness,65535),0)
-                led_brightness = 40000
                 pcb.set_brightness(led_brightness)
 
                 heading_offset = imu.heading #calibrate imu heading
@@ -783,7 +784,7 @@ def main():
             for i, value in enumerate(colours_snapshot):
                 if value < line_threshold:
                     angle = i * (math.pi / 16) + math.pi / 2 #colour1 = front, spread anticlockwise
-                    excess = value - line_threshold
+                    excess = line_threshold - value
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
             on_line = (linex != 0 or liney != 0)
@@ -822,9 +823,9 @@ def main():
                 desired_heading = 0
                 if own_goalpos != [0,-250]: # align middle and go backwards
                     desired_pos = [own_goalpos[0], own_goalpos[1] + 100]
-                    ingoalspd = 10000000
+                    ingoalspd = int(basespd / 5)
                 else:
-                    desired_pos = [goalpos[0], -200]
+                    desired_pos = [goalpos[0], -250]
                     ingoalspd = basespd
                 motors.motorspeed5 = 0
 
@@ -905,9 +906,9 @@ def main():
                 desired_heading = 0
                 if own_goalpos != [0,-250]: # align middle and go backwards
                     desired_pos = [own_goalpos[0], own_goalpos[1] + 100]
-                    ingoalspd = 10000000
+                    ingoalspd = int(basespd / 5)
                 else:
-                    desired_pos = [goalpos[0], -200]
+                    desired_pos = [goalpos[0], -250]
                     ingoalspd = basespd
                 motors.motorspeed5 = 0
 
@@ -930,13 +931,15 @@ def main():
             spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
             spd_multi = max(min(spd_multi,1),0)
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
-            if on_line:
+
+            new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9]
+            if False: #DEBUG, change to on_line
                 mag = math.hypot(linex, liney)
                 desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
                 maxspd = line_escape_speed
 
-            xvel = desired_pos[0]
-            yvel = desired_pos[1]
+            xvel = new_desired_pos[0]
+            yvel = new_desired_pos[1]
             x_field = -yvel
             y_field = xvel
             angle = -compass
