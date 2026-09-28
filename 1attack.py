@@ -956,7 +956,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0 if goalie_bot_state == 1 else 3
-            elif ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3: # ball in ball capture zone
+            elif ir_snapshot[0].get("distance") == 3 and (ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3) and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -980,7 +980,7 @@ def main():
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
-                if time.monotonic() - has_ball_time < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
+                if time.monotonic() - has_ball_time < 0.15 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
                     if ballpos[1] < 150 and abs(ballpos[0]) > 150:
                         desired_pos = [ballpos[0], -10]
                     else:
@@ -993,7 +993,7 @@ def main():
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
 
-                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.1:
+                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.15:
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
