@@ -744,7 +744,7 @@ def main():
     line_spd_multi = 1
     pcb.set_brightness(led_brightness)
 
-    botstate_hyst = Hysteresis(hold_time=0.1)
+    botstate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 1)
     substate_hyst = Hysteresis(hold_time=0.1, instant_enter=lambda v: v == 4)
     botstate = 2
     substate = 4
@@ -956,7 +956,7 @@ def main():
 #----------------------------------------------------------------------
             if ballpos == [0,0] and ir == [0,0]: #doesnt see ball
                 raw_botstate = 0 if goalie_bot_state == 1 else 3
-            elif ir_snapshot[0].get("distance") == 3 and (ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3) and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3: # ball in ball capture zone
+            elif ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3: # ball in ball capture zone
                 raw_botstate = 1 #try to shoot
             else:
                 raw_botstate = 2 #try to get possession of ball
@@ -980,20 +980,12 @@ def main():
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
-                if time.monotonic() - has_ball_time < 0.2 and abs(math.hypot(goalpos[0],goalpos[1])) > 150:
-                    if ballpos[1] < 150 and abs(ballpos[0]) > 150:
-                        desired_pos = [ballpos[0], -10]
-                    else:
-                        desired_pos = [ballpos[0],ballpos[1] - 80]
-                    desired_heading = 0
-                    aim_error = 1
-                else:
-                    desired_pos = goalpos
-                    desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
+                desired_pos = goalpos
+                desired_heading = math.atan2(goalpos[1],goalpos[0]) - math.pi/2
+                desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                aim_error = (desired_heading - compass + math.pi) % (2*math.pi) - math.pi
 
-                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.2:
+                if not sequences.busy() and abs(aim_error) < 0.1 and abs(math.hypot(goalpos[0],goalpos[1])) > 100 and time.monotonic() - has_ball_time > 0.1:
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
                 else:
                     motors.motorspeed5 = dribblerspd
@@ -1012,6 +1004,7 @@ def main():
                     comms.my_state.update({"command": 1}) #send goalie to get ball
                     desired_heading = 0
                     desired_pos = [goalpos[0], goalpos[1] - 180]
+                    motors.motorspeed5 = 0
                 elif substate == 2:
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
@@ -1027,13 +1020,17 @@ def main():
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
-                    motors.motorspeed5 = 0
                     desired_heading = 0
                     if ballpos[1] < 150 and abs(ballpos[0]) > 150:
                         desired_pos = [ballpos[0], -10]
                     else:
                         desired_pos = [ballpos[0],ballpos[1] - 80]
-                motors.motorspeed5 = 0
+
+                    if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
+                        motors.motorspeed5 = dribblerspd
+                    else:
+                        motors.motorspeed5 = 0
+                
 
             elif botstate == 3:
                 has_ball_time = time.monotonic()
