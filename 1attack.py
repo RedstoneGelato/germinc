@@ -172,6 +172,7 @@ class PCBThread(threading.Thread):
         self.RETRY_DELAY = 0.02
         self.bus = SMBus(self.I2C_BUS)
         self.lock = threading.Lock()
+        self.bus_lock = threading.Lock()
 
         self.ir = [
             {'detected': 0, 'distance': 0}
@@ -193,7 +194,7 @@ class PCBThread(threading.Thread):
 
         for _ in range(self.READ_RETRIES):
             try:
-                with self.lock:
+                with self.bus_lock:
                     self._send_command(cmd)
                     time.sleep(self.CMD_TO_RESPONSE_DELAY)
                     data = self._read_raw(length)
@@ -239,7 +240,7 @@ class PCBThread(threading.Thread):
         val = int(max(0.0, min(65535.0, value)))
         lo  = val & 0xFF
         hi  = (val >> 8) & 0xFF
-        with self.lock:
+        with self.bus_lock:
             self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
 
     def run(self):
@@ -745,7 +746,7 @@ def main():
     pcb.set_brightness(led_brightness)
 
     botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
-    substate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 4)
+    substate_hyst = Hysteresis(hold_time=0.11)
     botstate = 2
     substate = 4
 
@@ -1009,7 +1010,10 @@ def main():
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     if abs(ballpos[0]) < 70:
-                        desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
+                        if len(line_list) > 1:
+                            desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
+                        else:
+                            desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball

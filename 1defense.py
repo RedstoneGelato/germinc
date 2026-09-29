@@ -171,6 +171,7 @@ class PCBThread(threading.Thread):
         self.RETRY_DELAY = 0.02
         self.bus = SMBus(self.I2C_BUS)
         self.lock = threading.Lock()
+        self.bus_lock = threading.Lock()
 
         self.ir = [
             {'detected': 0, 'distance': 0}
@@ -192,7 +193,7 @@ class PCBThread(threading.Thread):
 
         for _ in range(self.READ_RETRIES):
             try:
-                with self.lock:
+                with self.bus_lock:
                     self._send_command(cmd)
                     time.sleep(self.CMD_TO_RESPONSE_DELAY)
                     data = self._read_raw(length)
@@ -236,7 +237,7 @@ class PCBThread(threading.Thread):
         val = int(max(0.0, min(65535.0, value)))
         lo  = val & 0xFF
         hi  = (val >> 8) & 0xFF
-        with self.lock:
+        with self.bus_lock:
             self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
 
     def run(self):
@@ -483,8 +484,8 @@ class GoalTracker: #camera to goal position
         if self.lostowngoalcount > self.lost_limit:
             self.own_goalx_list.clear(); self.own_goaly_list.clear()
 
-        goalpos = [np.mean(self.goalx_list), np.mean(self.goaly_list)] if self.goalx_list else [0, 250]
-        own_goalpos = [np.mean(self.own_goalx_list), np.mean(self.own_goaly_list)] if self.own_goalx_list else [0, -250]
+        goalpos = [int(np.mean(self.goalx_list)), int(np.mean(self.goaly_list))] if self.goalx_list else [0, 250]
+        own_goalpos = [int(np.mean(self.own_goalx_list)), int(np.mean(self.own_goaly_list))] if self.own_goalx_list else [0, -250]
         return goalpos, own_goalpos
 
 def VelocityToMotor(xvel, yvel, rot, maxspd): #convert variables into specific motor speed values
@@ -619,7 +620,6 @@ def main():
     botstate = 3
     substate1 = 4
     substate2 = 4
-    has_ball_time = time.monotonic()
 
     CONTROL_PERIOD = 0.01
 
@@ -642,7 +642,6 @@ def main():
         pcb.set_brightness(led_brightness)
 
         heading_offset = imu.heading #calibrate heading
-        has_ball_time= time.monotonic()
         time.sleep(0.01)
 
     print("running")
@@ -670,8 +669,8 @@ def main():
             if user_input == "2": basespd = 5000000
             if user_input == "3": basespd = 50000000
             if user_input == "4": basespd = 80000000
-            if user_input == "5": basespd = 150000000
-            if user_input == "6": basespd = 300000000
+            if user_input == "5": basespd = 110000000
+            if user_input == "6": basespd = 150000000
             #TEST: dribbler spd
             if user_input == "'": dribblerspd = 0
             if user_input == ",": dribblerspd = 5000000
@@ -728,7 +727,6 @@ def main():
                 pcb.set_brightness(led_brightness)
 
                 heading_offset = imu.heading #calibrate imu heading
-                has_ball_time = time.monotonic()
 
                 time.sleep(0.02)
                 continue
@@ -842,65 +840,75 @@ def main():
                 motors.motorspeed5 = 0
 
             elif botstate == 1: #go for ball then score
-                if ir_snapshot[0].get("distance") == 3 or (substate1 == 1 and abs(ballpos[0]) < 80 and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3)):
+                if (substate1 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate1 = 1  #ball in bcz
-                elif (ballpos[1] < 60 and (substate1 == 1 or substate1 == 4)) or ballpos[1] < 80:
-                    raw_substate1 = 2 if ball_distance > 200 else 3
+                elif ballpos[1] < 60:
+                    raw_substate1 = 2 if ballpos[1] < -150 else 3
                 else:
                     raw_substate1 = 4  #pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
 
                 if substate1 == 1:
-                    motors.motorspeed5 = dribblerspd if abs(math.hypot(goalpos[0],goalpos[1])) > 120 else -dribblerspd
-                    desired_heading = 0
-                    desired_pos = goalpos if time.monotonic() - has_ball_time > 0.2 else [ballpos[0], ballpos[1] - 70]
+                    motors.motorspeed5 = dribblerspd
+                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_pos = goalpos
                 elif substate1 == 2:
-                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = ballpos
                 elif substate1 == 3:
-                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 60:
-                        desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
+                    if abs(ballpos[0]) < 70:
+                        if len(line_list) > 1:
+                            desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
+                        else:
+                            desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate1 == 4:
-                    has_ball_time = time.monotonic()
-                    motors.motorspeed5 = 0
-                    desired_heading = 0
-                    desired_pos = [ballpos[0],ballpos[1] - 70] if ballpos[1] > 100 else [ballpos[0], 0]
+                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    if ballpos[1] < 120 and abs(ballpos[0]) > 120:
+                        desired_pos = [ballpos[0], -10]
+                    else:
+                        desired_pos = [ballpos[0] + math.sin(desired_heading) * 15, ballpos[1] - 60]
+
+                    if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
+                        motors.motorspeed5 = dribblerspd
+                    else:
+                        motors.motorspeed5 = 0
 
             elif botstate == 2: # go for ball then pass
-                if ir_snapshot[0].get("distance") == 3 or (substate1 == 1 and abs(ballpos[0]) < 80 and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3)):
+                if (substate2 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate2 = 1  # ball in bcz
-                elif (ballpos[1] < 60 and (substate2 == 1 or substate2 == 4)) or ballpos[1] < 80:
-                    raw_substate2 = 2 if ball_distance > 200 else 3  # far vs near backup
+                elif ballpos[1] < 60:
+                    raw_substate2 = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
                 substate2 = substate2_hyst.update(raw_substate2)
 
                 if substate2 == 1:
-                    motors.motorspeed5 = dribblerspd if abs(math.hypot(goalpos[0],goalpos[1])) > 120 else -dribblerspd
-                    desired_heading = 0
-                    desired_pos = goalpos if time.monotonic() - has_ball_time > 0.2 else [ballpos[0], ballpos[1] - 70]
+                    motors.motorspeed5 = dribblerspd
+                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_pos = goalpos
                 elif substate2 == 2:
-                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
                     desired_pos = [0, -200]
                 elif substate2 == 3:
-                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 60:
-                        desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
+                    if abs(ballpos[0]) < 70:
+                        if len(line_list) > 1:
+                            desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
+                        else:
+                            desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate2 == 4:
-                    has_ball_time = time.monotonic()
                     motors.motorspeed5 = 0
 
                     A = np.array([goalpos[0], goalpos[1]])
