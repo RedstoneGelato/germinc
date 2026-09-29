@@ -1,9 +1,6 @@
 Yet to add or implement or do
-    motor calibration numbers for attack
-    dribbler motor stuff for attack
 
 Test numbers or other already implemented thingys
     test comms
-
-    test attack 2,4 and defense 2,4
-    test flick patterns
+    test defense 2,4
+    test startup sequence
