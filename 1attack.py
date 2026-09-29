@@ -15,15 +15,15 @@ import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-from gpiozero import DigitalInputDevice
+from gpiozero import DigitalInputDevice #imports
 
-script_activate_pin = DigitalInputDevice(25, pull_up = True)
+script_activate_pin = DigitalInputDevice(25, pull_up = True) #gpio pin for on/off switch
 
 TEAM_ID = "GERM_INC"
 ROBOT_ID = 1 #attack bot
-COMMS_PORT = 5555
+COMMS_PORT = 5555 #used by comms
 
-class FrameGrabber(threading.Thread):
+class FrameGrabber(threading.Thread): #raw camera capture
     def __init__(self):
         super().__init__()
         self.daemon = True
@@ -32,7 +32,7 @@ class FrameGrabber(threading.Thread):
         self.frame = None
         self.hsv = np.zeros((320,240,3), dtype=np.uint8)
         self.cap = picamera2.Picamera2()
-        config = self.cap.create_preview_configuration(main={"size": (320,240), "format": "RGB888"})
+        config = self.cap.create_preview_configuration(main={"size": (320,240), "format": "RGB888"}) #camera configs
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
@@ -43,15 +43,15 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             frame = self.cap.capture_array("main")
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE) #rotate capture due to physical rotated camera
             self.frame = frame
             try:
-                self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV) #convert rgb to hsv
             except:
                 continue
             time.sleep(0.01)
 
-class DetectionThread(threading.Thread):
+class DetectionThread(threading.Thread): #analyse camera feed, split into 2 threads because lack of processing power
     def __init__(self, grabber):
         super().__init__()
         self.daemon = True
@@ -230,13 +230,6 @@ class PCBThread(threading.Thread):
         return values
 
     def set_brightness(self, value: float):
-        """
-        Send brightness value to STM32.
-        Valid range: 0.0 to 65535.0 (matches TIM3 period).
-        Sends command 0x03 followed by 2 bytes (uint16, little-endian).
-        This matches the STM32 SlaveRxCpltCallback which expects
-        exactly 2 data bytes after the 0x03 command byte.
-        """
         val = int(max(0.0, min(65535.0, value)))
         lo  = val & 0xFF
         hi  = (val >> 8) & 0xFF
@@ -359,9 +352,9 @@ class TeammateLinkThread(threading.Thread): #comms between bots
         self.sock.bind(("", COMMS_PORT))
         self.sock.settimeout(0.02)
 
-        self.teammate_state = {}      # most recent info FROM the teammate
+        self.teammate_state = {} # most recent info FROM the teammate
         self.teammate_last_seen = 0
-        self.my_state = {}              # what THIS robot wants to tell its teammate
+        self.my_state = {} # what THIS robot wants to tell its teammate
     def run(self):
         last_send = 0
         while self.running:
@@ -380,7 +373,7 @@ class TeammateLinkThread(threading.Thread): #comms between bots
                 msg = json.loads(data.decode("utf-8"))
                 if (self.enabled and isinstance(msg, dict)
                         and msg.get("team") == TEAM_ID # message from bot of the same team
-                        and msg.get("robot") != ROBOT_ID):   # ignore a possible echo of our own broadcast
+                        and msg.get("robot") != ROBOT_ID): # ignore a possible echo of our own broadcast
                     self.teammate_state = msg
                     self.teammate_last_seen = now
             except socket.timeout:
@@ -393,16 +386,6 @@ class TeammateLinkThread(threading.Thread): #comms between bots
         self.sock.close()
 
 class Hysteresis:
-    """
-    Holds a value steady across brief flickers around a sensor threshold.
-    A new value only overwrites the current one once it's been the
-    requested value continuously for `hold_time` seconds
-
-    instant_enter (optional): a function taking the raw value, returning
-    True if that value should commit with no delay. Use this for safety
-    states you want to react to immediately, while still debouncing how
-    quickly you're willing to leave that state again.
-    """
     def __init__(self, hold_time, instant_enter=None):
         self.hold_time = hold_time
         self.instant_enter = instant_enter
@@ -413,25 +396,25 @@ class Hysteresis:
     def update(self, raw_value):
         now = time.time()
 
-        if self.current is None:                          # first call - nothing to debounce yet
+        if self.current is None: # first call - nothing to debounce yet
             self.current = raw_value
             return self.current
 
-        if raw_value == self.current:                       # still agrees - clear any pending change
+        if raw_value == self.current: # still agrees - clear any pending change
             self._pending = None
             return self.current
 
-        if self.instant_enter and self.instant_enter(raw_value):
-            self.current = raw_value                         # safety case - commit with no delay
+        if self.instant_enter and self.instant_enter(raw_value): # safety case - commit with no delay
+            self.current = raw_value
             self._pending = None
             return self.current
 
-        if raw_value != self._pending:                        # new candidate - start timing it
+        if raw_value != self._pending: # new candidate - start timing it
             self._pending = raw_value
             self._pending_since = now
             return self.current
 
-        if now - self._pending_since >= self.hold_time:         # held long enough - commit it
+        if now - self._pending_since >= self.hold_time: # held long enough - commit it
             self.current = raw_value
             self._pending = None
 
@@ -442,17 +425,13 @@ class Hysteresis:
         self._pending = None
         self._pending_since = None
 
-class MotorSequence:
-    """
-    Open-loop, hand-timed sequence of robot-relative moves, for scripted
-    maneuvers (fast flicks, spin-releases)
-    """
+class MotorSequence: #custom, preset, handwritten sequences of moves
     def __init__(self, steps, break_condition):
         self.steps = steps
         self.break_condition = break_condition
         self.active = False
         self.step_index = 0
-        self.step_start = None
+        self.step_start = None #initialise variables
 
     def start(self):
         self.active = True
@@ -470,37 +449,29 @@ class MotorSequence:
             return ("break", None)
 
         duration, xvel, yvel, rot, maxspd, dribblerspd = self.steps[self.step_index]
-        if time.monotonic() - self.step_start >= duration:
+        if time.monotonic() - self.step_start >= duration: #checks if last move is still continuing
             self.step_index += 1
             self.step_start = time.monotonic()
             if self.step_index >= len(self.steps):
                 self.stop()
                 return ("done", None)
-            duration, xvel, yvel, rot, maxspd, dribblerspd = self.steps[self.step_index]
+            duration, xvel, yvel, rot, maxspd, dribblerspd = self.steps[self.step_index] #do whatever the preset says
 
         m1, m2, m3, m4 = VelocityToMotor(xvel, yvel, rot, maxspd)
         return ("running", (m1, m2, m3, m4, dribblerspd))
 
-class SequenceRunner:
-    """Groups several MotorSequence objects so main() can treat them as one thing."""
+class SequenceRunner: #group all motor sequences
     def __init__(self, *sequences):
         self.sequences = sequences
 
-    def busy(self):
-        """True if any sequence is currently running."""
+    def busy(self): #checks if any sequences are currently running
         return any(s.active for s in self.sequences)
 
-    def stop_all(self):
-        """Stop every sequence (used when pausing)."""
+    def stop_all(self): #pause all sequences
         for s in self.sequences:
             s.stop()
 
-    def tick(self):
-        """
-        Call once per loop. If a sequence is running, advance it and return its
-        motor speeds as (m1, m2, m3, m4, m5). Returns None if no sequence is
-        driving the motors this tick.
-        """
+    def tick(self): #advance sequence
         for s in self.sequences:
             if s.active:
                 status, cmds = s.tick()
@@ -631,7 +602,6 @@ def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
 #                                   START OF ACTUAL CODE                                   #
 #                                                                                          #
 #==========================================================================================#
-
 
 def main():
     grabber = FrameGrabber()
@@ -864,9 +834,9 @@ def main():
                 time.sleep(0.02)
                 continue
             else:
-                if robot_active == False:
-                    if not sequences.busy() and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3):
-                        if random.randint(0,1):
+                if robot_active == False: #first loop since turned bot back on
+                    if not sequences.busy() and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3): #checsk if bot in kickoff position
+                        if random.randint(0,1): #randomly do start sequence left or start sequence right
                             #start_sequence_left.start()
                             pass
                         else:
@@ -981,8 +951,8 @@ def main():
                 desired_heading = math.atan2(goalpos[1], goalpos[0] * 1.6) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
 
-                if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120:
-                    flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start()
+                if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120: #position too far for just pointing at the goal and shooting
+                    flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start() #flick the ball towards goal
                 else:
                     motors.motorspeed5 = dribblerspd
 
@@ -1029,7 +999,6 @@ def main():
                         motors.motorspeed5 = dribblerspd
                     else:
                         motors.motorspeed5 = 0
-                
 
             elif botstate == 3:
                 comms.my_state.update({"command": 1})
@@ -1049,11 +1018,11 @@ def main():
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
 #----------------------------------------------------------------------
-            sequence_ran_this_tick = False
+            sequence_ran_this_tick = False #reset if sequence ran or not
             cmds = sequences.tick()
-            sequence_ran_this_tick = cmds is not None
+            sequence_ran_this_tick = cmds is not None #checks if a sequence is running
             if sequence_ran_this_tick:
-                motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds
+                motors.motorspeed1, motors.motorspeed2, motors.motorspeed3, motors.motorspeed4, motors.motorspeed5 = cmds #run the set sequence
 
             if not sequence_ran_this_tick:
                 heading_error = desired_heading - compass
@@ -1072,7 +1041,7 @@ def main():
                 new_maxspd = new_maxspd * 0.9 + maxspd * 0.1
 
                 new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9]
-                if False: #DEBUG
+                if False: #DEBUG, set to on_line
                     mag = math.hypot(linex, liney)
                     new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
                     new_maxspd = line_escape_speed
