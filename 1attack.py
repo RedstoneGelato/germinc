@@ -906,9 +906,9 @@ def main():
             if on_line and not was_on_line:
                 line_list.append(time.monotonic())
             was_on_line = on_line
-            while line_list and time.monotonic() - line_list[0] > 1:
+            while line_list and time.monotonic() - line_list[0] > 3:
                 line_list.pop(0)
-            line_spd_multi = {0: 1, 1: 0.9, 2: 0.7, 3: 0.5, 4: 0.2}.get(len(line_list), 0.1)
+            line_spd_multi = {0: 1, 1: 0.6, 2: 0.5, 3: 0.3, 4: 0.1}.get(len(line_list), 0.1)
 
 #----------------------------------------------------------------------
 #            comms from and to other bot
