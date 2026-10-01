@@ -993,7 +993,7 @@ def main():
                     if ballpos[1] < 120 and abs(ballpos[0]) > 120:
                         desired_pos = [ballpos[0], -10]
                     else:
-                        desired_pos = [ballpos[0] + math.sin(desired_heading) * 15, ballpos[1] - 60]
+                        desired_pos = [ballpos[0], ballpos[1] - 60]
 
                     if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
                         motors.motorspeed5 = dribblerspd
