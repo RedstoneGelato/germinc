@@ -963,10 +963,10 @@ def main():
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
                 if goalpos != [0,250]:
-                    desired_pos = [goalpos[0], goalpos[1] - 180] # go midfield
+                    desired_pos = [goalpos[0] * 6, goalpos[1] - 180] # go midfield
                     ingoalspd = int(basespd / 5)
                 else:
-                    desired_pos = [own_goalpos[0], 250]
+                    desired_pos = [own_goalpos[0] * 6, 250]
                     ingoalspd = basespd
                 motors.motorspeed5 = 0
 
@@ -1029,10 +1029,10 @@ def main():
                 comms.my_state.update({"command": 1})
                 desired_heading = 0
                 if own_goalpos != [0,-250]: #align middle and go backwards
-                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100]
+                    desired_pos = [own_goalpos[0] * 6, own_goalpos[1] + 100] if own_goalpos[1] < -20 else [own_goalpos[0], 0]
                     ingoalspd = int(basespd / 5)
                 else:
-                    desired_pos = [goalpos[0], -200]
+                    desired_pos = [goalpos[0] * 6, -200]
                     ingoalspd = basespd
                 motors.motorspeed5 = 0
 
@@ -1067,7 +1067,7 @@ def main():
 
                 new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9]
                 if on_line:
-                    if colour_see_number < 14 and 1.47 < math.atan2(liney,linex) < 1.67:
+                    if colour_see_number < 14 and 1.47 < math.atan2(liney,linex) < 1.67 and abs(goalpos[0]) < 30:
                         new_desired_pos = goalpos
                         new_maxspd = basespd
                     else:
