@@ -599,6 +599,7 @@ def main():
 
     led_brightness = 40000  # pcb led brightness: 0 - 65535
     line_threshold = 1500
+    colour_see_number = 0
     on_line = False
     was_on_line = False
     line_list = []
@@ -647,6 +648,7 @@ def main():
             ball_distance_count = 0
             linex = 0
             liney = 0
+            colour_see_number = 0
 
             with pcb.lock: #pull variables from sensors
                 ir_snapshot = pcb.ir
@@ -782,6 +784,7 @@ def main():
                     excess = value - line_escape_speed
                     linex += math.cos(angle) * excess
                     liney += math.sin(angle) * excess
+                    colour_see_number += 1
             on_line = (linex != 0 or liney != 0)
             if on_line and not was_on_line:
                 line_list.append(time.monotonic()) #timestamps of when the bot was on line
@@ -931,7 +934,7 @@ def main():
             heading_error = desired_heading - compass
             heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi #angle difference between desired and actual
             spin_weight = base_spin * max(0.1,min(abs(heading_error),2)) if heading_error != 0 else base_spin #scale spd based on how much angle difference
-            if abs(heading_error) < 0.01: #dont spin if difference too small
+            if abs(heading_error) < 0.05: #dont spin if difference too small
                 rot = 0
             else:
                 rot = spin_weight * heading_error
@@ -945,9 +948,13 @@ def main():
 
             new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9] #alpha beta smoothing of desired position
             if on_line:
-                mag = math.hypot(linex, liney)
-                new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
-                new_maxspd = line_escape_speed
+                if colour_see_number < 14 and 4.61 < math.atan2(liney,linex) < 4.81:
+                    new_desired_pos = [ballpos[0], -100]
+                    new_maxspd = basespd // 2
+                else:
+                    mag = math.hypot(linex, liney)
+                    new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+                    new_maxspd = line_escape_speed
 
             xvel = new_desired_pos[0]
             yvel = new_desired_pos[1]
