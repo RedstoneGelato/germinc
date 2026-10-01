@@ -42,7 +42,7 @@ class FrameGrabber(threading.Thread): #raw camera capture
     def run(self):
         while self.running:
             frame = self.cap.capture_array("main")
-            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE) #rotate camera feed due to rotated camera physically
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE) #rotate camera feed due to rotated camera physically
             self.frame = frame
             try:
                 self.hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV) #convert rgb to hsv
