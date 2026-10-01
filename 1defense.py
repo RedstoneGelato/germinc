@@ -840,7 +840,7 @@ def main():
                 substate1 = substate1_hyst.update(raw_substate1)
 
                 if substate1 == 1:
-                    motors.motorspeed5 = dribblerspd
+                    motors.motorspeed5 = dribblerspd if goalpos[1] > 50 else -dribblerspd
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = goalpos
@@ -881,7 +881,7 @@ def main():
                 substate2 = substate2_hyst.update(raw_substate2)
 
                 if substate2 == 1:
-                    motors.motorspeed5 = dribblerspd
+                    motors.motorspeed5 = dribblerspd if goalpos[1] > 50 else -dribblerspd
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = goalpos
@@ -900,18 +900,16 @@ def main():
                     else:
                         desired_pos = [0, -200]
                 elif substate2 == 4:
-                    motors.motorspeed5 = 0
+                    desired_heading = 0
+                    if ballpos[1] < 120 and abs(ballpos[0]) > 120:
+                        desired_pos = [ballpos[0], -10]
+                    else:
+                        desired_pos = [ballpos[0], ballpos[1] - 60]
 
-                    A = np.array([goalpos[0], goalpos[1]])
-                    B = np.array([ballpos[0], ballpos[1]])
-                    C = np.array([0, 0])
-                    AB = B - A
-                    denom = np.dot(AB, AB)
-                    t = np.dot(C - A, AB) / denom if denom > 1e-6 else 0
-
-                    desired_pos = A + t * AB #shortest path to point of interception between ball and goal
-                    desired_heading = ir[0] - math.pi/2
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
+                        motors.motorspeed5 = dribblerspd
+                    else:
+                        motors.motorspeed5 = 0
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0

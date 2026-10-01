@@ -954,7 +954,7 @@ def main():
                 if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120: #position too far for just pointing at the goal and shooting
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start() #flick the ball towards goal
                 else:
-                    motors.motorspeed5 = dribblerspd
+                    motors.motorspeed5 = dribblerspd if goalpos[1] > 50 else -dribblerspd
 
             elif botstate == 2: # go for ball
                 if ballpos[1] < -220 and goalpos[1] < 200 and goalie_bot_state == 1: #tell goalie to get ball
