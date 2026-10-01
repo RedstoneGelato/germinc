@@ -1,6 +1,8 @@
 Yet to add or implement or do
+    check which board has the broken ir10
 
 Test numbers or other already implemented thingys
-    test comms
-    test defense 2,4
     test startup sequence
+    test white line detection while at an angle
+    test defense back white line behaviour, attack front white line behaviour
+    test ir10 interpolation
