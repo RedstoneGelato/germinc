@@ -686,7 +686,7 @@ def main():
 
     basespd = 80000000 #ideal speed
     new_maxspd = 0
-    ingoalspd = 10000000
+    ingoalspd = basespd // 3
     dribblerspd = 5000000
     base_spin = 50 #bigger number = bot spins more instead of moves more
     line_escape_speed = basespd * 1.5
