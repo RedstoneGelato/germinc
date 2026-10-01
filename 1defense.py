@@ -780,10 +780,9 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot): #sums line detected sensors direction
                 if value < line_threshold:
-                    angle = i * (math.pi / 16) + math.pi / 2 #colour1 = front, spread anticlockwise
-                    excess = value - line_escape_speed
-                    linex += math.cos(angle) * excess
-                    liney += math.sin(angle) * excess
+                    angle = i * (math.pi / 16) + compass #colour1 = front, spread anticlockwise
+                    linex += math.cos(angle)
+                    liney += math.sin(angle)
                     colour_see_number += 1
             on_line = (linex != 0 or liney != 0)
             if on_line and not was_on_line:
@@ -948,7 +947,7 @@ def main():
 
             new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9] #alpha beta smoothing of desired position
             if on_line:
-                if colour_see_number < 14 and 4.61 < math.atan2(liney,linex) < 4.81:
+                if colour_see_number < 14 and -1.47 > math.atan2(liney,linex) > -1.67:
                     new_desired_pos = [ballpos[0], -100]
                     new_maxspd = basespd // 2
                 else:
