@@ -981,9 +981,7 @@ def main():
                     desired_heading = 0
                     if abs(ballpos[0]) < 70:
                         if len(line_list) > 1:
-                            desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
-                        else:
-                            desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
+                        desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
