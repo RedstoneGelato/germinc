@@ -946,7 +946,7 @@ def main():
             new_maxspd = new_maxspd * 0.9 + maxspd * 0.1 #alpha beta smoothing
 
             new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9] #alpha beta smoothing of desired position
-            if False: #DEBUG, change to on_line
+            if on_line:
                 mag = math.hypot(linex, liney)
                 new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
                 new_maxspd = line_escape_speed
