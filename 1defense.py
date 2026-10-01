@@ -851,7 +851,7 @@ def main():
                 elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 70: #wrap around ball
+                    if abs(ballpos[0]) < 70 and ballpos[1] < 0: #wrap around ball
                         if len(line_list) > 1: #touched line
                             desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0] #wrap around based on goal position
                         else:
@@ -892,9 +892,9 @@ def main():
                 elif substate2 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 70:
+                    if abs(ballpos[0]) < 70 and ballpos[1] < 0:
                         if len(line_list) > 1:
-                            desired_pos = [-200, 0] if goalpos[0] < 60 or own_goalpos[0] < 60 else [200, 0]
+                            desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0]
                         else:
                             desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
@@ -938,7 +938,7 @@ def main():
 
             spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
             spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1 #quadratic scaling of speed, further the bot wants to go, faster itll go
-            spd_multi = max(min(spd_multi,1),0)
+            spd_multi = max(min(spd_multi,1),0.2)
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi) #max spd in different situations
             maxspd *= line_spd_multi
             new_maxspd = new_maxspd * 0.9 + maxspd * 0.1 #alpha beta smoothing

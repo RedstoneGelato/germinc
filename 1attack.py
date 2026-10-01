@@ -848,6 +848,7 @@ def main():
 #----------------------------------------------------------------------
 #            ir to ball pos, compass, camera to goal pos
 #----------------------------------------------------------------------
+            ir_snapshot[10] = {'detected': 0, 'distance': 0} #broken, interpolate results below
             for i, sensor in enumerate(ir_snapshot):
                 if sensor["detected"] == 1 and sensor["distance"] != 0:
                     if sensor["distance"] >= 2:
@@ -858,6 +859,28 @@ def main():
 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
+            if ball_distance_count > 0:
+                if ir_snapshot[11].get('distance') == 3 and ir_snapshot[9].get('distance') == 3: #surrounding both 3
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 3
+                    ball_distance_count += 1
+                elif (ball_distance_total - 1) / ball_distance_count == 2 and (ir_snapshot[11].get('distance') == 3 or ir_snapshot[9].get('distance') == 3) and ball_distance_count < 4: #one neighbour is close, only one sees close, not enough ir sensors see
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 3
+                    ball_distance_count += 1
+                elif ball_distance_count < 4 and (ir_snapshot[11].get('distance') != 0 or ir_snapshot[9].get('distance') != 0):
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 2
+                    ball_distance_count += 1
+                elif ir_snapshot[11].get('distance') == 3 or ir_snapshot[9].get('distance') == 3:
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 2
+                    ball_distance_count += 1
+
 
             if irx != 0 or iry != 0:
                 irdirection = math.atan2(iry, irx) # direction
@@ -979,9 +1002,11 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 70:
+                    if abs(ballpos[0]) < 70 and ballpos[1] < 0:
                         if len(line_list) > 1:
-                        desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
+                            desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0]
+                        else:
+                            desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
@@ -1033,7 +1058,7 @@ def main():
 
                 spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
                 spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
-                spd_multi = max(min(spd_multi,1),0)
+                spd_multi = max(min(spd_multi,1),0.2)
                 maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
                 maxspd *= line_spd_multi
                 new_maxspd = new_maxspd * 0.9 + maxspd * 0.1
