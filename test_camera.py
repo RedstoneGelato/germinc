@@ -5,10 +5,11 @@ import picamera2
 import sys
 import select
 
-# ---- copied from main.py's FrameGrabber/DetectionThread - keep these in sync manually ----
 ROTATION = cv2.ROTATE_90_CLOCKWISE
 
-CAPTURE_SIZE = (320, 240)  # main stream, 4x the pixel area of the old 160x120 lores stream
+blue,red = 2.4,2.7
+
+CAPTURE_SIZE = (320, 240)
 
 LOWER_BLUE = np.array([90, 200, 100])
 UPPER_BLUE = np.array([110, 255, 255])
@@ -19,20 +20,13 @@ UPPER_ORANGE = np.array([20, 255, 255])
 
 KERNEL = np.ones((3, 3), np.uint8)
 
-# TUNE: doubled linearly from the old 160x120 values (20,85,50,110) to match this
-# resolution's 2x scale factor - this is a starting guess, not a calibrated value.
-# Retake a debug frame at this resolution and re-run the ignore-box test before trusting it.
 IGNORE_X1, IGNORE_X2 = 60, 160
 IGNORE_Y1, IGNORE_Y2 = 90, 230
 
-# TUNE: contour area scales with the SQUARE of linear resolution, not linearly - so this
-# is 70 * 4 (2x width * 2x height), not 70 * 2. Still just a starting guess for the new
-# resolution; recheck against real blob sizes once you can see actual detections.
 # --------------------------------------------------------------------------------------------
 
 
 def merge_blobs(mask, min_size):
-    """Identical logic to DetectionThread._merge_blobs - keep in sync if that changes."""
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     x_min = y_min = float('inf')
     x_max = y_max = 0
@@ -51,39 +45,23 @@ def merge_blobs(mask, min_size):
     else:
         return [0, 0, 0, 0]
 
-def read_input():
-    if select.select([sys.stdin], [], [], 0)[0]:
-        return sys.stdin.readline().strip()
-    return None
-
 def main():
     cap = picamera2.Picamera2()
     config = cap.create_preview_configuration(main={"size": CAPTURE_SIZE, "format": "RGB888"})
     cap.configure(config)
-    blue,red = 2.4,2.7
-    cap.set_controls({"AwbEnable": True, "ColourGains": (blue, red)})
+    cap.set_controls({"AwbEnable": False, "ColourGains": (blue, red)})
     cap.start()
     print(f"Capturing at {CAPTURE_SIZE} from the main stream. Ctrl+C to stop.\n")
 
     display_available = True
-    frame_cx = frame_cy = None  # computed once we know the actual rotated frame size
+    frame_cx = frame_cy = None
 
     try:
         while True:
             frame = cap.capture_array("main")
             frame = cv2.rotate(frame, ROTATION)
 
-            
-            user_input = read_input()
-            if user_input == "'": blue -= 0.1
-            if user_input == ",": blue += 0.1
-            if user_input == "a": red -= 0.1
-            if user_input == "o": red += 0.1
-
             if frame_cx is None:
-                # rotated frame is (height, width, channels) in numpy's (rows, cols) order -
-                # computed from the real array rather than assumed, so this doesn't silently
-                # go stale again if the resolution changes a second time
                 h, w = frame.shape[:2]
                 frame_cx, frame_cy = w / 2, h / 2
                 print(f"Rotated frame size: {w}x{h}, center=({frame_cx},{frame_cy})")
