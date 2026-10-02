@@ -352,11 +352,11 @@ class TeammateLinkThread(threading.Thread): #comms between bots
 
         self.teammate_state = {} #most recent info from teammate
         self.teammate_last_seen = 0
-        self.my_state = {} #what robot wants to tell its teammate
+        self.my_state = {"bot active": 0} #what robot wants to tell its teammate
     def run(self):
         last_send = 0
         while self.running:
-            now = time.time()
+            now = time.monotonic()
 
             if self.enabled and now - last_send >= self.send_interval:
                 try:
@@ -392,7 +392,7 @@ class Hysteresis: #used for decision smoothing and ignore flickers, instant ente
         self._pending_since = None
 
     def update(self, raw_value):
-        now = time.time()
+        now = time.monotonic()
 
         if self.current is None: #first call - nothing to debounce yet
             self.current = raw_value
@@ -730,16 +730,42 @@ def main():
 #----------------------------------------------------------------------
 #            ir to ball pos, compass, camera to goal pos
 #----------------------------------------------------------------------
-            for i, sensor in enumerate(ir_snapshot): #sum angles and strength
+            compass = imu.heading - heading_offset #bot heading
+            compass = (compass + math.pi) % (2*math.pi) - math.pi
+
+            ir_snapshot[10] = {'detected': 0, 'distance': 0} #broken, interpolate results below
+            for i, sensor in enumerate(ir_snapshot):
                 if sensor["detected"] == 1 and sensor["distance"] != 0:
                     if sensor["distance"] >= 2:
-                        angle = i * math.pi / 6 + math.pi / 2
+                        angle = i * math.pi / 6 + compass
 
                         irx += math.cos(angle)
                         iry += math.sin(angle)
 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
+            if ball_distance_count > 0:
+                if ir_snapshot[11].get('distance') == 3 and ir_snapshot[9].get('distance') == 3: #surrounding both 3
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 3
+                    ball_distance_count += 1
+                elif (ball_distance_total - 1) / ball_distance_count == 2 and (ir_snapshot[11].get('distance') == 3 or ir_snapshot[9].get('distance') == 3) and ball_distance_count < 4: #one neighbour is close, only one sees close, not enough ir sensors see
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 3
+                    ball_distance_count += 1
+                elif ball_distance_count < 4 and (ir_snapshot[11].get('distance') != 0 or ir_snapshot[9].get('distance') != 0):
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 2
+                    ball_distance_count += 1
+                elif ir_snapshot[11].get('distance') == 3 or ir_snapshot[9].get('distance') == 3:
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 2
+                    ball_distance_count += 1
+
 
             if irx != 0 or iry != 0:
                 irdirection = math.atan2(iry, irx) # direction
@@ -758,20 +784,17 @@ def main():
                 else:
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
-                
-                ball_distance = (ball_distance_total * 25) / ball_distance_count #average strength
+
+                ball_distance = (ball_distance_total * 25) / ball_distance_count #average distance
                 ball_distance = max(min(ball_distance, 99), 1)
-                ball_distance = ((100 - ball_distance) * 0.3) ** 2 #strength to distance
+                ball_distance = ((100 - ball_distance) * 0.3) ** 2
 
                 ir = [circular_mean(directionlist), ball_distance] #direction, distance
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
             else:
-                ballpos = [0,0] #doesnt see ball
+                ballpos = [0,0]
                 ir = [0,0]
                 ball_distance = 300
-
-            compass = imu.heading - heading_offset #bot heading
-            compass = (compass + math.pi) % (2*math.pi) - math.pi
 
             goalpos, own_goalpos = CameraToGoal.update(goal_colour, yellow, blue) #goal position
 
@@ -784,7 +807,7 @@ def main():
                     linex += math.cos(angle)
                     liney += math.sin(angle)
                     colour_see_number += 1
-            on_line = (linex != 0 or liney != 0)
+            on_line = colour_see_number > 0
             if on_line and not was_on_line:
                 line_list.append(time.monotonic()) #timestamps of when the bot was on line
             was_on_line = on_line
@@ -835,7 +858,7 @@ def main():
             elif botstate == 1: #go for ball then score
                 if (substate1 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate1 = 1  #ball in bcz
-                elif ((substate1 == 1 or substate1 == 4) and ballpos[1] < 40) or ballpos[1] < 60: #2 far backup, 3 close backup
+                elif ballpos[1] < (40 if substate1 in (1, 4) else 60): #2 far backup, 3 close backup
                     raw_substate1 = 2 if ballpos[1] < -150 else 3
                 else:
                     raw_substate1 = 4  #pathfind to ball
@@ -876,7 +899,7 @@ def main():
             elif botstate == 2: # go for ball then pass
                 if (substate2 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate2 = 1  # ball in bcz
-                elif ((substate2 == 1 or substate2 == 4) and ballpos[1] < 40) or ballpos[1] < 60:
+                elif ballpos[1] < (40 if substate2 in (1, 4) else 60):
                     raw_substate2 = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball

@@ -2,6 +2,8 @@ import math
 import cv2
 import numpy as np
 import picamera2
+import sys
+import select
 
 # ---- copied from main.py's FrameGrabber/DetectionThread - keep these in sync manually ----
 ROTATION = cv2.ROTATE_90_CLOCKWISE
@@ -49,12 +51,17 @@ def merge_blobs(mask, min_size):
     else:
         return [0, 0, 0, 0]
 
+def read_input():
+    if select.select([sys.stdin], [], [], 0)[0]:
+        return sys.stdin.readline().strip()
+    return None
 
 def main():
     cap = picamera2.Picamera2()
     config = cap.create_preview_configuration(main={"size": CAPTURE_SIZE, "format": "RGB888"})
     cap.configure(config)
-    cap.set_controls({"AwbEnable": True, "ColourGains": (2.4, 2.7)})
+    blue,red = 2.4,2.7
+    cap.set_controls({"AwbEnable": True, "ColourGains": (blue, red)})
     cap.start()
     print(f"Capturing at {CAPTURE_SIZE} from the main stream. Ctrl+C to stop.\n")
 
@@ -65,6 +72,13 @@ def main():
         while True:
             frame = cap.capture_array("main")
             frame = cv2.rotate(frame, ROTATION)
+
+            
+            user_input = read_input()
+            if user_input == "'": blue -= 0.1
+            if user_input == ",": blue += 0.1
+            if user_input == "a": red -= 0.1
+            if user_input == "o": red += 0.1
 
             if frame_cx is None:
                 # rotated frame is (height, width, channels) in numpy's (rows, cols) order -
@@ -141,7 +155,7 @@ def main():
             else:
                 ballpos = [float("inf"), float("inf")]
 
-            print(f"goalpos={goalpos}  own goal={own_goalpos}  ballpos={ballpos}")
+            print(f"blue:{blue}, red{red}")
 
             if display_available:
                 try:
