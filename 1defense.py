@@ -858,7 +858,7 @@ def main():
             elif botstate == 1: #go for ball then score
                 if (substate1 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate1 = 1  #ball in bcz
-                elif ballpos[1] < (40 if substate1 in (1, 4) else 60): #2 far backup, 3 close backup
+                elif ballpos[1] < (60 if substate1 in (1, 4) else 80): #2 far backup, 3 close backup
                     raw_substate1 = 2 if ballpos[1] < -150 else 3
                 else:
                     raw_substate1 = 4  #pathfind to ball
@@ -876,7 +876,7 @@ def main():
                 elif substate1 == 3:
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 70 and ballpos[1] < 0: #wrap around ball
+                    if abs(ballpos[0]) < 120 and ballpos[1] < 0: #wrap around ball
                         if len(line_list) > 1: #touched line
                             desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0] #wrap around based on goal position
                         else:

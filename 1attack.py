@@ -981,7 +981,7 @@ def main():
                     comms.my_state.update({"command": 0})
                     motors.motorspeed5 = 0
                     desired_heading = 0
-                    if abs(ballpos[0]) < 70 and ballpos[1] < 0:
+                    if abs(ballpos[0]) < 120 and ballpos[1] < 0:
                         if len(line_list) > 1:
                             desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0]
                         else:
