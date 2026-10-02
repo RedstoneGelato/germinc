@@ -991,7 +991,7 @@ def main():
                         else:
                             desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
-                        desired_pos = [0, -200]
+                        desired_pos = [0, -200] if ballpos[1] > 20 else [ballpos[0], -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
