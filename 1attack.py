@@ -802,6 +802,7 @@ def main():
                     CameraToGoal.goaly_list = []
                     CameraToGoal.own_goalx_list = []
                     CameraToGoal.own_goaly_list = []
+                    dribbler_list = []
 
                 motors.motorspeed1 = 0
                 motors.motorspeed2 = 0

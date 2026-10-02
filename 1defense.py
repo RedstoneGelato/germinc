@@ -578,6 +578,8 @@ def main():
     new_maxspd = 0
     ingoalspd = basespd // 3
     dribblerspd = 5000000
+    dribbler_on = False
+    dribbler_list = []
     base_spin = 50 # bigger number = bot spins more instead of moves more
     line_escape_speed = basespd * 1.5
 
@@ -689,6 +691,7 @@ def main():
                     CameraToGoal.goaly_list = []
                     CameraToGoal.own_goalx_list = []
                     CameraToGoal.own_goaly_list = []
+                    dribbler_list = []
 
                 motors.motorspeed1 = 0
                 motors.motorspeed2 = 0
@@ -696,6 +699,7 @@ def main():
                 motors.motorspeed4 = 0
                 motors.motorspeed5 = 0
                 new_desired_pos = [0,0]
+                dribbler_on = False
                 new_maxspd = 0 #reset all variables and stop motors
                 comms.my_state.update({"bot active": 0}) # comm say bot off
 
@@ -853,7 +857,7 @@ def main():
                 else:
                     desired_pos = [goalpos[0], -250]
                     ingoalspd = basespd
-                motors.motorspeed5 = 0
+                dribbler_on = False
 
             elif botstate == 1: #go for ball then score
                 if (substate1 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
@@ -865,16 +869,16 @@ def main():
                 substate1 = substate1_hyst.update(raw_substate1)
 
                 if substate1 == 1:
-                    motors.motorspeed5 = dribblerspd if goalpos[1] > 50 else -dribblerspd
+                    dribbler_on = True
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = goalpos
                 elif substate1 == 2:
-                    motors.motorspeed5 = 0
+                    dribbler_on = False
                     desired_heading = 0
                     desired_pos = ballpos
                 elif substate1 == 3:
-                    motors.motorspeed5 = 0
+                    dribbler_on = False
                     desired_heading = 0
                     if abs(ballpos[0]) < 120 and ballpos[1] < 0: #wrap around ball
                         if len(line_list) > 1: #touched line
@@ -892,9 +896,9 @@ def main():
                         desired_pos = [ballpos[0], ballpos[1] - 60]
 
                     if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
-                        motors.motorspeed5 = dribblerspd
+                        dribbler_on = True
                     else:
-                        motors.motorspeed5 = 0
+                        dribbler_on = False
 
             elif botstate == 2: # go for ball then pass
                 if (substate2 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
@@ -906,16 +910,16 @@ def main():
                 substate2 = substate2_hyst.update(raw_substate2)
 
                 if substate2 == 1:
-                    motors.motorspeed5 = dribblerspd if goalpos[1] > 50 else -dribblerspd
+                    dribbler_on = True
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     desired_pos = goalpos
                 elif substate2 == 2:
-                    motors.motorspeed5 = 0
+                    dribbler_on = False
                     desired_heading = 0
                     desired_pos = [0, -200]
                 elif substate2 == 3:
-                    motors.motorspeed5 = 0
+                    dribbler_on = False
                     desired_heading = 0
                     if abs(ballpos[0]) < 70 and ballpos[1] < 0:
                         if len(line_list) > 1:
@@ -932,9 +936,9 @@ def main():
                         desired_pos = [ballpos[0], ballpos[1] - 60]
 
                     if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
-                        motors.motorspeed5 = dribblerspd
+                        dribbler_on = True
                     else:
-                        motors.motorspeed5 = 0
+                        dribbler_on = False
 
             elif botstate == 3: #chill in goals
                 desired_heading = 0
@@ -944,7 +948,18 @@ def main():
                 else:
                     desired_pos = [goalpos[0], -250]
                     ingoalspd = basespd
-                motors.motorspeed5 = 0
+                dribbler_on = False
+
+            dribbler_list.append(dribbler_on)
+            if len(dribbler_list) > 100:
+                dribbler_list.pop(0)
+            if dribbler_on:
+                motors.motorspeed5 = dribblerspd
+            else:
+                if dribbler_list.count(True) > 5:
+                    motors.motorspeed5 = dribblerspd
+                else:
+                    motors.motorspeed5 = 0
 
             #DEBUG
             print(f"botstate={botstate}  on line={on_line}")
