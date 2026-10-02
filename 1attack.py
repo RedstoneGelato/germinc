@@ -904,7 +904,7 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot):
                 if value < line_threshold:
-                    angle = i * (math.pi / 16) + compass #colour1 = front, spread anticlockwise
+                    angle = i * (math.pi / 16) + math.pi/2 #colour1 = front, spread anticlockwise
                     linex += math.cos(angle)
                     liney += math.sin(angle)
                     colour_see_number += 1
