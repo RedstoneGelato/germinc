@@ -687,7 +687,7 @@ def main():
     basespd = 80000000 #ideal speed
     new_maxspd = 0
     ingoalspd = basespd // 3
-    dribblerspd = 5000000
+    dribblerspd = 500000000
     dribbler_on = False
     dribbler_list = []
     base_spin = 50 #bigger number = bot spins more instead of moves more
@@ -767,19 +767,6 @@ def main():
             blue = camera.blue[:]
 
             user_input = read_input()
-            # TESTING speed
-            if user_input == "1": basespd = 0
-            if user_input == "2": basespd = 5000000
-            if user_input == "3": basespd = 50000000
-            if user_input == "4": basespd = 80000000
-            if user_input == "5": basespd = 110000000
-            if user_input == "6": basespd = 150000000
-            #TEST: dribbler spd
-            if user_input == "'": dribblerspd = 0
-            if user_input == ",": dribblerspd = 5000000
-            if user_input == ".": dribblerspd = 20000000
-            if user_input == "p": dribblerspd = 100000000
-            if user_input == "y": dribblerspd = 500000000
             #TEST: start sequence
             if user_input == "z" and not sequences.busy(): start_sequence_right.start()
             if user_input == "v" and not sequences.busy(): start_sequence_left.start()
@@ -953,7 +940,7 @@ def main():
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
-                desired_pos = goalpos
+                desired_pos = [goalpos[0] * 1.5, goalpos[1]]
                 desired_heading = math.atan2(goalpos[1], goalpos[0] * 1.6) - math.pi/2
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
 
