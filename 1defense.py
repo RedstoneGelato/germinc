@@ -985,13 +985,9 @@ def main():
 
             new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9] #alpha beta smoothing of desired position
             if on_line:
-                if colour_see_number < 14 and -1.47 > math.atan2(liney,linex) > -1.67 and abs(own_goalpos[0]) < 30:
-                    new_desired_pos = [ballpos[0], -100]
-                    new_maxspd = basespd // 2
-                else:
-                    mag = math.hypot(linex, liney)
-                    new_desired_pos = [linex / mag * 200, liney / mag * 200]  # straight away from the line
-                    new_maxspd = line_escape_speed
+                mag = math.hypot(linex, liney)
+                new_desired_pos = [linex / mag * 200, liney / mag * 200]  # straight away from the line
+                new_maxspd = line_escape_speed
 
             xvel = new_desired_pos[0]
             yvel = new_desired_pos[1]

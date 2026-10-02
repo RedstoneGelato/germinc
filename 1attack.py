@@ -1021,7 +1021,7 @@ def main():
             if len(dribbler_list) > 100:
                 dribbler_list.pop(0)
             if dribbler_on:
-                motors.motorspeed5 = -dribblerspd if botstate == 1 and goalpos[1] < 50 else dribblerspd
+                motors.motorspeed5 = -dribblerspd if botstate == 1 and goalpos[1] < 70 else dribblerspd
             else:
                 if dribbler_list.count(True) > 5:
                     motors.motorspeed5 = dribblerspd
@@ -1059,13 +1059,9 @@ def main():
 
                 new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9]
                 if on_line:
-                    if colour_see_number < 14 and 1.47 < math.atan2(liney,linex) < 1.67 and abs(goalpos[0]) < 30:
-                        new_desired_pos = goalpos
-                        new_maxspd = basespd
-                    else:
-                        mag = math.hypot(linex, liney)
-                        new_desired_pos = [linex / mag * 200, liney / mag * 200]  # straight away from the line
-                        new_maxspd = line_escape_speed
+                    mag = math.hypot(linex, liney)
+                    new_desired_pos = [linex / mag * 200, liney / mag * 200]  # straight away from the line
+                    new_maxspd = line_escape_speed
 
                 xvel = new_desired_pos[0]
                 yvel = new_desired_pos[1]
