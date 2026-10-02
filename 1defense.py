@@ -35,7 +35,7 @@ class FrameGrabber(threading.Thread): #raw camera capture
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
-            "ColourGains": (2.1, 2.7)   # blue, red tweak when needed
+            "ColourGains": (2.4, 2.7)   # blue, red tweak when needed
         })
         self.cap.start() #starts camera capture
 
@@ -73,7 +73,7 @@ class DetectionThread(threading.Thread): #analyse camera capture, split into 2 t
         # pixel region to ignore (center, ignore bot)
         self.ignore_x1 = 60
         self.ignore_x2 = 160
-        self.ignore_y1 = 150
+        self.ignore_y1 = 90
         self.ignore_y2 = 230
 
     def run(self):
