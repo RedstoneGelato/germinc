@@ -999,7 +999,7 @@ def main():
                     if ballpos[1] < 80 and abs(ballpos[0]) > 80:
                         desired_pos = [ballpos[0], -10]
                     else:
-                        desired_pos = [ballpos[0], ballpos[1] - 60]
+                        desired_pos = [ballpos[0] * 1.5, ballpos[1] - 60]
 
                     if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
                         dribbler_on = True
