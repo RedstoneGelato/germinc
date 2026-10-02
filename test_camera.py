@@ -111,7 +111,7 @@ def main():
             if yellow_box == [0, 0, 0, 0]:
                 goalpos = [0, 200]
             else:
-                goalx = yellow_box[0] + yellow_box[2] / 2
+                goalx = yellow_box[0] + yellow_box[2]
                 goaly = yellow_box[1] + yellow_box[3] / 2
                 dx = goalx - frame_cx
                 dy = frame_cy - goaly
@@ -119,7 +119,7 @@ def main():
             if blue_box == [0, 0, 0, 0]:
                 own_goalpos = [0, -200]
             else:
-                own_goalx = blue_box[0] + blue_box[2] / 2
+                own_goalx = blue_box[0]
                 own_goaly = blue_box[1] + blue_box[3] / 2
                 own_dx = own_goalx - frame_cx
                 own_dy = frame_cy - own_goaly
@@ -133,7 +133,7 @@ def main():
             else:
                 ballpos = [float("inf"), float("inf")]
 
-            print(f"blue:{blue}, red{red}")
+            print(f"goalpos={goalpos}  own goal={own_goalpos}  ballpos={ballpos}")
 
             if display_available:
                 try:

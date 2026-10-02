@@ -1021,7 +1021,7 @@ def main():
             if len(dribbler_list) > 100:
                 dribbler_list.pop(0)
             if dribbler_on:
-                motors.motorspeed5 = dribblerspd
+                motors.motorspeed5 = -dribblerspd if botstate == 1 and goalpos[1] < 50 else dribblerspd
             else:
                 if dribbler_list.count(True) > 5:
                     motors.motorspeed5 = dribblerspd
