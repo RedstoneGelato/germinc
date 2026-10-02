@@ -965,7 +965,7 @@ def main():
             elif botstate == 2: # go for ball
                 if ballpos[1] < -220 and goalpos[1] < 200 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
-                elif ballpos[1] < (40 if substate in (1, 4) else 60):
+                elif ballpos[1] < (50 if substate in (1, 4) else 70):
                     raw_substate = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
@@ -985,7 +985,7 @@ def main():
                     comms.my_state.update({"command": 0})
                     dribbler_on = False
                     desired_heading = 0
-                    if abs(ballpos[0]) < 120 and ballpos[1] < 0:
+                    if abs(ballpos[0]) < 110 and ballpos[1] < 0:
                         if len(line_list) > 1:
                             desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0]
                         else:
@@ -996,7 +996,7 @@ def main():
                     comms.my_state.update({"command": 0})
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    if ballpos[1] < 120 and abs(ballpos[0]) > 120:
+                    if ballpos[1] < 80 and abs(ballpos[0]) > 80:
                         desired_pos = [ballpos[0], -10]
                     else:
                         desired_pos = [ballpos[0], ballpos[1] - 60]
