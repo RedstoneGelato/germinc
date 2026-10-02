@@ -848,10 +848,10 @@ def main():
             if botstate == 0: #do not see ball
                 desired_heading = 0
                 if own_goalpos != [0,-250]: # align middle and go backwards
-                    desired_pos = [own_goalpos[0] * 6, own_goalpos[1] + 100] if own_goalpos[1] < -20 else [own_goalpos[0] * 6, 200]
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100] if own_goalpos[1] < -20 else [own_goalpos[0], 200]
                     ingoalspd = int(basespd / 5)
                 else:
-                    desired_pos = [goalpos[0] * 6, -250]
+                    desired_pos = [goalpos[0], -250]
                     ingoalspd = basespd
                 motors.motorspeed5 = 0
 
@@ -939,10 +939,10 @@ def main():
             elif botstate == 3: #chill in goals
                 desired_heading = 0
                 if own_goalpos != [0,-250]: # align middle and go backwards
-                    desired_pos = [own_goalpos[0] * 6, own_goalpos[1] + 70] if own_goalpos[1] < -20 else [own_goalpos[0], 0]
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 70] if own_goalpos[1] < -20 else [own_goalpos[0], 0]
                     ingoalspd = int(basespd / 5)
                 else:
-                    desired_pos = [goalpos[0] * 6, -250]
+                    desired_pos = [goalpos[0], -250]
                     ingoalspd = basespd
                 motors.motorspeed5 = 0
 
