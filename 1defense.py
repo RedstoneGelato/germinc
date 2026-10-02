@@ -881,7 +881,7 @@ def main():
             elif botstate == 2: # go for ball then pass
                 if (substate2 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < (40 if substate2 in (1, 4) else 60):
+                elif ballpos[1] < (60 if substate2 in (1, 4) else 80):
                     raw_substate2 = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
