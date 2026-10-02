@@ -856,7 +856,7 @@ def main():
             for i, sensor in enumerate(ir_snapshot): #sum angles and strength
                 if sensor["detected"] == 1 and sensor["distance"] != 0:
                     if sensor["distance"] >= 2:
-                        angle = i * math.pi / 6 + compass
+                        angle = i * math.pi / 6 + math.pi/2
 
                         irx += math.cos(angle)
                         iry += math.sin(angle)
@@ -900,7 +900,7 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot):
                 if value < line_threshold:
-                    angle = i * (math.pi / 16) + compass #colour1 = front, spread anticlockwise
+                    angle = i * (math.pi / 16) + math.pi/2 #colour1 = front, spread anticlockwise
                     linex += math.cos(angle)
                     liney += math.sin(angle)
                     colour_see_number += 1
@@ -961,7 +961,7 @@ def main():
             elif botstate == 2: # go for ball
                 if ballpos[1] < -220 and goalpos[1] < 200 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
-                elif ballpos[1] < (40 if substate in (1, 4) else 60):
+                elif ballpos[1] < (60 if substate in (1, 4) else 80):
                     raw_substate = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball

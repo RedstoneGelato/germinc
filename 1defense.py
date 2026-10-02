@@ -737,7 +737,7 @@ def main():
             for i, sensor in enumerate(ir_snapshot):
                 if sensor["detected"] == 1 and sensor["distance"] != 0:
                     if sensor["distance"] >= 2:
-                        angle = i * math.pi / 6 + compass
+                        angle = i * math.pi / 6 + math.pi/2
 
                         irx += math.cos(angle)
                         iry += math.sin(angle)
@@ -803,7 +803,7 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot): #sums line detected sensors direction
                 if value < line_threshold:
-                    angle = i * (math.pi / 16) + compass #colour1 = front, spread anticlockwise
+                    angle = i * (math.pi / 16) + math.pi/2 #colour1 = front, spread anticlockwise
                     linex += math.cos(angle)
                     liney += math.sin(angle)
                     colour_see_number += 1
