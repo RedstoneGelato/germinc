@@ -952,7 +952,7 @@ def main():
             elif botstate == 2: # go for ball
                 if ballpos[1] < -220 and goalpos[1] < 200 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
-                elif ballpos[1] < (50 if substate in (1, 4) else 70):
+                elif ballpos[1] < (60 if substate in (1, 4) else 80):
                     raw_substate = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
