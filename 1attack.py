@@ -688,6 +688,8 @@ def main():
     new_maxspd = 0
     ingoalspd = basespd // 3
     dribblerspd = 5000000
+    dribbler_on = False
+    dribbler_list = []
     base_spin = 50 #bigger number = bot spins more instead of moves more
     line_escape_speed = basespd * 1.5
 
@@ -808,6 +810,7 @@ def main():
                 motors.motorspeed5 = 0
                 new_desired_pos = [0,0]
                 new_maxspd = 0
+                dribbler_on = False
                 comms.my_state.update({"bot active": 0}) # bot off, likely called damage or 30sec penalty
                 comms.my_state.update({"command": 1}) #tell goalie to get ball
 
@@ -945,7 +948,7 @@ def main():
                 else:
                     desired_pos = [own_goalpos[0], 250]
                     ingoalspd = basespd
-                motors.motorspeed5 = 0
+                dribbler_on = False
 
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
@@ -956,12 +959,12 @@ def main():
                 if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120: #position too far for just pointing at the goal and shooting
                     flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start() #flick the ball towards goal
                 else:
-                    motors.motorspeed5 = dribblerspd if goalpos[1] > 50 else -dribblerspd
+                    dribbler_on = True
 
             elif botstate == 2: # go for ball
                 if ballpos[1] < -220 and goalpos[1] < 200 and goalie_bot_state == 1: #tell goalie to get ball
                     raw_substate = 1
-                elif ballpos[1] < (60 if substate in (1, 4) else 80):
+                elif ballpos[1] < (40 if substate in (1, 4) else 60):
                     raw_substate = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
@@ -971,15 +974,15 @@ def main():
                     comms.my_state.update({"command": 1}) #send goalie to get ball
                     desired_heading = 0
                     desired_pos = [goalpos[0], goalpos[1] - 180]
-                    motors.motorspeed5 = 0
+                    dribbler_on = False
                 elif substate == 2:
                     comms.my_state.update({"command": 0})
-                    motors.motorspeed5 = 0
+                    dribbler_on = False
                     desired_heading = 0
                     desired_pos = ballpos
                 elif substate == 3:
                     comms.my_state.update({"command": 0})
-                    motors.motorspeed5 = 0
+                    dribbler_on = False
                     desired_heading = 0
                     if abs(ballpos[0]) < 120 and ballpos[1] < 0:
                         if len(line_list) > 1:
@@ -998,9 +1001,9 @@ def main():
                         desired_pos = [ballpos[0], ballpos[1] - 60]
 
                     if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
-                        motors.motorspeed5 = dribblerspd
+                        dribbler_on = True
                     else:
-                        motors.motorspeed5 = 0
+                        dribbler_on = False
 
             elif botstate == 3:
                 comms.my_state.update({"command": 1})
@@ -1011,7 +1014,18 @@ def main():
                 else:
                     desired_pos = [goalpos[0], -200]
                     ingoalspd = basespd
-                motors.motorspeed5 = 0
+                dribbler_on = False
+
+            dribbler_list.append(dribbler_on)
+            if len(dribbler_list) > 100:
+                dribbler_list.pop(0)
+            if dribbler_on:
+                motors.motorspeed5 = dribblerspd
+            else:
+                if dribbler_list.count(True) > 5:
+                    motors.motorspeed5 = dribblerspd
+                else:
+                    motors.motorspeed5 = 0
 
             #DEBUG
             print(f"botstate={botstate}  substate ={substate}")
