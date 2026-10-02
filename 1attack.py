@@ -1014,7 +1014,7 @@ def main():
                 motors.motorspeed5 = 0
 
             #DEBUG
-            print(f"botstate={botstate}  on line={on_line}")
+            print(f"botstate={botstate}  substate ={substate}")
             print(f"goalpos={goalpos}  own goalpos={own_goalpos}  ballpos={ballpos}")
 
 #----------------------------------------------------------------------
