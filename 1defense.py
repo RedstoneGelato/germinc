@@ -4,11 +4,9 @@ import cv2
 import picamera2
 import numpy as np
 import time
-import sys
 import socket
 import json
 from smbus2 import SMBus, i2c_msg
-import select
 import board
 import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
@@ -493,11 +491,6 @@ def circular_mean(angles):
 def angdiff(a, b):
     return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
 
-def read_input(): #gets terminal line input
-    if select.select([sys.stdin], [], [], 0)[0]:
-        return sys.stdin.readline().strip()
-    return None
-
 def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
 
@@ -577,7 +570,7 @@ def main():
     basespd = 80000000 # ideal speed
     new_maxspd = 0
     ingoalspd = basespd // 3
-    dribblerspd = 5000000
+    dribblerspd = 500000000
     dribbler_on = False
     dribbler_list = []
     base_spin = 50 # bigger number = bot spins more instead of moves more
@@ -657,21 +650,6 @@ def main():
                 colours_snapshot = pcb.colours
             yellow = camera.yellow[:]
             blue = camera.blue[:]
-
-            user_input = read_input()
-            # TESTING speed
-            if user_input == "1": basespd = 0
-            if user_input == "2": basespd = 5000000
-            if user_input == "3": basespd = 50000000
-            if user_input == "4": basespd = 80000000
-            if user_input == "5": basespd = 110000000
-            if user_input == "6": basespd = 150000000
-            #TEST: dribbler spd
-            if user_input == "'": dribblerspd = 0
-            if user_input == ",": dribblerspd = 5000000
-            if user_input == ".": dribblerspd = 20000000
-            if user_input == "p": dribblerspd = 100000000
-            if user_input == "y": dribblerspd = 500000000
 
 #----------------------------------------------------------------------
 #            pause and unpause bot
