@@ -990,7 +990,7 @@ def main():
                     new_maxspd = basespd // 2
                 else:
                     mag = math.hypot(linex, liney)
-                    new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+                    new_desired_pos = [linex / mag * 200, liney / mag * 200]  # straight away from the line
                     new_maxspd = line_escape_speed
 
             xvel = new_desired_pos[0]

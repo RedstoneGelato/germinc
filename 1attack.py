@@ -904,7 +904,7 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot):
                 if value < line_threshold:
-                    angle = i * (math.pi / 16) + math.pi/2 #colour1 = front, spread anticlockwise
+                    angle = i * (math.pi / 16) + compass #colour1 = front, spread anticlockwise
                     linex += math.cos(angle)
                     liney += math.sin(angle)
                     colour_see_number += 1
@@ -1064,7 +1064,7 @@ def main():
                         new_maxspd = basespd
                     else:
                         mag = math.hypot(linex, liney)
-                        new_desired_pos = [-linex / mag * 200, -liney / mag * 200]  # straight away from the line
+                        new_desired_pos = [linex / mag * 200, liney / mag * 200]  # straight away from the line
                         new_maxspd = line_escape_speed
 
                 xvel = new_desired_pos[0]
