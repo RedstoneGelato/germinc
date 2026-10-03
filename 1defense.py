@@ -930,16 +930,8 @@ def main():
                     mag = math.hypot(linex, liney)
                     if mag > 1e-6:
                         line_escape_vec = [linex / mag * 200, liney / mag * 200]
-                    else:
-                        line_escape_vec = [0, -200]         # fallback if sensors cancel exactly
                 new_desired_pos = line_escape_vec
                 new_maxspd = line_escape_speed
-            elif line_escape_vec is not None:
-                # off the line: keep the latch briefly so one-frame flicker doesn't re-aim
-                if off_line_since is None:
-                    off_line_since = time.monotonic()
-                elif time.monotonic() - off_line_since > 0.15:
-                    line_escape_vec = None
 
             xvel = new_desired_pos[0]
             yvel = new_desired_pos[1]
