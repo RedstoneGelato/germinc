@@ -576,8 +576,6 @@ def main():
     ball_distance_count = 0
     ball_distance_total = 0
 
-    line_escape_vec = None      # latched escape direction
-    off_line_since = None       # when we last stopped seeing the line
     led_brightness = 40000  # pcb led brightness: 0 - 65535
     line_threshold = 1500
     colour_see_number = 0
@@ -663,8 +661,6 @@ def main():
                 motors.motorspeed4 = 0
                 new_desired_pos = [0,0]
                 dribbler_on = False
-                line_escape_vec = None
-                off_line_since = None
                 new_maxspd = 0 #reset all variables and stop motors
                 comms.my_state.update({"bot active": 0}) # comm say bot off
 
@@ -925,14 +921,9 @@ def main():
 
             new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9] #alpha beta smoothing of desired position
             if on_line:
-                if line_escape_vec is None:                 # first frame on the line
-                    mag = math.hypot(linex, liney)
-                    if mag > 1e-6:
-                        line_escape_vec = [linex / mag * 200, liney / mag * 200]
-                new_desired_pos = line_escape_vec
+                mag = math.hypot(linex, liney)
+                new_desired_pos = [linex / mag * 200, liney / mag * 200]  # straight away from the line
                 new_maxspd = line_escape_speed
-            else:
-                line_escape_vec = None
 
             xvel = new_desired_pos[0]
             yvel = new_desired_pos[1]
