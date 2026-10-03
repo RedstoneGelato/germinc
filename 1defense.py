@@ -553,7 +553,7 @@ def main():
 
     basespd = 60000000 # ideal speed
     new_maxspd = 0
-    ingoalspd = basespd // 3
+    ingoalspd = 60000000
     dribblerspd = 0
     dribbler_on = False
     dribbler_list = []
