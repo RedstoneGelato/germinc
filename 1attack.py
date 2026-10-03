@@ -803,6 +803,7 @@ def main():
                         else:
                             #start_sequence_right.start()
                             pass
+                robot_active = True #running bot
                 comms.my_state.update({"bot active": 1})
 
 #----------------------------------------------------------------------
@@ -811,6 +812,7 @@ def main():
             compass = imu.heading - heading_offset
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
+            ir_snapshot[10] = {'detected': 0, 'distance': 0} #broken, interpolate results below
             for i, sensor in enumerate(ir_snapshot): #sum angles and strength
                 if sensor["detected"] == 1 and sensor["distance"] != 0:
                     if sensor["distance"] >= 2:
@@ -821,6 +823,28 @@ def main():
 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
+            if ball_distance_count > 0:
+                if ir_snapshot[11].get('distance') == 3 and ir_snapshot[9].get('distance') == 3: #surrounding both 3
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 3
+                    ball_distance_count += 1
+                elif (ball_distance_total - 1) / ball_distance_count == 2 and (ir_snapshot[11].get('distance') == 3 or ir_snapshot[9].get('distance') == 3) and ball_distance_count < 4: #one neighbour is close, only one sees close, not enough ir sensors see
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 3
+                    ball_distance_count += 1
+                elif ball_distance_count < 4 and (ir_snapshot[11].get('distance') != 0 or ir_snapshot[9].get('distance') != 0):
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 2
+                    ball_distance_count += 1
+                elif ir_snapshot[11].get('distance') == 3 or ir_snapshot[9].get('distance') == 3:
+                    irx += math.cos(math.pi/6)
+                    iry += math.sin(math.pi/6)
+                    ball_distance_total += 2
+                    ball_distance_count += 1
+
 
             if irx != 0 or iry != 0:
                 irdirection = math.atan2(iry, irx) # direction
