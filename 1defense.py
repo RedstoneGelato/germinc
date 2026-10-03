@@ -12,6 +12,7 @@ import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
+import adafruit_bitbangio as bbi
 from gpiozero import DigitalInputDevice #imports
 
 script_activate_pin = DigitalInputDevice(25, pull_up = True) #gpio pin for on/off switch
@@ -19,6 +20,9 @@ script_activate_pin = DigitalInputDevice(25, pull_up = True) #gpio pin for on/of
 TEAM_ID = "GERM_INC"
 ROBOT_ID = 2 #goalie bot
 COMMS_PORT = 5555 #used by comms
+
+i2c = bbi.I2C(board.D6, board.D5, frequency=400000)
+i2c.try_lock()
 
 class FrameGrabber(threading.Thread): #raw camera capture
     def __init__(self):
