@@ -764,7 +764,6 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                motors.motorspeed5 = 0
                 new_desired_pos = [0,0]
                 new_maxspd = 0
                 dribbler_on = False
