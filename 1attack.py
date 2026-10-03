@@ -15,6 +15,7 @@ import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
+import adafruit_bitbangio as bbi
 from gpiozero import DigitalInputDevice #imports
 
 script_activate_pin = DigitalInputDevice(25, pull_up = True) #gpio pin for on/off switch
@@ -22,6 +23,8 @@ script_activate_pin = DigitalInputDevice(25, pull_up = True) #gpio pin for on/of
 TEAM_ID = "GERM_INC"
 ROBOT_ID = 1 #attack bot
 COMMS_PORT = 5555 #used by comms
+
+i2c = bbi.I2C(board.D6, board.D5, frequency=400000)
 
 class FrameGrabber(threading.Thread): #raw camera capture
     def __init__(self):
@@ -130,7 +133,7 @@ class IMUThread(threading.Thread):
         self.daemon = True
         self.running = True
 
-        self.i2c = busio.I2C(board.SCL, board.SDA)
+        self.i2c = i2c
         self.imu = BNO08X_I2C(self.i2c)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
 
@@ -265,7 +268,7 @@ class MotorThread(threading.Thread):
         self.motorspeed3 = 0
         self.motorspeed4 = 0
 
-        self.i2c = busio.I2C(board.SCL, board.SDA)
+        self.i2c = i2c
 
         self.motor1 = PowerfulBLDCDriver(self.i2c, 26)
         self.motor1.set_current_limit_foc(262144)  # max 8 amps is 524288

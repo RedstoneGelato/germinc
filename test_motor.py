@@ -4,6 +4,7 @@ import board
 import struct
 import busio
 import select
+import adafruit_bitbangio as bbi
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 
 # Initialize variables
@@ -31,7 +32,7 @@ def read_input():
     return None
 
 # Initialize I2C
-i2c = busio.I2C(board.SCL, board.SDA)
+i2c = bbi.I2C(board.D6, board.D5, frequency=400000)
 
 print("Please enter the number of motor drivers you want to control:")
 tempuint32 = int(input())
