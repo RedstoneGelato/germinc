@@ -768,7 +768,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ir_snapshot[0].get("distance") == 3: #go forward
+            if ir_snapshot[0].get("distance") == 3 and (comms_command == 1 or attack_bot_state == 0 or attack_bot_state is None): #go forward
                 raw_botstate = 1
             else: #chill in goals
                 raw_botstate = 2
