@@ -768,7 +768,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ir_snapshot[0].get("direction") == 3 or ir_snapshot[1].get("direction") == 3 or ir_snapshot[11].get("direction") == 3: #go forward
+            if ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3: #go forward
                 raw_botstate == 1
             else: #chill in goals
                 raw_botstate = 2
