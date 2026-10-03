@@ -6,11 +6,12 @@ import numpy as np
 import time
 import socket
 import json
+from smbus2 import SMBus, i2c_msg
 import board
+import busio
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-import adafruit_bitbangio as bbi
 from gpiozero import DigitalInputDevice #imports
 
 script_activate_pin = DigitalInputDevice(25, pull_up = True) #gpio pin for on/off switch
@@ -22,48 +23,6 @@ COMMS_PORT = 5555 #used by comms
 BROKEN_IR = (8, 9)  # dead IR sensors, filled in from their neighbours
 IR_GAP_LEFT = 7     # nearest working sensor on one side of the gap
 IR_GAP_RIGHT = 10   # nearest working sensor on the other side
-
-class AutoLockI2C:
-    def __init__(self, bus):
-        self._bus = bus
-        self._held = False
- 
-    def try_lock(self):
-        if self._held:
-            return False
-        self._held = self._bus.try_lock()
-        return self._held
- 
-    def unlock(self):
-        if self._held:
-            self._bus.unlock()
-            self._held = False
- 
-    def _run(self, fn, *args, **kwargs):
-        if self._held:  # caller already holds the lock
-            return fn(*args, **kwargs)
-        while not self._bus.try_lock():
-            pass
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            self._bus.unlock()
- 
-    def writeto(self, *a, **k):
-        return self._run(self._bus.writeto, *a, **k)
- 
-    def readfrom_into(self, *a, **k):
-        return self._run(self._bus.readfrom_into, *a, **k)
- 
-    def writeto_then_readfrom(self, *a, **k):
-        return self._run(self._bus.writeto_then_readfrom, *a, **k)
- 
-    def scan(self):
-        return self._run(self._bus.scan)
- 
- 
-# ONE shared bus for IMU + PCB + motors (SCL = D6, SDA = D5)
-i2c = AutoLockI2C(bbi.I2C(board.D6, board.D5, frequency=400000))
 
 class FrameGrabber(threading.Thread): #raw camera capture
     def __init__(self):
@@ -108,7 +67,7 @@ class DetectionThread(threading.Thread): #analyse camera capture, split into 2 t
         # HSV ranges for detecting colour blobs
         self.lower_blue = np.array([90, 200, 100])
         self.upper_blue = np.array([110, 255, 255])
-        self.lower_yellow = np.array([20, 100, 100])
+        self.lower_yellow = np.array([0, 180, 180])
         self.upper_yellow = np.array([40, 255, 255])
 
         self.kernel = np.ones((3,3), np.uint8) #smoothing mask
@@ -143,8 +102,8 @@ class DetectionThread(threading.Thread): #analyse camera capture, split into 2 t
                 "yellow": cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, self.kernel),
             } #apply smoothing
 
-            self.yellow = self._merge_blobs(masks["yellow"], 400)
-            self.blue = self._merge_blobs(masks["blue"], 400) #merge all small blobs into 1 big blob
+            self.yellow = self._merge_blobs(masks["yellow"], 200)
+            self.blue = self._merge_blobs(masks["blue"], 200) #merge all small blobs into 1 big blob
             time.sleep(0.005)
 
     def _merge_blobs(self, mask, min_area): #merge multiple rect of same colour into 1
@@ -165,149 +124,204 @@ class DetectionThread(threading.Thread): #analyse camera capture, split into 2 t
             return [x_min, y_min, x_max - x_min, y_max - y_min] # coords of top left corner, width, height
         else:
             return [0,0,0,0]
+    
+class IMUThread(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
 
-class IMU:
-    def __init__(self, bus):
-        self.sensor = BNO08X_I2C(bus)
-        self.sensor.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
-        self.heading = 0.0
+        self.i2c = busio.I2C(board.SCL, board.SDA)
+        self.imu = BNO08X_I2C(self.i2c)
+        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
+
+        self.heading = 0
         self.ready = False
-        self.errors = 0
- 
-    def update(self):
-        try:
-            h = get_heading(self.sensor)
-        except Exception:  # bitbang glitch / bad SHTP packet: keep the last heading
-            self.errors += 1
-            return
-        if h is not None:
-            self.heading = h
-            self.ready = True
 
-class PCBReader:
-    ADDR = 0x64
-    CMD_READ_COLOURS = 0x01
-    CMD_READ_IR = 0x02
-    CMD_SET_BRIGHTNESS = 0x03
-    COLOUR_SENSOR_COUNT = 32
-    IR_SENSOR_COUNT = 12
-    RESPONSE_DELAY = 0.02  # PCB needs this long between command and read (was CMD_TO_RESPONSE_DELAY)
- 
-    def __init__(self, bus):
-        self.bus = bus
-        self.ir = [{'detected': 0, 'distance': 0} for _ in range(self.IR_SENSOR_COUNT)]
+    def run(self):
+        while self.running:
+            quat = self.imu.game_quaternion  # (x, y, z, w)
+            if quat is not None:
+                self.ready = True
+
+                x, y, z, w = quat
+
+                # convert quaternion -> yaw (heading)
+                self.heading = math.atan2(
+                    2*(w*z + x*y),
+                    1 - 2*(y*y + z*z)
+                )
+            time.sleep(0.01)
+
+class PCBThread(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+
+        self.ready = False
+        self.I2C_BUS = 1
+        self.I2C_ADDR = 0x64
+        self.CMD_READ_COLOURS = 0x01
+        self.CMD_READ_IR = 0x02
+        self.COLOUR_SENSOR_COUNT = 32
+        self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
+        self.IR_SENSOR_COUNT = 12
+        self.IR_PACKET_SIZE = self.IR_SENSOR_COUNT * 2
+        self.CMD_TO_RESPONSE_DELAY = 0.02
+        self.READ_RETRIES = 3
+        self.RETRY_DELAY = 0.02
+        self.bus = SMBus(self.I2C_BUS)
+        self.lock = threading.Lock()
+        self.bus_lock = threading.Lock()
+
+        self.ir = [
+            {'detected': 0, 'distance': 0}
+            for _ in range(self.IR_SENSOR_COUNT)
+                    ]
+
         self.colours = [0] * self.COLOUR_SENSOR_COUNT
-        self.ready = False
-        self.errors = 0
- 
-        self._have_ir = False
-        self._have_colours = False
-        self._schedule = [self.CMD_READ_COLOURS, self.CMD_READ_IR]  # order polled; add a repeat to poll one more often
-        self._next = 0
-        self._pending = None  # (command, time it was sent) while waiting for the PCB to prepare its reply
-        self._brightness = None
-        self._brightness_sent = None
- 
-    def set_brightness(self, value: float):  # 0-65535, higher = brighter
-        # only stores the value; it is sent from update() when no read is in flight,
-        # so it can never land between a command and its response
-        self._brightness = int(max(0.0, min(65535.0, value)))
- 
-    def _read(self, length):
-        buf = bytearray(length)
-        self.bus.readfrom_into(self.ADDR, buf)
-        return buf
- 
-    def update(self):
-        try:
-            if self._pending is None:
-                if self._brightness is not None and self._brightness != self._brightness_sent:
-                    b = self._brightness
-                    self.bus.writeto(self.ADDR, bytes([self.CMD_SET_BRIGHTNESS, b & 0xFF, (b >> 8) & 0xFF]))
-                    self._brightness_sent = b
-                cmd = self._schedule[self._next]
-                self.bus.writeto(self.ADDR, bytes([cmd]))
-                self._pending = (cmd, time.monotonic())
-                return
- 
-            cmd, sent_at = self._pending
-            if time.monotonic() - sent_at < self.RESPONSE_DELAY:
-                return  # reply not ready yet - go do other work
-            self._pending = None
-            self._next = (self._next + 1) % len(self._schedule)
- 
-            if cmd == self.CMD_READ_IR:
-                data = self._read(self.IR_SENSOR_COUNT * 2)
-                self.ir = [
-                    {
-                        'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
-                        'distance': data[i * 2 + 1]
-                    }
-                    for i in range(self.IR_SENSOR_COUNT)
-                ]
-                self._have_ir = True
-            else:
-                data = self._read(self.COLOUR_SENSOR_COUNT * 2)
-                self.colours = [data[2 * i] | (data[2 * i + 1] << 8) for i in range(self.COLOUR_SENSOR_COUNT)]
-                self._have_colours = True
-            self.ready = self._have_ir and self._have_colours
- 
-        except (OSError, RuntimeError) as e:
-            self._pending = None  # drop the exchange, start clean next pass
-            self.errors += 1
-            print(f"PCB I2C error: {e}")
 
-MOTOR_SPEED_LIMIT = 546133333  # max spd
-MOTOR_CONFIG = [  # (i2c address, ELECANGLEOFFSET, SINCOSCENTRE) - same values as before
-    (26, 1161314304, 1244),  # motor 1
-    (32, 1304942336, 1239),  # motor 2
-    (28, 1772804352, 1251),  # motor 3
-    (25, 1352689664, 1251),  # motor 4
-]
- 
-class Motors:
-    def __init__(self, bus):
-        self.motors = []
-        for addr, elec_offset, sincos_centre in MOTOR_CONFIG:
-            m = PowerfulBLDCDriver(bus, addr)
-            m.set_current_limit_foc(262144)  # max 8 amps is 524288
-            m.set_id_pid_constants(1500, 200)
-            m.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-            m.set_position_pid_constants(275, 0, 0)
-            m.set_position_region_boundary(250000)
-            m.set_ELECANGLEOFFSET(elec_offset)
-            m.set_SINCOSCENTRE(sincos_centre)
-            m.set_speed_limit(MOTOR_SPEED_LIMIT)
-            m.configure_operating_mode_and_sensor(3, 1)
-            m.configure_command_mode(12)
-            self.motors.append(m)
-        self._last = None
-        self._last_sent = 0.0
- 
-    def set_speeds(self, s1, s2, s3, s4):
-        speeds = (int(-s1), int(-s2), int(-s3), int(-s4))
-        now = time.monotonic()
-        if speeds == self._last and now - self._last_sent < 0.1:
-            return
-        try:
-            for m, s in zip(self.motors, speeds):
-                m.set_speed(s)
-            self._last = speeds
-            self._last_sent = now
-        except (OSError, RuntimeError) as e:
-            self._last = None  # force a resend next pass
-            print(f"Motor I2C error: {e}")
- 
-    def stop(self):  # forced stop, used at shutdown
-        self._last = None
-        self.set_speeds(0, 0, 0, 0)
- 
-    def clear_faults(self):
-        for m in self.motors:
+    def _send_command(self, cmd): #low level helper
+        self.bus.write_byte(self.I2C_ADDR, cmd)
+
+    def _read_raw(self, length): #low level helper
+        msg = i2c_msg.read(self.I2C_ADDR, length)
+        self.bus.i2c_rdwr(msg)
+        return bytes(msg)
+
+    def _read_packet(self, cmd, length): #low level helper
+        last_err = None
+
+        for _ in range(self.READ_RETRIES):
             try:
-                m.clear_faults()
-            except Exception:
-                pass
+                with self.bus_lock:
+                    self._send_command(cmd)
+                    time.sleep(self.CMD_TO_RESPONSE_DELAY)
+                    data = self._read_raw(length)
+                if len(data) == length:
+                    return data
+
+            except OSError as e:
+                last_err = e
+                time.sleep(self.RETRY_DELAY)
+
+        raise IOError(f"Failed to read packet: {last_err}")
+
+    def _read_ir(self): #read ir sensors
+        data = self._read_packet(self.CMD_READ_IR, self.IR_PACKET_SIZE)
+
+        return [
+            {
+                'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
+                'distance': data[i * 2 + 1]
+            }
+            for i in range(12)
+        ]
+
+    def _read_colours(self): #read colour sensors
+        data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
+
+        values = []
+        for i in range(self.COLOUR_SENSOR_COUNT):
+            lo = data[2*i]
+            hi = data[2*i + 1]
+            values.append(lo | (hi << 8))
+
+        return values
+
+    def set_brightness(self, value: float): #set brightness: 0-65535, higher = brighter
+        val = int(max(0.0, min(65535.0, value)))
+        lo  = val & 0xFF
+        hi  = (val >> 8) & 0xFF
+        with self.bus_lock:
+            self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
+
+    def run(self):
+        while self.running:
+            try:
+                new_ir = self._read_ir()
+                new_colours = self._read_colours()
+                with self.lock:
+                    self.ir = new_ir
+                    self.colours = new_colours
+                self.ready = True
+            except IOError as e:
+                print(f"PCB I2C error: {e}")
+                self.ready = False
+            time.sleep(0.05)
+
+        self.bus.close()
+
+class MotorThread(threading.Thread): #setup motors with motor drivers
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+
+        self.speedlimit = 546133333 #max spd
+        self.motorspeed1 = 0
+        self.motorspeed2 = 0
+        self.motorspeed3 = 0
+        self.motorspeed4 = 0
+
+        self.i2c = busio.I2C(board.SCL, board.SDA)
+
+        self.motor1 = PowerfulBLDCDriver(self.i2c, 26)
+        self.motor1.set_current_limit_foc(262144) # max 8 amps is 524288
+        self.motor1.set_id_pid_constants(1500, 200)
+        self.motor1.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor1.set_position_pid_constants(275, 0, 0)
+        self.motor1.set_position_region_boundary(250000)
+        self.motor1.set_ELECANGLEOFFSET(1161314304)
+        self.motor1.set_SINCOSCENTRE(1244)
+        self.motor1.set_speed_limit(self.speedlimit)
+        self.motor1.configure_operating_mode_and_sensor(3, 1)
+        self.motor1.configure_command_mode(12)
+
+        self.motor2 = PowerfulBLDCDriver(self.i2c, 32)
+        self.motor2.set_current_limit_foc(262144) # 4 amps
+        self.motor2.set_id_pid_constants(1500, 200)
+        self.motor2.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor2.set_position_pid_constants(275, 0, 0)
+        self.motor2.set_position_region_boundary(250000)
+        self.motor2.set_ELECANGLEOFFSET(1304942336)
+        self.motor2.set_SINCOSCENTRE(1239)
+        self.motor2.set_speed_limit(self.speedlimit)
+        self.motor2.configure_operating_mode_and_sensor(3, 1)
+        self.motor2.configure_command_mode(12)
+
+        self.motor3 = PowerfulBLDCDriver(self.i2c, 28)
+        self.motor3.set_current_limit_foc(262144)
+        self.motor3.set_id_pid_constants(1500, 200)
+        self.motor3.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor3.set_position_pid_constants(275, 0, 0)
+        self.motor3.set_position_region_boundary(250000)
+        self.motor3.set_ELECANGLEOFFSET(1772804352)
+        self.motor3.set_SINCOSCENTRE(1251)
+        self.motor3.set_speed_limit(self.speedlimit)
+        self.motor3.configure_operating_mode_and_sensor(3, 1)
+        self.motor3.configure_command_mode(12)
+
+        self.motor4 = PowerfulBLDCDriver(self.i2c, 25)
+        self.motor4.set_current_limit_foc(262144)
+        self.motor4.set_id_pid_constants(1500, 200)
+        self.motor4.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        self.motor4.set_position_pid_constants(275, 0, 0)
+        self.motor4.set_position_region_boundary(250000)
+        self.motor4.set_ELECANGLEOFFSET(1352689664)
+        self.motor4.set_SINCOSCENTRE(1251)
+        self.motor4.set_speed_limit(self.speedlimit)
+        self.motor4.configure_operating_mode_and_sensor(3, 1)
+        self.motor4.configure_command_mode(12)
+
+    def run(self):
+        while self.running:
+            self.motor1.set_speed(int(-self.motorspeed1))
+            self.motor2.set_speed(int(-self.motorspeed2))
+            self.motor3.set_speed(int(-self.motorspeed3))
+            self.motor4.set_speed(int(-self.motorspeed4))
+            time.sleep(0.005)
 
 class TeammateLinkThread(threading.Thread): #comms between bots
     def __init__(self, send_interval=0.05):
@@ -447,12 +461,6 @@ class GoalTracker: #camera to goal position
         own_goalpos = [int(np.mean(self.own_goalx_list)), int(np.mean(self.own_goaly_list))] if self.own_goalx_list else [0, -250]
         return goalpos, own_goalpos
 
-def get_heading(imu):
-    quat = imu.game_quaternion  # (x, y, z, w)
-    if quat is not None:
-        x, y, z, w = quat
-        return math.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
-
 def VelocityToMotor(xvel, yvel, rot, maxspd): #convert variables into specific motor speed values
     motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) - rot
     motor2 = xvel*math.cos(3*math.pi/4) + yvel*math.sin(3*math.pi/4) - rot
@@ -473,30 +481,43 @@ def circular_mean(angles):
 def angdiff(a, b):
     return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
 
-def safe_shutdown(grabber, camera, motors, comms):
+def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
- 
-    # stop motors first (repeat in case a bitbang write glitches)
-    for _ in range(3):
-        motors.stop()
-        time.sleep(0.01)
-    motors.clear_faults()
- 
-    # stop threads (only camera + comms are threads now)
+
+    # stop motors first
+    motors.motorspeed1 = 0
+    motors.motorspeed2 = 0
+    motors.motorspeed3 = 0
+    motors.motorspeed4 = 0
+    motors.motor1.clear_faults()
+    motors.motor2.clear_faults()
+    motors.motor3.clear_faults()
+    motors.motor4.clear_faults()
+
+    # allow motor thread to send stop command
+    time.sleep(0.05)
+
+    # stop threads
     grabber.running = False
     camera.running = False
+    motors.running = False
+    imu.running = False
+    pcb.running = False
     comms.stop()
- 
+
     try:
         grabber.cap.stop()
     except:
         pass
- 
+
     # wait for threads
     grabber.join()
     camera.join()
+    motors.join()
+    imu.join()
+    pcb.join()
     comms.join()
- 
+
     print("Robot stopped.")
 
 #==========================================================================================#
@@ -510,17 +531,18 @@ def main():
     grabber.start()
     camera = DetectionThread(grabber)
     camera.start()
-    motors = Motors(i2c)
-    imu = IMU(i2c)
-    pcb = PCBReader(i2c)
+    motors = MotorThread()
+    motors.start()
+    imu = IMUThread()
+    imu.start()
+    pcb = PCBThread()
+    pcb.start()
     comms = TeammateLinkThread()
     comms.start()
     CameraToGoal = GoalTracker() #start threads
 
     print("Waiting for sensors...")
     while not (imu.ready and camera.ready and pcb.ready):
-        imu.update()
-        pcb.update()
         time.sleep(0.05)
 
     print("Waiting for signal")
@@ -533,7 +555,7 @@ def main():
     heading_offset = imu.heading
     desired_heading = 0
 
-    basespd = 60000000 # ideal speed
+    basespd = 80000000 # ideal speed
     new_maxspd = 0
     ingoalspd = 60000000
     dribblerspd = 0
@@ -567,18 +589,19 @@ def main():
     line_spd_multi = 1
     pcb.set_brightness(led_brightness)
 
-    botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
+    botstate_hyst = Hysteresis(hold_time=0.11)
     substate1_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
+    substate2_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
     botstate = 3
     substate1 = 4
+    substate2 = 4
 
     CONTROL_PERIOD = 0.01 #robot runs at 100hz
 
     while script_activate_pin.is_active: #calibrate bot
-        imu.update()
-        pcb.update()
-        ir_snapshot = list(pcb.ir)
-        colours_snapshot = list(pcb.colours)
+        with pcb.lock:
+            ir_snapshot = pcb.ir
+            colours_snapshot = pcb.colours #pull variables
         if camera.yellow != [0,0,0,0]: #calibrate which goal to shoot
             goal_colour = 0 if 160 - camera.yellow[1] > 0 else 1
         elif camera.blue != [0,0,0,0]:
@@ -610,10 +633,9 @@ def main():
             liney = 0
             colour_see_number = 0
 
-            imu.update()
-            pcb.update()
-            ir_snapshot = list(pcb.ir)
-            colours_snapshot = list(pcb.colours)
+            with pcb.lock: #pull variables from sensors
+                ir_snapshot = pcb.ir
+                colours_snapshot = pcb.colours
             yellow = camera.yellow[:]
             blue = camera.blue[:]
 
@@ -626,6 +648,7 @@ def main():
                     robot_active = False
                     botstate_hyst.reset()
                     substate1_hyst.reset()
+                    substate2_hyst.reset()
                     x_robot = 0
                     y_robot = 0
                     rot = 0
@@ -636,12 +659,18 @@ def main():
                     CameraToGoal.own_goaly_list = []
                     dribbler_list = []
 
-                motors.set_speeds(0, 0, 0, 0)
+                motors.motorspeed1 = 0
+                motors.motorspeed2 = 0
+                motors.motorspeed3 = 0
+                motors.motorspeed4 = 0
                 new_desired_pos = [0,0]
                 dribbler_on = False
                 new_maxspd = 0 #reset all variables and stop motors
                 comms.my_state.update({"bot active": 0}) # comm say bot off
 
+                with pcb.lock: #pull variables from threads
+                    ir_snapshot = pcb.ir
+                    colours_snapshot = pcb.colours
                 yellow = camera.yellow[:]
                 blue = camera.blue[:]
 
@@ -768,24 +797,47 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ir_snapshot[0].get("distance") == 3: #go forward
+            if comms_command == 0: #signal from attack to chill
+                raw_botstate = 3
+            elif ballpos == [0,0] and ir == [0,0]: #doesnt see ball
+                raw_botstate = 0
+            elif attack_bot_state == 0 or attack_bot_state is None: #attack bot is off
                 raw_botstate = 1
-            else: #chill in goals
+            elif comms_command == 1 or ir_snapshot[0].get('distance') == 3 or ir_snapshot[1].get('distance') == 3 or ir_snapshot[11].get('distance') == 3 or ir_snapshot[2].get('distance') == 3 or ir_snapshot[9].get('distance') == 3: #signal from other bot to go get ball
                 raw_botstate = 2
+            else: #chill in goals
+                raw_botstate = 3
 
             botstate = botstate_hyst.update(raw_botstate) #smoothing
 
 #----------------------------------------------------------------------
 #            state machine
 #----------------------------------------------------------------------
-            if botstate == 1: #go for ball then score
-                if ballpos[1] < (60 if substate1 in (1, 4) else 80): #2 far backup, 3 close backup
+            if botstate == 0: #do not see ball
+                desired_heading = 0
+                if own_goalpos != [0,-250]: # align middle and go backwards
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100] if own_goalpos[1] < -20 else [own_goalpos[0], 200]
+                    ingoalspd = int(basespd / 5)
+                else:
+                    desired_pos = [goalpos[0], -250]
+                    ingoalspd = basespd
+                dribbler_on = False
+
+            elif botstate == 1: #go for ball then score
+                if (substate1 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
+                    raw_substate1 = 1  #ball in bcz
+                elif ballpos[1] < (60 if substate1 in (1, 4) else 80): #2 far backup, 3 close backup
                     raw_substate1 = 2 if ballpos[1] < -150 else 3
                 else:
                     raw_substate1 = 4  #pathfind to ball
                 substate1 = substate1_hyst.update(raw_substate1)
 
-                if substate1 == 2:
+                if substate1 == 1:
+                    dribbler_on = True
+                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_pos = [goalpos[0] * 1.5, goalpos[1]]
+                elif substate1 == 2:
                     dribbler_on = False
                     desired_heading = 0
                     desired_pos = ballpos
@@ -812,18 +864,53 @@ def main():
                     else:
                         dribbler_on = False
 
-            elif botstate == 2: #chill in goals
-                desired_heading = 0
-                if own_goalpos == [0,-250]: # align middle and go backwards
-                    desired_pos = [goalpos[0], -200]
-                    ingoalspd = int(basespd / 5)
-                elif ballpos == [0,0]:
-                    desired_pos = [own_goalpos[0], own_goalpos[1] + 50]
-                elif ballpos[0] > 0:
-                    desired_pos = [own_goalpos[0] + 10, own_goalpos[1] + 50]
-                    ingoalspd = basespd
+            elif botstate == 2: # go for ball then pass
+                if (substate2 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
+                    raw_substate2 = 1  # ball in bcz
+                elif ballpos[1] < (60 if substate2 in (1, 4) else 80):
+                    raw_substate2 = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
-                    desired_pos = [own_goalpos[0] - 10, own_goalpos[1] + 50]
+                    raw_substate2 = 4  # pathfind to ball
+                substate2 = substate2_hyst.update(raw_substate2)
+
+                if substate2 == 1:
+                    dribbler_on = True
+                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_pos = goalpos
+                elif substate2 == 2:
+                    dribbler_on = False
+                    desired_heading = 0
+                    desired_pos = [0, -200]
+                elif substate2 == 3:
+                    dribbler_on = False
+                    desired_heading = 0
+                    if abs(ballpos[0]) < 70 and ballpos[1] < 0:
+                        if len(line_list) > 1:
+                            desired_pos = [-200, 0] if ballpos[0] < 0 else [200, 0]
+                        else:
+                            desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
+                    else:
+                        desired_pos = [0, -200]
+                elif substate2 == 4:
+                    desired_heading = 0
+                    if ballpos[1] < 120 and abs(ballpos[0]) > 120:
+                        desired_pos = [ballpos[0], -10]
+                    else:
+                        desired_pos = [ballpos[0] * 1.5, ballpos[1] - 60]
+
+                    if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
+                        dribbler_on = True
+                    else:
+                        dribbler_on = False
+
+            elif botstate == 3: #chill in goals
+                desired_heading = 0
+                if own_goalpos != [0,-250]: # align middle and go backwards
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 70] if own_goalpos[1] < -20 else [own_goalpos[0], 0]
+                    ingoalspd = int(basespd / 5)
+                else:
+                    desired_pos = [goalpos[0], -250]
                     ingoalspd = basespd
                 dribbler_on = False
 
@@ -870,7 +957,7 @@ def main():
             x_robot = x_field * math.cos(angle) - y_field * math.sin(angle)
             y_robot = x_field * math.sin(angle) + y_field * math.cos(angle)
 
-            motors.set_speeds(*VelocityToMotor(x_robot, y_robot, rot, new_maxspd))
+            motors.motorspeed1,motors.motorspeed2,motors.motorspeed3,motors.motorspeed4 = VelocityToMotor(x_robot,y_robot,rot,new_maxspd) #convert variables into motor speed
 
             # Maintain a fixed 100 Hz loop
             next_loop += CONTROL_PERIOD
@@ -886,6 +973,6 @@ def main():
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        safe_shutdown(grabber,camera,motors,comms)
+        safe_shutdown(grabber,camera,motors,imu,pcb,comms)
 
 main()
