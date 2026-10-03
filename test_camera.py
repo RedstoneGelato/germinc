@@ -13,7 +13,7 @@ CAPTURE_SIZE = (320, 240)
 
 LOWER_BLUE = np.array([90, 200, 100])
 UPPER_BLUE = np.array([110, 255, 255])
-LOWER_YELLOW = np.array([20, 150, 100])
+LOWER_YELLOW = np.array([20, 100, 100])
 UPPER_YELLOW = np.array([40, 255, 255])
 
 KERNEL = np.ones((3, 3), np.uint8)
