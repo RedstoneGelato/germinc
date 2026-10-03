@@ -913,7 +913,7 @@ def main():
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
 
                 if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120: #position too far for just pointing at the goal and shooting
-                    flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start() #flick the ball towards goal
+                    pass #flick the ball towards goal
                 else:
                     dribbler_on = True
 
