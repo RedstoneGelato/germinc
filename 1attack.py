@@ -493,7 +493,7 @@ class GoalTracker: #camera to goal position
         else:
             self.lostgoalcount = 0
             gx = primary[0] + primary[2]/2 - 120
-            gy = 160 - (primary[1] + primary[3])
+            gy = 160 - (primary[1] + primary[3]/2)
             self.unc_gx = self._update_axis(gx, self.goalx_list, self.unc_gx)
             self.unc_gy = self._update_axis(gy, self.goaly_list, self.unc_gy)
 
@@ -502,7 +502,7 @@ class GoalTracker: #camera to goal position
         else:
             self.lostowngoalcount = 0
             ogx = secondary[0] + secondary[2]/2 - 120
-            ogy = 160 - secondary[1]
+            ogy = 160 - (secondary[1] + secondary[3]/2)
             self.unc_ogx = self._update_axis(ogx, self.own_goalx_list, self.unc_ogx)
             self.unc_ogy = self._update_axis(ogy, self.own_goaly_list, self.unc_ogy)
 
