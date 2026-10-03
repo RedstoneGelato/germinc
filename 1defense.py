@@ -745,7 +745,8 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot): #sums line detected sensors direction
                 if value < line_threshold:
-                    angle = i * (math.pi / 16) + math.pi/2 #colour1 = front, spread anticlockwise
+                    angle = i * (math.pi / 16) + math.pi - compass #colour1 = front, spread anticlockwise
+                    angle  = (angle + math.pi) % (2 * math.pi) - math.pi
                     linex += math.cos(angle)
                     liney += math.sin(angle)
                     colour_see_number += 1
@@ -913,6 +914,8 @@ def main():
             spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
             spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1 #quadratic scaling of speed, further the bot wants to go, faster itll go
             spd_multi = max(min(spd_multi,1),0.2)
+            if (botstate == 1 and (substate1 == 2 or substate1 == 3)) or (botstate == 2 and (substate2 == 2 or substate2 == 3)):
+                spd_multi = 2
             maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi)
             maxspd *= line_spd_multi
             new_maxspd = new_maxspd * 0.9 + maxspd * 0.1 #alpha beta smoothing
