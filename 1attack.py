@@ -658,7 +658,7 @@ def main():
     heading_offset = imu.heading
     desired_heading = 0
 
-    basespd = 30000000 #ideal speed
+    basespd = 80000000 #ideal speed
     new_maxspd = 0
     ingoalspd = basespd // 3
     dribblerspd = 200000000
