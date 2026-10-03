@@ -852,7 +852,7 @@ def main():
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     if ballpos[1] < 120 and abs(ballpos[0]) > 120:
-                        desired_pos = [ballpos[0], -10]
+                        desired_pos = [0, -10]
                     else:
                         desired_pos = [ballpos[0] * 1.5, ballpos[1] - 60]
 
