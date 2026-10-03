@@ -550,11 +550,6 @@ def circular_mean(angles):
 def angdiff(a, b):
     return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
 
-def read_input():
-    if select.select([sys.stdin], [], [], 0)[0]:
-        return sys.stdin.readline().strip()
-    return None
-
 def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
 
@@ -765,11 +760,6 @@ def main():
                 colours_snapshot = pcb.colours
             yellow = camera.yellow[:]
             blue = camera.blue[:]
-
-            user_input = read_input()
-            #TEST: start sequence
-            if user_input == "z" and not sequences.busy(): start_sequence_right.start()
-            if user_input == "v" and not sequences.busy(): start_sequence_left.start()
 
 #----------------------------------------------------------------------
 #            pause and unpause bot
