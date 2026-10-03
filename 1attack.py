@@ -994,7 +994,7 @@ def main():
                 else:
                     pass
 
-            print(f"ballpos={ballpos} botstate = {botstate} online = {on_line} goalpos = {goalpos}")
+            print(f"ballpos={ballpos} botstate={botstate} substate={substate} online={on_line} goalpos={goalpos}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
