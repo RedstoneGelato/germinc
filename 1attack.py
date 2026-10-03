@@ -950,7 +950,7 @@ def main():
                     comms.my_state.update({"command": 0})
                     desired_heading = 0
                     if ballpos[1] < 80 and abs(ballpos[0]) > 80:
-                        desired_pos = [ballpos[0], -200]
+                        desired_pos = [ballpos[0], -10]
                     else:
                         desired_pos = [ballpos[0], ballpos[1] - 60]
 
