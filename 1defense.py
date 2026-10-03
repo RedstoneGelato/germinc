@@ -184,20 +184,6 @@ class PCBThread(threading.Thread):
         self.brightness_target = 0
         self._brightness_sent = None
 
-        def set_brightness(self, value: float):  # now just records the request
-            self.brightness_target = int(max(0.0, min(65535.0, value)))
-
-        def _write_brightness(self, val):
-            lo, hi = val & 0xFF, (val >> 8) & 0xFF
-            for _ in range(self.READ_RETRIES):
-                try:
-                    with self.bus_lock:
-                        self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
-                    self._brightness_sent = val
-                    return
-                except OSError:
-                    time.sleep(self.RETRY_DELAY)
-
     def _send_command(self, cmd): #low level helper
         self.bus.write_byte(self.I2C_ADDR, cmd)
 
@@ -258,7 +244,7 @@ class PCBThread(threading.Thread):
             try:
                 target = self.brightness_target
                 if target != self._brightness_sent:
-                    self._write_brightness(target)
+                    self.set_brightness(target)
                 new_ir = self._read_ir()
                 new_colours = self._read_colours()
                 with self.lock:
