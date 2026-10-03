@@ -143,8 +143,8 @@ class DetectionThread(threading.Thread): #analyse camera capture, split into 2 t
                 "yellow": cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, self.kernel),
             } #apply smoothing
 
-            self.yellow = self._merge_blobs(masks["yellow"], 200)
-            self.blue = self._merge_blobs(masks["blue"], 200) #merge all small blobs into 1 big blob
+            self.yellow = self._merge_blobs(masks["yellow"], 400)
+            self.blue = self._merge_blobs(masks["blue"], 400) #merge all small blobs into 1 big blob
             time.sleep(0.005)
 
     def _merge_blobs(self, mask, min_area): #merge multiple rect of same colour into 1
