@@ -232,19 +232,27 @@ class PCBThread(threading.Thread):
 
         return values
 
-    def set_brightness(self, value: float): #set brightness: 0-65535, higher = brighter
-        val = int(max(0.0, min(65535.0, value)))
-        lo  = val & 0xFF
-        hi  = (val >> 8) & 0xFF
-        with self.bus_lock:
-            self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
+    def set_brightness(self, value: float):  # called from main: just records the request
+        self.brightness_target = int(max(0.0, min(65535.0, value)))
+
+    def _write_brightness(self, val):  # called only from the PCB thread
+        lo = val & 0xFF
+        hi = (val >> 8) & 0xFF
+        for _ in range(self.READ_RETRIES):
+            try:
+                with self.bus_lock:
+                    self.bus.write_i2c_block_data(self.I2C_ADDR, 0x03, [lo, hi])
+                self._brightness_sent = val
+                return
+            except OSError:
+                time.sleep(self.RETRY_DELAY)
 
     def run(self):
         while self.running:
             try:
                 target = self.brightness_target
                 if target != self._brightness_sent:
-                    self.set_brightness(target)
+                    self._write_brightness(target)
                 new_ir = self._read_ir()
                 new_colours = self._read_colours()
                 with self.lock:
