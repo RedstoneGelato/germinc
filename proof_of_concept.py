@@ -104,3 +104,5 @@ def main():
         i2c.unlock()
         imu.running = False
         imu.join()
+
+main()
