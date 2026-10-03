@@ -440,7 +440,7 @@ class MotorSequence: #custom, preset, handwritten sequences of moves
             if self.step_index >= len(self.steps):
                 self.stop()
                 return ("done", None)
-            duration, xvel, yvel, rot, maxspd, dribblerspd = self.steps[self.step_index] #do whatever the preset says
+            duration, xvel, yvel, rot, maxspd = self.steps[self.step_index] #do whatever the preset says
 
         m1, m2, m3, m4 = VelocityToMotor(xvel, yvel, rot, maxspd)
         return ("running", (m1, m2, m3, m4))
@@ -598,8 +598,8 @@ def main():
     flick_sequence_left = MotorSequence(
         steps=[
         #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
-            (0.1,      0,    0,    -10000, 100000000, 500000000), #turn around
-            (0.06,     0,    0,    10000,  500000000, 500000000), #fast in-place snap-rotate to whip the ball
+            (0.1,      0,    0,    -10000, 100000000), #turn around
+            (0.06,     0,    0,    10000,  500000000), #fast in-place snap-rotate to whip the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -610,8 +610,8 @@ def main():
     flick_sequence_right = MotorSequence(
         steps=[
         #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
-            (0.1,        0,    0,    10000,  100000000, 500000000), #turn around
-            (0.06,       0,    0,    -10000, 500000000, 500000000), #fast in-place snap-rotate to whip the ball
+            (0.1,        0,    0,    10000,  100000000), #turn around
+            (0.06,       0,    0,    -10000, 500000000), #fast in-place snap-rotate to whip the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -622,7 +622,7 @@ def main():
     start_sequence_left = MotorSequence(
         steps=[
         #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
-            (0.7,        0,  100,    0,  500000000, 500000000), #forwards and get the ball
+            (0.7,        0,  100,    0,  500000000), #forwards and get the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -633,7 +633,7 @@ def main():
     start_sequence_right = MotorSequence(
         steps=[
         #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
-            (0.7,        0,  100,    0,  500000000, 500000000), #forwards and get the ball
+            (0.7,        0,  100,    0,  500000000), #forwards and get the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
