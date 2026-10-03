@@ -260,7 +260,6 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         self.motorspeed2 = 0
         self.motorspeed3 = 0
         self.motorspeed4 = 0
-        self.motorspeed5 = 0
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
 
@@ -312,25 +311,12 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         self.motor4.configure_operating_mode_and_sensor(3, 1)
         self.motor4.configure_command_mode(12)
 
-        self.motor5 = PowerfulBLDCDriver(self.i2c, 25) #dribbler motor
-        self.motor5.set_current_limit_foc(262144)
-        self.motor5.set_id_pid_constants(1500, 200)
-        self.motor5.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-        self.motor5.set_position_pid_constants(275, 0, 0)
-        self.motor5.set_position_region_boundary(250000)
-        self.motor5.set_ELECANGLEOFFSET(1326110464)
-        self.motor5.set_SINCOSCENTRE(1221)
-        self.motor5.set_speed_limit(self.speedlimit)
-        self.motor5.configure_operating_mode_and_sensor(3, 1)
-        self.motor5.configure_command_mode(12)
-
     def run(self):
         while self.running:
             self.motor1.set_speed(int(-self.motorspeed1))
             self.motor2.set_speed(int(-self.motorspeed2))
             self.motor3.set_speed(int(-self.motorspeed3))
             self.motor4.set_speed(int(-self.motorspeed4))
-            self.motor5.set_speed(int(-self.motorspeed5))
             time.sleep(0.005)
 
 class TeammateLinkThread(threading.Thread): #comms between bots
@@ -499,12 +485,10 @@ def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     motors.motorspeed2 = 0
     motors.motorspeed3 = 0
     motors.motorspeed4 = 0
-    motors.motorspeed5 = 0
     motors.motor1.clear_faults()
     motors.motor2.clear_faults()
     motors.motor3.clear_faults()
     motors.motor4.clear_faults()
-    motors.motor5.clear_faults()
 
     # allow motor thread to send stop command
     time.sleep(0.05)
@@ -675,7 +659,6 @@ def main():
                 motors.motorspeed2 = 0
                 motors.motorspeed3 = 0
                 motors.motorspeed4 = 0
-                motors.motorspeed5 = 0
                 new_desired_pos = [0,0]
                 dribbler_on = False
                 new_maxspd = 0 #reset all variables and stop motors
@@ -932,12 +915,12 @@ def main():
             if len(dribbler_list) > 100:
                 dribbler_list.pop(0)
             if dribbler_on:
-                motors.motorspeed5 = dribblerspd
+                pass
             else:
                 if dribbler_list.count(True) > 5:
-                    motors.motorspeed5 = dribblerspd
+                    pass
                 else:
-                    motors.motorspeed5 = 0
+                    pass
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
