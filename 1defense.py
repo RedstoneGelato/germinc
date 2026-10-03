@@ -768,7 +768,7 @@ def main():
 #----------------------------------------------------------------------
 #            determine states
 #----------------------------------------------------------------------
-            if ir_snapshot[0].get("direction") == 3: #go forward
+            if ir_snapshot[0].get("direction") == 3 or ir_snapshot[1].get("direction") == 3 or ir_snapshot[11].get("direction") == 3: #go forward
                 raw_botstate == 1
             else: #chill in goals
                 raw_botstate = 2
@@ -817,11 +817,13 @@ def main():
                 if own_goalpos != [0,-250]: # align middle and go backwards
                     desired_pos = [own_goalpos[0], own_goalpos[1] + 70] if own_goalpos[1] < -20 else [own_goalpos[0], 0]
                     ingoalspd = int(basespd / 5)
+                if ballpos == [0,0]:
+                    desired_pos = [goalpos[0], goalpos[1] + 120]
                 elif ballpos[0] > 0:
-                    desired_pos = [goalpos[0] + 10, -250]
+                    desired_pos = [goalpos[0] + 10, goalpos[1] + 120]
                     ingoalspd = basespd
                 else:
-                    desired_pos = [goalpos[0] - 10, -250]
+                    desired_pos = [goalpos[0] - 10, goalpos[1] + 120]
                     ingoalspd = basespd
                 dribbler_on = False
 
