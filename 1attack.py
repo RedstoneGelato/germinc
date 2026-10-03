@@ -909,8 +909,7 @@ def main():
             elif botstate == 1: # shoot
                 comms.my_state.update({"command": 0})
                 desired_pos = [goalpos[0] * 1.5, goalpos[1]]
-                desired_heading = math.atan2(goalpos[1], goalpos[0] * 1.6) - math.pi/2
-                desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                desired_heading = 0
 
                 if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120: #position too far for just pointing at the goal and shooting
                     pass #flick the ball towards goal
@@ -949,8 +948,7 @@ def main():
                         desired_pos = [0, -200] if ballpos[1] > 20 else [ballpos[0], -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
-                    desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
-                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
+                    desired_heading = 0
                     if ballpos[1] < 80 and abs(ballpos[0]) > 80:
                         desired_pos = [ballpos[0], -200]
                     else:
