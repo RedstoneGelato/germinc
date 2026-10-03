@@ -29,33 +29,16 @@ def make_motor(addr):
     i2c.unlock()
     return m
 
-class IMUThread(threading.Thread):
-    def __init__(self):
-        super().__init__()
-        self.daemon = True
-        self.running = True
-
-        self.i2c = i2c
-        self.imu = BNO08X_I2C(self.i2c)
-        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
-
-        self.heading = 0
-        self.ready = False
-
-    def run(self):
-        while self.running:
-            quat = self.imu.game_quaternion  # (x, y, z, w)
-            if quat is not None:
-                self.ready = True
-
-                x, y, z, w = quat
-
-                # convert quaternion -> yaw (heading)
-                self.heading = math.atan2(
-                    2*(w*z + x*y),
-                    1 - 2*(y*y + z*z)
-                )
-            time.sleep(0.01)
+def get_heading(imu):
+    quat = imu.game_quaternion  # (x, y, z, w)
+    if quat is not None:
+        x, y, z, w = quat
+        # convert quaternion -> yaw (heading)
+        heading = math.atan2(
+            2*(w*z + x*y),
+            1 - 2*(y*y + z*z)
+        )
+        return heading
 
 def VelocityToMotor(xvel, yvel, rot, maxspd):
     motor1 = xvel*math.cos(math.pi/4) + yvel*math.sin(math.pi/4) - rot
@@ -76,13 +59,13 @@ def main():
     m27 = make_motor(27)
     m26 = make_motor(26)
     m28 = make_motor(28)
-    imu = IMUThread()
-    imu.start()
 
-    error = imu.heading
+    imu = BNO08X_I2C(i2c)
+    imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
+    error = get_heading(imu)
     try:
         while True:
-            compass = imu.heading - error
+            compass = get_heading(imu) - error
             i2c.try_lock()
             spd1, spd2, spd3, spd4 = VelocityToMotor(0,0,compass,10000000)
             m25.set_speed(spd1)
@@ -103,8 +86,6 @@ def main():
         m28.clear_fault()
         m25.clear_fault()
         i2c.unlock()
-        imu.running = False
-        imu.join()
 
     except Exception as e:
         print(e)
@@ -118,7 +99,5 @@ def main():
         m28.clear_faults()
         m25.clear_faults()
         i2c.unlock()
-        imu.running = False
-        imu.join()
 
 main()
