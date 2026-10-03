@@ -19,6 +19,10 @@ TEAM_ID = "GERM_INC"
 ROBOT_ID = 2 #goalie bot
 COMMS_PORT = 5555 #used by comms
 
+BROKEN_IR = (8, 9)  # dead IR sensors, filled in from their neighbours
+IR_GAP_LEFT = 7     # nearest working sensor on one side of the gap
+IR_GAP_RIGHT = 10   # nearest working sensor on the other side
+
 class AutoLockI2C:
     def __init__(self, bus):
         self._bus = bus
@@ -672,38 +676,38 @@ def main():
             compass = imu.heading - heading_offset #bot heading
             compass = (compass + math.pi) % (2*math.pi) - math.pi
 
-            ir_snapshot[3] = {'detected': 0, 'distance': 0} #broken, interpolate results below
+            for i in BROKEN_IR:
+                ir_snapshot[i] = {'detected': 0, 'distance': 0} #broken, interpolate results below
             for i, sensor in enumerate(ir_snapshot):
                 if sensor["detected"] == 1 and sensor["distance"] != 0:
                     if sensor["distance"] >= 2:
                         angle = i * math.pi / 6 + math.pi/2
-
+ 
                         irx += math.cos(angle)
                         iry += math.sin(angle)
-
+ 
                     ball_distance_total += sensor["distance"]
                     ball_distance_count += 1
             if ball_distance_count > 0:
-                if ir_snapshot[2].get('distance') == 3 and ir_snapshot[4].get('distance') == 3: #surrounding both 3
-                    irx += math.cos(math.pi)
-                    iry += math.sin(math.pi)
-                    ball_distance_total += 3
-                    ball_distance_count += 1
-                elif (ball_distance_total - 1) / ball_distance_count == 2 and (ir_snapshot[2].get('distance') == 3 or ir_snapshot[4].get('distance') == 3) and ball_distance_count < 4: #one neighbour is close, only one sees close, not enough ir sensors see
-                    irx += math.cos(math.pi)
-                    iry += math.sin(math.pi)
-                    ball_distance_total += 3
-                    ball_distance_count += 1
-                elif ball_distance_count < 4 and (ir_snapshot[2].get('distance') != 0 or ir_snapshot[4].get('distance') != 0):
-                    irx += math.cos(math.pi)
-                    iry += math.sin(math.pi)
-                    ball_distance_total += 2
-                    ball_distance_count += 1
-                elif ir_snapshot[2].get('distance') == 3 or ir_snapshot[4].get('distance') == 3:
-                    irx += math.cos(math.pi)
-                    iry += math.sin(math.pi)
-                    ball_distance_total += 2
-                    ball_distance_count += 1
+                gap_l = ir_snapshot[IR_GAP_LEFT].get('distance')
+                gap_r = ir_snapshot[IR_GAP_RIGHT].get('distance')
+                fill = 0  # distance value to put in the dead sensors
+                if gap_l == 3 and gap_r == 3: #surrounding both 3
+                    fill = 3
+                elif (ball_distance_total - 1) / ball_distance_count == 2 and (gap_l == 3 or gap_r == 3) and ball_distance_count < 4: #one neighbour is close, only one sees close, not enough ir sensors see
+                    fill = 3
+                elif ball_distance_count < 4 and (gap_l != 0 or gap_r != 0):
+                    fill = 2
+                elif gap_l == 3 or gap_r == 3:
+                    fill = 2
+ 
+                if fill:
+                    for i in BROKEN_IR: #one virtual reading per dead sensor, at that sensor's own angle
+                        angle = i * math.pi / 6 + math.pi/2
+                        irx += math.cos(angle)
+                        iry += math.sin(angle)
+                        ball_distance_total += fill
+                        ball_distance_count += 1
 
             if irx != 0 or iry != 0:
                 irdirection = math.atan2(iry, irx) # direction
