@@ -537,8 +537,6 @@ def angdiff(a, b):
 
 def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
-    i2c.unlock()
-    i2c.deinit()
 
     # stop motors first
     motors.motorspeed1 = 0
