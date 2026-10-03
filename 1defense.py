@@ -745,7 +745,7 @@ def main():
 #----------------------------------------------------------------------
             for i, value in enumerate(colours_snapshot): #sums line detected sensors direction
                 if value < line_threshold:
-                    angle = i * (math.pi / 16) + math.pi - compass #colour1 = front, spread anticlockwise
+                    angle = i * (math.pi / 16) + compass #colour1 = front, spread anticlockwise
                     angle  = (angle + math.pi) % (2 * math.pi) - math.pi
                     linex += math.cos(angle)
                     liney += math.sin(angle)
