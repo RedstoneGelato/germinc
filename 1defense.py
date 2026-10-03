@@ -258,7 +258,7 @@ MOTOR_CONFIG = [  # (i2c address, ELECANGLEOFFSET, SINCOSCENTRE) - same values a
     (26, 1161314304, 1244),  # motor 1
     (32, 1304942336, 1239),  # motor 2
     (28, 1772804352, 1251),  # motor 3
-    (27, 1352689664, 1251),  # motor 4
+    (25, 1352689664, 1251),  # motor 4
 ]
  
 class Motors:
