@@ -533,7 +533,7 @@ def main():
     heading_offset = imu.heading
     desired_heading = 0
 
-    basespd = 80000000 # ideal speed
+    basespd = 40000000 # ideal speed
     new_maxspd = 0
     ingoalspd = 60000000
     dribblerspd = 0
@@ -898,6 +898,8 @@ def main():
                     pass
                 else:
                     pass
+
+            print(f"ballpos={ballpos} botstate={botstate} online={on_line} goalpos={goalpos}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
