@@ -639,9 +639,7 @@ def main():
     start_sequence_left = MotorSequence(
         steps=[
         #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
-            (0.1,        0,  100,    0,  100000000, 500000000), #forwards and get the ball
-            (0.1,     -100,   200,  -50,  500000000, 500000000), #go around potential first enemy bot
-            (0.06,     0,    0,    10000,  500000000, 500000000), #fast in-place snap-rotate to whip the ball
+            (0.8,        0,  100,    0,  100000000, 500000000), #forwards and get the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -652,9 +650,7 @@ def main():
     start_sequence_right = MotorSequence(
         steps=[
         #   (duration, xvel, yvel, rot,    maxspd,    dribblerspd)  -- all TUNE
-            (0.1,        0,  100,    0,  100000000, 500000000), #forwards and get the ball
-            (0.1,      100,   200,  50,  500000000, 500000000), #go around potential first enemy bot
-            (0.06,     0,    0,    -10000,  500000000, 500000000), #fast in-place snap-rotate to whip the ball
+            (0.8,        0,  100,    0,  100000000, 500000000), #forwards and get the ball
         ],
         break_condition=lambda: (
             script_activate_pin.is_active #bot paused
@@ -1004,10 +1000,6 @@ def main():
                     motors.motorspeed5 = dribblerspd
                 else:
                     motors.motorspeed5 = 0
-
-            #DEBUG
-            print(f"botstate={botstate}  substate ={substate}")
-            print(f"goalpos={goalpos}  own goalpos={own_goalpos}  ballpos={ballpos}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement

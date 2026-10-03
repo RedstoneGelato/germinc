@@ -850,7 +850,7 @@ def main():
                     dribbler_on = True
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    desired_pos = goalpos
+                    desired_pos = [goalpos[0] * 1.5, goalpos[1]]
                 elif substate1 == 2:
                     dribbler_on = False
                     desired_heading = 0
@@ -938,10 +938,6 @@ def main():
                     motors.motorspeed5 = dribblerspd
                 else:
                     motors.motorspeed5 = 0
-
-            #DEBUG
-            print(f"botstate={botstate}  on line={on_line}")
-            print(f"goalpos={goalpos}  own goalpos={own_goalpos}  ballpos={ballpos}")
 
 #----------------------------------------------------------------------
 #            translate all variables into motor movement
