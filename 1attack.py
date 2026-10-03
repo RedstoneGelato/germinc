@@ -1015,7 +1015,7 @@ def main():
                 spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
                 spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
                 spd_multi = max(min(spd_multi,1),0.3)
-                if botstate == 1 or (botstate == 2 and substate == 2):
+                if botstate == 1:
                     spd_multi = 1.5
                 maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
                 maxspd *= line_spd_multi
