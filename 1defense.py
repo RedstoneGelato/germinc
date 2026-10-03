@@ -570,7 +570,7 @@ def main():
     basespd = 60000000 # ideal speed
     new_maxspd = 0
     ingoalspd = basespd // 3
-    dribblerspd = 200000000
+    dribblerspd = 0
     dribbler_on = False
     dribbler_list = []
     base_spin = 50 # bigger number = bot spins more instead of moves more
@@ -817,7 +817,7 @@ def main():
                 raw_botstate = 0
             elif attack_bot_state == 0 or attack_bot_state is None: #attack bot is off
                 raw_botstate = 1
-            elif comms_command == 1 or (ball_distance < 220 and own_goalpos != [0,-250]): #signal from other bot to go get ball
+            elif comms_command == 1 or ir_snapshot[0].get('distance') == 3 or ir_snapshot[1].get('distance') == 3 or ir_snapshot[11].get('distance') == 3 or ir_snapshot[2].get('distance') == 3 or ir_snapshot[9].get('distance') == 3: #signal from other bot to go get ball
                 raw_botstate = 2
             else: #chill in goals
                 raw_botstate = 3
