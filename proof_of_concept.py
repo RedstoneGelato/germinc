@@ -84,12 +84,13 @@ def main():
         while True:
             compass = imu.heading - error
             i2c.try_lock()
-            spd1, spd2, spd3, spd4 = VelocityToMotor(0,0,compass,1000000)
+            spd1, spd2, spd3, spd4 = VelocityToMotor(0,0,compass,10000000)
             m25.set_speed(spd1)
             m27.set_speed(spd2)
             m28.set_speed(spd3)
             m26.set_speed(spd4)
             i2c.unlock()
+            print(f"imu = {compass} spd = {spd1,spd2,spd3,spd4}")
 
     except KeyboardInterrupt:
         i2c.try_lock()
