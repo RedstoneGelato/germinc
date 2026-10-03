@@ -814,7 +814,7 @@ def main():
             for i, sensor in enumerate(ir_snapshot): #sum angles and strength
                 if sensor["detected"] == 1 and sensor["distance"] != 0:
                     if sensor["distance"] >= 2:
-                        angle = i * math.pi / 6 + math.pi/2
+                        angle = i * math.pi / 6 + math.pi/2 + compass
 
                         irx += math.cos(angle)
                         iry += math.sin(angle)
