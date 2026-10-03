@@ -682,7 +682,7 @@ def main():
     basespd = 80000000 #ideal speed
     new_maxspd = 0
     ingoalspd = basespd // 3
-    dribblerspd = 500000000
+    dribblerspd = 200000000
     dribbler_on = False
     dribbler_list = []
     base_spin = 50 #bigger number = bot spins more instead of moves more
