@@ -817,7 +817,7 @@ def main():
                 if own_goalpos == [0,-250]: # align middle and go backwards
                     desired_pos = [goalpos[0], goalpos[1] + 70] if goalpos[1] < -20 else [own_goalpos[0], 0]
                     ingoalspd = int(basespd / 5)
-                if ballpos == [0,0]:
+                elif ballpos == [0,0]:
                     desired_pos = [own_goalpos[0], own_goalpos[1] + 120]
                 elif ballpos[0] > 0:
                     desired_pos = [own_goalpos[0] + 10, own_goalpos[1] + 120]
