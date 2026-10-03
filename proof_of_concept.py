@@ -56,7 +56,7 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
 
 def main():
     m25 = make_motor(25)
-    m27 = make_motor(27)
+    m32 = make_motor(32)
     m26 = make_motor(26)
     m28 = make_motor(28)
 
@@ -68,34 +68,34 @@ def main():
             compass = get_heading(imu) - error
             i2c.try_lock()
             spd1, spd2, spd3, spd4 = VelocityToMotor(0,0,compass,10000000)
-            m25.set_speed(spd1)
-            m27.set_speed(spd2)
+            m26.set_speed(spd1)
+            m32.set_speed(spd2)
             m28.set_speed(spd3)
-            m26.set_speed(spd4)
+            m25.set_speed(spd4)
             i2c.unlock()
             print(f"imu = {compass} spd = {spd1,spd2,spd3,spd4}")
 
     except KeyboardInterrupt:
         i2c.try_lock()
         m26.set_speed(0)
-        m27.set_speed(0)
+        m32.set_speed(0)
         m28.set_speed(0)
         m25.set_speed(0)
-        m26.clear_fault()
-        m27.clear_fault()
-        m28.clear_fault()
-        m25.clear_fault()
+        m26.clear_faults()
+        m32.clear_faults()
+        m28.clear_faults()
+        m25.clear_faults()
         i2c.unlock()
 
     except Exception as e:
         print(e)
         i2c.try_lock()
         m26.set_speed(0)
-        m27.set_speed(0)
+        m32.set_speed(0)
         m28.set_speed(0)
         m25.set_speed(0)
         m26.clear_faults()
-        m27.clear_faults()
+        m32.clear_faults()
         m28.clear_faults()
         m25.clear_faults()
         i2c.unlock()
