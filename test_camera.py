@@ -15,8 +15,6 @@ LOWER_BLUE = np.array([90, 200, 100])
 UPPER_BLUE = np.array([110, 255, 255])
 LOWER_YELLOW = np.array([20, 150, 100])
 UPPER_YELLOW = np.array([40, 255, 255])
-LOWER_ORANGE = np.array([2, 140, 0])
-UPPER_ORANGE = np.array([20, 255, 255])
 
 KERNEL = np.ones((3, 3), np.uint8)
 
@@ -70,19 +68,15 @@ def main():
 
             blue_raw = cv2.inRange(hsv, LOWER_BLUE, UPPER_BLUE)
             yellow_raw = cv2.inRange(hsv, LOWER_YELLOW, UPPER_YELLOW)
-            orange_raw = cv2.inRange(hsv, LOWER_ORANGE, UPPER_ORANGE)
 
             blue_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
             yellow_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
-            orange_raw[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
 
             blue_mask = cv2.morphologyEx(blue_raw, cv2.MORPH_OPEN, KERNEL)
             yellow_mask = cv2.morphologyEx(yellow_raw, cv2.MORPH_OPEN, KERNEL)
-            orange_mask = cv2.morphologyEx(orange_raw, cv2.MORPH_OPEN, KERNEL)
 
             blue_box = merge_blobs(blue_mask, 280)
             yellow_box = merge_blobs(yellow_mask, 280)
-            orange_box = merge_blobs(orange_mask, 20)
 
             annotated = frame.copy()
 
@@ -102,16 +96,10 @@ def main():
                 cv2.putText(annotated, "yellow", (x, max(y - 4, 10)),
                             cv2.FONT_HERSHEY_PLAIN, 0.8, (255, 0, 255), 1)
 
-            if orange_box != [0, 0, 0, 0]:
-                x, y, w, h = orange_box
-                cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 165, 255), 1)
-                cv2.putText(annotated, "orange", (x, max(y - 4, 10)),
-                            cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 165, 255), 1)
-
             if yellow_box == [0, 0, 0, 0]:
                 goalpos = [0, 200]
             else:
-                goalx = yellow_box[0] + yellow_box[2]
+                goalx = yellow_box[0]
                 goaly = yellow_box[1] + yellow_box[3] / 2
                 dx = goalx - frame_cx
                 dy = frame_cy - goaly
@@ -119,26 +107,17 @@ def main():
             if blue_box == [0, 0, 0, 0]:
                 own_goalpos = [0, -200]
             else:
-                own_goalx = blue_box[0]
+                own_goalx = blue_box[0] + blue_box[2]
                 own_goaly = blue_box[1] + blue_box[3] / 2
                 own_dx = own_goalx - frame_cx
                 own_dy = frame_cy - own_goaly
                 own_goalpos = [own_dx, own_dy]
 
-            if orange_box != [0, 0, 0, 0]:
-                ballpos = [orange_box[0] + orange_box[2] / 2 - frame_cx, frame_cy - orange_box[1] - orange_box[3]]
-                ball_direction = math.atan2(ballpos[1], ballpos[0])
-                ball_distance = math.hypot(ballpos[0], ballpos[1])
-                ballpos = [math.cos(ball_direction) * ball_distance, math.sin(ball_direction) * ball_distance]
-            else:
-                ballpos = [float("inf"), float("inf")]
-
-            print(f"goalpos={goalpos}  own goal={own_goalpos}  ballpos={ballpos}")
+            print(f"goalpos={goalpos}  own goal={own_goalpos}")
 
             if display_available:
                 try:
                     cv2.imshow("camera debug", annotated)
-                    cv2.imshow("orange", orange_mask)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
                 except cv2.error:
