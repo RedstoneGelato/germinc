@@ -925,13 +925,14 @@ def main():
 
             new_desired_pos = [desired_pos[0] * 0.1 + new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + new_desired_pos[1] * 0.9] #alpha beta smoothing of desired position
             if on_line:
-                off_line_since = None
                 if line_escape_vec is None:                 # first frame on the line
                     mag = math.hypot(linex, liney)
                     if mag > 1e-6:
                         line_escape_vec = [linex / mag * 200, liney / mag * 200]
                 new_desired_pos = line_escape_vec
                 new_maxspd = line_escape_speed
+            else:
+                line_escape_vec = None
 
             xvel = new_desired_pos[0]
             yvel = new_desired_pos[1]
