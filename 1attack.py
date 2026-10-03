@@ -798,9 +798,9 @@ def main():
                 if robot_active == False: #first loop since turned bot back on
                     if not sequences.busy() and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3): #checsk if bot in kickoff position
                         if random.randint(0,1): #randomly do start sequence left or start sequence right
-                            start_sequence_left.start()
+                            pass
                         else:
-                            start_sequence_right.start()
+                            pass
                 robot_active = True #running bot
                 comms.my_state.update({"bot active": 1})
 
