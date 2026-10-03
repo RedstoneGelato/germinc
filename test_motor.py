@@ -5,7 +5,7 @@ import struct
 import busio
 import select
 import adafruit_bitbangio as bbi
-from steelbar_something import PowerfulBLDCDriver
+from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 
 # Initialize variables
 motor = [None] * 8
