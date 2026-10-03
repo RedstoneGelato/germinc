@@ -69,7 +69,7 @@ def VelocityToMotor(xvel, yvel, rot, maxspd):
     motor3 *= scale
     motor4 *= scale
 
-    return int(motor1),int(motor2),int(motor3),int(motor4)
+    return int(motor1),int(motor2),int(motor3),int(motor4)    
 
 def main():
     m25 = make_motor(25)
@@ -92,6 +92,21 @@ def main():
             i2c.unlock()
 
     except KeyboardInterrupt:
+        i2c.try_lock()
+        m26.set_speed(0)
+        m27.set_speed(0)
+        m28.set_speed(0)
+        m25.set_speed(0)
+        m26.clear_fault()
+        m27.clear_fault()
+        m28.clear_fault()
+        m25.clear_fault()
+        i2c.unlock()
+        imu.running = False
+        imu.join()
+
+    except Exception as e:
+        print(e)
         i2c.try_lock()
         m26.set_speed(0)
         m27.set_speed(0)
