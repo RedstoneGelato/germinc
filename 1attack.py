@@ -25,6 +25,7 @@ ROBOT_ID = 1 #attack bot
 COMMS_PORT = 5555 #used by comms
 
 i2c = bbi.I2C(board.D6, board.D5, frequency=400000)
+i2c.try_lock()
 
 class FrameGrabber(threading.Thread): #raw camera capture
     def __init__(self):
@@ -540,6 +541,8 @@ def angdiff(a, b):
 
 def safe_shutdown(grabber, camera, motors, imu, pcb, comms):
     print("Shutting down safely...")
+    i2c.unlock()
+    i2c.deinit()
 
     # stop motors first
     motors.motorspeed1 = 0
