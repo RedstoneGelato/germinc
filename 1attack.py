@@ -658,7 +658,7 @@ def main():
     heading_offset = imu.heading
     desired_heading = 0
 
-    basespd = 80000000 #ideal speed
+    basespd = 110000000 #ideal speed
     new_maxspd = 0
     ingoalspd = basespd // 3
     dribblerspd = 200000000
@@ -798,11 +798,9 @@ def main():
                 if robot_active == False: #first loop since turned bot back on
                     if not sequences.busy() and (ir_snapshot[0].get("distance") == 3 or ir_snapshot[1].get("distance") == 3 or ir_snapshot[11].get("distance") == 3): #checsk if bot in kickoff position
                         if random.randint(0,1): #randomly do start sequence left or start sequence right
-                            #start_sequence_left.start()
-                            pass
+                            start_sequence_left.start()
                         else:
-                            #start_sequence_right.start()
-                            pass
+                            start_sequence_right.start()
                 robot_active = True #running bot
                 comms.my_state.update({"bot active": 1})
 
@@ -935,36 +933,29 @@ def main():
                 desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
 
                 if not sequences.busy() and abs(goalpos[0]) > 35 and goalpos[1] < 120: #position too far for just pointing at the goal and shooting
-                    pass #flick the ball towards goal
+                    flick_sequence_left.start() if goalpos[0] > 0 else flick_sequence_right.start() #flick the ball towards goal
                 else:
                     dribbler_on = True
 
             elif botstate == 2: # go for ball
-                if ballpos[1] < -220 and goalpos[1] < 200 and goalie_bot_state == 1: #tell goalie to get ball
-                    raw_substate = 1
-                elif ballpos[1] < (50 if substate in (1, 4) else 80):
+                if ballpos[1] < (50 if substate in (1, 4) else 80):
                     raw_substate = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
                 substate = substate_hyst.update(raw_substate)
 
-                if substate == 1:
-                    comms.my_state.update({"command": 1}) #send goalie to get ball
-                    desired_heading = 0
-                    desired_pos = [goalpos[0], goalpos[1] - 180]
-                    dribbler_on = False
-                elif substate == 2:
-                    comms.my_state.update({"command": 0})
+                if substate == 2:
                     dribbler_on = False
                     desired_heading = 0
                     desired_pos = ballpos
+                    comms.my_state.update({"command": 1}) #send goalie to get ball
                 elif substate == 3:
-                    comms.my_state.update({"command": 0})
                     dribbler_on = False
                     desired_heading = 0
+                    comms.my_state.update({"command": 1}) #send goalie to get ball
                     if abs(ballpos[0]) < 110 and ballpos[1] < 0:
                         if len(line_list) > 1:
-                            desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0]
+                            desired_pos = [-200, 0] if ballpos[0] < 0 else [200, 0]
                         else:
                             desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
@@ -987,7 +978,6 @@ def main():
                 desired_heading = 0
                 if own_goalpos != [0,-250]: #align middle and go backwards
                     desired_pos = [own_goalpos[0], own_goalpos[1] + 100] if own_goalpos[1] < -20 else [own_goalpos[0], 0]
-                    ingoalspd = int(basespd / 5)
                 else:
                     desired_pos = [goalpos[0], -200]
                     ingoalspd = basespd
@@ -1027,7 +1017,7 @@ def main():
                 spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),220),0)
                 spd_multi = 0.00001 * (spd_scale_helper ** 2) + 0.002 * spd_scale_helper + 0.1
                 spd_multi = max(min(spd_multi,1),0.3)
-                if botstate == 1 or (botstate == 2 and substate == 2):
+                if botstate == 1 or (botstate == 2 and substate == 2) or desired_pos == [0,-200]:
                     spd_multi = 1.5
                 maxspd = round(basespd * (1 + (abs(rot) / 160)) * spd_multi) if botstate == 1 or botstate == 2 else round(ingoalspd * (1 + (abs(rot) / 160)) * spd_multi)
                 maxspd *= line_spd_multi

@@ -842,7 +842,7 @@ def main():
                     desired_heading = 0
                     if abs(ballpos[0]) < 120 and ballpos[1] < 0: #wrap around ball
                         if len(line_list) > 1: #touched line
-                            desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0] #wrap around based on goal position
+                            desired_pos = [-200, 0] if ballpos[0] < 0 else [200, 0] #go other way
                         else:
                             desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0] #wrap around base on ball position
                     else:
@@ -883,7 +883,7 @@ def main():
                     desired_heading = 0
                     if abs(ballpos[0]) < 70 and ballpos[1] < 0:
                         if len(line_list) > 1:
-                            desired_pos = [-200, 0] if goalpos[0] < 40 or own_goalpos[0] < 40 else [200, 0]
+                            desired_pos = [-200, 0] if ballpos[0] < 0 else [200, 0]
                         else:
                             desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
