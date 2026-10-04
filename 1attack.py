@@ -952,7 +952,6 @@ def main():
                 elif substate == 3:
                     dribbler_on = False
                     desired_heading = 0
-                    comms.my_state.update({"command": 1}) #send goalie to get ball
                     if abs(ballpos[0]) < 110 and ballpos[1] < 0:
                         if len(line_list) > 1:
                             desired_pos = [-200, 0] if ballpos[0] < 0 else [200, 0]
@@ -962,7 +961,8 @@ def main():
                         desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
-                    desired_heading = 0
+                    desired_heading = math.atan2(goalpos[1], goalpos[0] * 1.6) - math.pi/2
+                    desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
                     if ballpos[1] < 80 and abs(ballpos[0]) > 80:
                         desired_pos = [ballpos[0], -10]
                     else:
