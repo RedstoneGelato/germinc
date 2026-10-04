@@ -64,8 +64,8 @@ class DetectionThread(threading.Thread): #analyse camera feed, split into 2 thre
         self.ready = False
 
         # HSV ranges
-        self.lower_blue = np.array([90, 200, 100])
-        self.upper_blue = np.array([110, 255, 255])
+        self.lower_blue = np.array([100, 220, 100])
+        self.upper_blue = np.array([120, 255, 180])
         self.lower_yellow = np.array([20, 100, 100])
         self.upper_yellow = np.array([40, 255, 255])
 
