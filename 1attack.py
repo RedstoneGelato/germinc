@@ -939,7 +939,7 @@ def main():
 
             elif botstate == 2: # go for ball
                 if ballpos[1] < (50 if substate in (1, 4) else 80):
-                    raw_substate = 2 if ballpos[1] < -150 else 3  # far vs near backup
+                    raw_substate = 2 if ballpos[1] < -160 else 3  # far vs near backup
                 else:
                     raw_substate = 4 # just go for ball
                 substate = substate_hyst.update(raw_substate)
@@ -959,7 +959,7 @@ def main():
                         else:
                             desired_pos = [-200, 0] if ballpos[0] > 0 else [200, 0]
                     else:
-                        desired_pos = [0, -200] if ballpos[1] > 20 else [ballpos[0], -200]
+                        desired_pos = [0, -200]
                 elif substate == 4: # just go for ball
                     comms.my_state.update({"command": 0})
                     desired_heading = 0

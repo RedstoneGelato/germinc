@@ -67,7 +67,7 @@ class DetectionThread(threading.Thread): #analyse camera capture, split into 2 t
         # HSV ranges for detecting colour blobs
         self.lower_blue = np.array([90, 200, 100])
         self.upper_blue = np.array([110, 255, 255])
-        self.lower_yellow = np.array([0, 180, 180])
+        self.lower_yellow = np.array([20, 100, 100])
         self.upper_yellow = np.array([40, 255, 255])
 
         self.kernel = np.ones((3,3), np.uint8) #smoothing mask
@@ -735,8 +735,6 @@ def main():
                     fill = 3
                 elif (ball_distance_total - 1) / ball_distance_count == 2 and (gap_l == 3 or gap_r == 3) and ball_distance_count < 4: #one neighbour is close, only one sees close, not enough ir sensors see
                     fill = 2
-                elif ball_distance_count < 4 and (gap_l != 0 or gap_r != 0):
-                    fill = 2
                 elif gap_l == 3 or gap_r == 3:
                     fill = 2
  
@@ -829,7 +827,7 @@ def main():
             if botstate == 0: #do not see ball
                 desired_heading = 0
                 if own_goalpos != [0,-250]: # align middle and go backwards
-                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100] if own_goalpos[1] < -20 else [own_goalpos[0], 200]
+                    desired_pos = [own_goalpos[0], own_goalpos[1] + 100]
                     ingoalspd = int(basespd / 5)
                 else:
                     desired_pos = [goalpos[0], -250]
@@ -839,7 +837,7 @@ def main():
             elif botstate == 1: #go for ball then score
                 if (substate1 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate1 = 1  #ball in bcz
-                elif ballpos[1] < (60 if substate1 in (1, 4) else 80): #2 far backup, 3 close backup
+                elif ballpos[1] < (50 if substate1 in (1, 4) else 80): #2 far backup, 3 close backup
                     raw_substate1 = 2 if ballpos[1] < -150 else 3
                 else:
                     raw_substate1 = 4  #pathfind to ball
@@ -857,7 +855,7 @@ def main():
                 elif substate1 == 3:
                     dribbler_on = False
                     desired_heading = 0
-                    if abs(ballpos[0]) < 120 and ballpos[1] < 0: #wrap around ball
+                    if abs(ballpos[0]) < 110 and ballpos[1] < 0: #wrap around ball
                         if len(line_list) > 1: #touched line
                             desired_pos = [-200, 0] if ballpos[0] < 0 else [200, 0] #go other way
                         else:
@@ -867,7 +865,7 @@ def main():
                 elif substate1 == 4:
                     desired_heading = math.atan2(goalpos[1],goalpos[0] * 1.6) - math.pi/2
                     desired_heading = (desired_heading + math.pi) % (2 * math.pi) - math.pi
-                    if ballpos[1] < 120 and abs(ballpos[0]) > 120:
+                    if ballpos[1] < 80 and abs(ballpos[0]) > 80:
                         desired_pos = [ballpos[0], -10]
                     else:
                         desired_pos = [ballpos[0], ballpos[1] - 60]
@@ -880,7 +878,7 @@ def main():
             elif botstate == 2: # go for ball then pass
                 if (substate2 == 1 and ir_snapshot[0].get("distance") == 3) or (ir_snapshot[0].get("distance") == 3 and ir_snapshot[1].get("distance") == 3 and ir_snapshot[11].get("distance") == 3 and ir_snapshot[2].get("distance") != 3 and ir_snapshot[10].get("distance") != 3):
                     raw_substate2 = 1  # ball in bcz
-                elif ballpos[1] < (60 if substate2 in (1, 4) else 80):
+                elif ballpos[1] < (50 if substate2 in (1, 4) else 80):
                     raw_substate2 = 2 if ballpos[1] < -150 else 3  # far vs near backup
                 else:
                     raw_substate2 = 4  # pathfind to ball
@@ -898,7 +896,7 @@ def main():
                 elif substate2 == 3:
                     dribbler_on = False
                     desired_heading = 0
-                    if abs(ballpos[0]) < 70 and ballpos[1] < 0:
+                    if abs(ballpos[0]) < 110 and ballpos[1] < 0:
                         if len(line_list) > 1:
                             desired_pos = [-200, 0] if ballpos[0] < 0 else [200, 0]
                         else:
@@ -907,10 +905,10 @@ def main():
                         desired_pos = [0, -200]
                 elif substate2 == 4:
                     desired_heading = 0
-                    if ballpos[1] < 120 and abs(ballpos[0]) > 120:
+                    if ballpos[1] < 80 and abs(ballpos[0]) > 80:
                         desired_pos = [ballpos[0], -10]
                     else:
-                        desired_pos = [ballpos[0] * 1.5, ballpos[1] - 60]
+                        desired_pos = [ballpos[0], ballpos[1] - 60]
 
                     if abs(desired_pos[0]) + abs(desired_pos[1]) < 150:
                         dribbler_on = True
@@ -920,7 +918,7 @@ def main():
             elif botstate == 3: #chill in goals
                 desired_heading = 0
                 if own_goalpos != [0,-250]: # align middle and go backwards
-                    desired_pos = [own_goalpos[0], own_goalpos[1] + 70] if own_goalpos[1] < -20 else [own_goalpos[0], 0]
+                    desired_pos = [ballpos[0], own_goalpos[1] + 70]
                     ingoalspd = int(basespd / 5)
                 else:
                     desired_pos = [goalpos[0], -250]
