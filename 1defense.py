@@ -582,6 +582,9 @@ def main():
     directionlist = []
     irdirection = 0
     unconcordantdirection = 0
+    distancelist = []
+    ball_last_seen = 0
+    BALL_LOST_TIME = 0.3   # seconds to keep the last ball position after losing it
 
     desired_pos = [0,0]
     new_desired_pos = [0,0]
@@ -671,6 +674,8 @@ def main():
                     CameraToGoal.own_goalx_list = []
                     CameraToGoal.own_goaly_list = []
                     dribbler_list = []
+                    distancelist = []
+                    ball_last_seen = 0
 
                 motors.motorspeed1 = 0
                 motors.motorspeed2 = 0
@@ -747,8 +752,9 @@ def main():
                         ball_distance_count += 1
 
             if irx != 0 or iry != 0:
+                ball_last_seen = time.monotonic()
                 irdirection = math.atan2(iry, irx) # direction
-    
+
                 if len(directionlist) > 10: # smoothing
                     if unconcordantdirection > 10:
                         directionlist.clear()
@@ -764,13 +770,23 @@ def main():
                     directionlist.append(irdirection)
                     unconcordantdirection = 0
 
-                ball_distance = (ball_distance_total * 25) / ball_distance_count #average distance
-                ball_distance = max(min(ball_distance, 99), 1)
-                ball_distance = ((100 - ball_distance) * 0.3) ** 2
+                raw_distance = (ball_distance_total * 25) / ball_distance_count
+                raw_distance = max(min(raw_distance, 99), 1)
+                raw_distance = ((100 - raw_distance) * 0.3) ** 2
+                distancelist.append(raw_distance)  # smooth distance too
+                if len(distancelist) > 10:
+                    distancelist.pop(0)
+                ball_distance = sum(distancelist) / len(distancelist)
 
                 ir = [circular_mean(directionlist), ball_distance] #direction, distance
                 ballpos = [round(math.cos(ir[0]) * ir[1]), round(math.sin(ir[0]) * ir[1])]
-            else:
+
+            elif directionlist and time.monotonic() - ball_last_seen < BALL_LOST_TIME:
+                pass  # brief dropout: keep previous ballpos / ir / ball_distance
+
+            else:  # confirmed lost
+                directionlist.clear()
+                distancelist.clear()
                 ballpos = [0,0]
                 ir = [0,0]
                 ball_distance = 300
