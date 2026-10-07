@@ -7,13 +7,11 @@ GitHub commands:
 	git pull -> pull and download stuff from github
 
 PI commands:
-	SSH germinc1@germinc1 -> remote access to pi
+	SSH germinc1@germinc1 (germinc2@germinc2) -> remote access to pi
 	source env/bin/activate -> activates virtual environment (do this in the folder /~ everytime)
 	htop -> see performance stats
 	i2cdetect -y 1 -> view i2c connections
 
-	cd Documents
-	cd Code
 	ls -> list all files in the current directory (-a for hidden files)
 	cd -> change directories
 	touch -> make a file in the current directory
@@ -25,3 +23,8 @@ PI commands:
 NANO commands:
 	ctrl + O, enter -> save
 	ctrl + X -> quit
+
+File Location:
+	~/Documents/Code/germinc - location of github repo and all the code
+	/etc/systemd/system/germinc.service - autostart script
+	/boot/firmware/config.txt - config file

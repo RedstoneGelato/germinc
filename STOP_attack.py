@@ -21,7 +21,7 @@ import time
 import logging
 from pathlib import Path
 
-LOG_PATH = Path("/home/germinc1/robot_stop.log")  # adjust to your actual home dir
+LOG_PATH = Path("/home/germinc2/robot_stop.log")  # adjust to your actual home dir
 
 logging.basicConfig(
     filename=LOG_PATH,

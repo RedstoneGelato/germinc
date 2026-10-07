@@ -3,10 +3,9 @@ import time
 import busio
 import board
 import adafruit_bno08x
-import adafruit_bitbangio as bbi
 from adafruit_bno08x.i2c import BNO08X_I2C
 
-i2c = bbi.I2C(board.D6, board.D5, frequency=400000)
+i2c = busio.I2C(board.SCL, board.SDA)
 imu = BNO08X_I2C(i2c)
 imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
 
