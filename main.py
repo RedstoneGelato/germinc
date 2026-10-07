@@ -33,7 +33,8 @@ class FrameGrabber(threading.Thread): #raw camera capture
         self.cap.configure(config)
         self.cap.set_controls({
             "AwbEnable": False,
-            "ColourGains": (2.8, 2.2)   # blue, red tweak when needed
+            "ColourGains": (2.8, 2.2), #red, blue
+            "FrameDurationLimits": (16666, 16666) #60fps
         })
         self.cap.start() #starts camera capture
 
