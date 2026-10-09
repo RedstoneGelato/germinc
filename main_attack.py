@@ -58,33 +58,34 @@ class StrikerBrain:
 #----------------------------------------------------------------------
         compass = bot.imu.compass() #bot heading
         pose = bot.loc.get()
+        mate = bot.comms.teammate() #other bot's latest message, None if the bots aren't connected
         world = bot.world
-        world.update(frame_id, det, pose, bot.attack)
+        world.update(frame_id, det, pose, bot.attack, mate) #uses the teammate's ball when we can't see it
         line = bot.lines.update(colours, compass, world.line_pts, pose) #LDR ring + camera + pose
 
 #----------------------------------------------------------------------
-#            comms from other bot
+#            strategy -> motors, dribbler, kicker
 #----------------------------------------------------------------------
-        mate = bot.comms.teammate() #None if the bots aren't connected
-        goalie_bot_state = mate.get("bot active") if mate else None # 0 for bot off, 1 for bot on
+        desired_pos, desired_heading, dribbler_on = strategy.update(world, compass, mate, line.touches)
+
+        speeds = bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed,
+                                dribbler_on=dribbler_on) #slower the more sideways/backwards it moves while dribbling
+        bot.actuate(speeds, dribbler_on, strategy.kick)
 
 #----------------------------------------------------------------------
-#            strategy -> motors, comms to other bot
+#            comms to other bot
 #----------------------------------------------------------------------
-        desired_pos, desired_heading, dribbler_on = strategy.update(world, compass, goalie_bot_state, line.touches)
-
         bot.comms.my_state.update({
             "bot active": 1,
             "command": strategy.command, #1 = goalie go get the ball, 0 = goalie stay in goal
+            "chasing": strategy.chasing, #going for the ball
             "pos": [round(pose.x), round(pose.y)] if pose.confident else None,
-            "ball": [round(v) for v in world.ball_field] if world.ball_field else None,
+            "ball": [round(v) for v in world.ball_own_field] if world.ball_own_field else None, #own camera only
         })
 
-        bot.motors.set(bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed))
-
-        self.desired_pos, self.line = desired_pos, line #kept for the simulator display
-        self.status = (f"botstate={strategy.botstate} line={'ON ' + line.source if line.on_line else 'off'} "
-                       f"pos=({pose.x:.0f},{pose.y:.0f})+-{pose.std:.0f} ball={world.ball} goals={world.goal_source}")
+        self.desired_pos, self.line, self.dribbler_on = desired_pos, line, dribbler_on #kept for the simulator display
+        self.status = (f"botstate={strategy.botstate} {strategy.phase} line={'ON ' + line.source if line.on_line else 'off'} "
+                       f"pos=({pose.x:.0f},{pose.y:.0f})+-{pose.std:.0f} ball={world.ball}({world.ball_source}) goals={world.goal_source}")
 
 #==========================================================================================#
 #                                                                                          #

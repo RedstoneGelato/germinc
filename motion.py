@@ -24,6 +24,15 @@ def VelocityToMotor(xvel, yvel, rot, maxspd): #convert variables into specific m
     return int(motor1),int(motor2),int(motor3),int(motor4)
 
 
+def dribble_speed_multi(move, compass):
+    """1 when moving the way the robot faces, down to cfg.DRIBBLE_SPEED_MIN moving straight backwards (linear in
+    the angle between them). move = relative movement vector, compass = robot heading."""
+    if math.hypot(move[0], move[1]) < 1e-6:
+        return 1.0
+    angle = abs(wrap_pi(math.atan2(-move[0], move[1]) - compass))   # 0 = straight ahead, pi = straight back
+    return 1.0 - (1.0 - cfg.DRIBBLE_SPEED_MIN) * angle / math.pi
+
+
 class Mover:
     def __init__(self):
         self.reset()
@@ -33,12 +42,13 @@ class Mover:
         self.new_desired_pos = [0, 0]
 
     def step(self, desired_pos, desired_heading, compass, line, pose,
-             base_speed=cfg.BASE_SPEED, spd_min=0.2, spd_multi=None):
+             base_speed=cfg.BASE_SPEED, spd_min=0.2, spd_multi=None, dribbler_on=False):
         """desired_pos = relative cm vector to drive towards, desired_heading = radians (0 = facing attack goal).
         line = LineState, pose = localisation Pose (or None). Returns 4 motor speeds.
         base_speed / spd_min / spd_multi come from the strategy's `speed` dict:
             base_speed  speed at full distance, spd_min  slowest multiplier when close,
-            spd_multi   if set, use this multiplier instead of the distance-based one (striker shooting)."""
+            spd_multi   if set, use this multiplier instead of the distance-based one (striker shooting).
+        dribbler_on: slow down the more the movement direction is off the facing direction (cfg.DRIBBLE_SPEED_MIN)."""
         heading_error = wrap_pi(desired_heading - compass) #angle difference between desired and actual
         spin_weight = cfg.BASE_SPIN * max(0.1,min(abs(heading_error),2)) if heading_error != 0 else cfg.BASE_SPIN #scale spd based on how much angle difference
         if abs(heading_error) < 0.05: #dont spin if difference too small
@@ -54,6 +64,8 @@ class Mover:
             spd_multi = max(min(spd_multi,1),spd_min)
         maxspd = round(base_speed * (1 + (abs(rot) / 160)) * spd_multi)
         maxspd *= line.speed_multi
+        if dribbler_on:
+            maxspd *= dribble_speed_multi(desired_pos, compass)
         self.new_maxspd = self.new_maxspd * 0.9 + maxspd * 0.1 #alpha beta smoothing
 
         self.new_desired_pos = [desired_pos[0] * 0.1 + self.new_desired_pos[0] * 0.9, desired_pos[1] * 0.1 + self.new_desired_pos[1] * 0.9] #alpha beta smoothing of desired position

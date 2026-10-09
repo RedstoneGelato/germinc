@@ -23,6 +23,7 @@ class Robot:
         self.imu.start()
         self.motors = hw.make_motors()
         self.motors.start()
+        self.kicker = hw.make_kicker() # None if this robot has no kicker
         self.pcb = PCBThread()
         self.pcb.start()
         self.comms = TeammateLinkThread(hw.ROBOT_ID)
@@ -44,6 +45,14 @@ class Robot:
         while not (self.imu.ready and self.vision.ready and self.pcb.ready):
             time.sleep(0.05)
 
+    def actuate(self, speeds, dribbler_on, kick):
+        """Send one loop's decisions to the hardware: 4 wheel speeds, dribbler on/off, kick (ignored without a
+        kicker or while it recharges)."""
+        self.motors.set(speeds)
+        self.motors.set_dribbler(dribbler_on)
+        if kick and self.kicker is not None:
+            self.kicker.kick()
+
     def standby(self, colours, det):
         """One loop while paused: motors off, calibrate goal colour, LEDs and heading."""
         self.motors.stop()
@@ -62,6 +71,8 @@ class Robot:
 
         # stop motors first
         self.motors.stop()
+        if self.kicker is not None:
+            self.kicker.close()
         for m in self.motors.drivers:
             m.clear_faults()
 

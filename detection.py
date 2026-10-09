@@ -17,6 +17,7 @@ import collections
 import cv2
 import numpy as np
 
+import field
 import robot_config as cfg
 
 # ---- TUNE (areas in cm^2 so they don't depend on the top-down px/cm)
@@ -28,8 +29,11 @@ HULL_MARGIN = 6.0              # cm the field hull is grown by before filtering 
 LINE_MAX_POINTS = 250          # white pixels are subsampled to at most this many
 LINE_MAX_RANGE = 120.0         # cm; far points are less accurate in the top-down view
 OBSTACLE_MIN_AREA = 40.0
-OBSTACLE_KERNEL = 3.0          # cm; opening applied to the "unknown colour" mask
+OBSTACLE_KERNEL = field.PENALTY_LINE_W + 2.0   # cm; opening of the "unknown colour" mask: removes anything thinner,
+                                              # i.e. the black penalty box line (robots are ~20 cm across)
 OBSTACLE_BODY_MARGIN = 2.0     # cm past our own body (ROBOT_RADIUS circle + ignore box) where obstacles are ignored
+OBSTACLE_LINE_MARGIN = 3.0     # cm around white lines that never counts as obstacle (blurry line edges far away)
+OBSTACLE_MAX_RANGE = 90.0      # cm: further than this the camera resolution is too low to tell robots from blur
 
 Goal = collections.namedtuple("Goal", "near centre")      # both [x, y] robot frame cm
 Obstacle = collections.namedtuple("Obstacle", "near size")  # near = [x, y] cm, size = rough diameter cm
@@ -86,8 +90,10 @@ def detect(rv, res, t, compass):
     field, d.hull_px = field_mask(rv, m["green"])
     d.field_visible = field is not None
     if field is not None:
-        k = max(1, int(round(2 * HULL_MARGIN * ppc))) | 1
-        field_grown = cv2.dilate(field, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        # hull grown by HULL_MARGIN: filling the hull and drawing its outline thick is the same as dilating it, but cheap
+        field_grown = np.zeros_like(field)
+        cv2.fillConvexPoly(field_grown, d.hull_px, 255)
+        cv2.polylines(field_grown, [d.hull_px], True, 255, max(1, int(round(2 * HULL_MARGIN * ppc))))
     else:
         field_grown = rv.valid       # can't see the field: don't filter
 
@@ -118,7 +124,9 @@ def detect(rv, res, t, compass):
 
     # obstacles: inside the field, but not any known colour
     if field is not None:
-        known = m["green"] | m["white"] | m["orange"] | m["yellow"] | m["blue"]
+        kl = max(1, int(round(2 * OBSTACLE_LINE_MARGIN * ppc))) | 1
+        white_grown = cv2.dilate(m["white"], np.ones((kl, kl), np.uint8))   # square kernel: much faster than round
+        known = m["green"] | white_grown | m["orange"] | m["yellow"] | m["blue"]
         unknown = cv2.bitwise_and(field, cv2.bitwise_not(known))
         # our own body: the ignore box no longer covers the front (so the ball in the dribbler stays visible),
         # so blank a circle the size of the robot too
@@ -131,5 +139,7 @@ def detect(rv, res, t, compass):
         unknown = cv2.morphologyEx(unknown, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
         for c in _big_contours(unknown, _area_px(rv, OBSTACLE_MIN_AREA)):
             size = float(np.sqrt(cv2.contourArea(c)) / ppc)
-            d.obstacles.append(Obstacle(_nearest_point(rv, [c]), size))
+            near = _nearest_point(rv, [c])
+            if near[0] ** 2 + near[1] ** 2 < OBSTACLE_MAX_RANGE ** 2:
+                d.obstacles.append(Obstacle(near, size))
     return d

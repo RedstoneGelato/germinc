@@ -67,7 +67,8 @@ See [GUIDE.md](GUIDE.md) for how it all works and which file to edit for what.
 | `localisation.py` | Particle filter: robot x, y on the field from lines + goals (ultrasonic ring ready for later) |
 | `perception.py` | Smoothed ball / goals / obstacles in cm for the strategy |
 | `lines.py` | Out-of-bounds from LDR ring + camera + localisation |
-| `strategy.py` | Goalie and striker state machines |
+| `strategy.py` | Goalie and striker behaviour in field coordinates (needs localisation) |
+| `strategy_fallback.py` | The comp-style relative state machines, used while a robot isn't localised |
 | `motion.py` | Desired movement -> motor speeds |
 | `comms.py` | Link to the other robot |
 | `simulator.py` | Runs both robots' real logic on a simulated field (laptop, no Pi needed) |

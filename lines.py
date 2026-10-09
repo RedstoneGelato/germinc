@@ -3,10 +3,12 @@ lines.py - out-of-bounds avoidance from BOTH the LDR ring and the camera.
 
     LDR ring   sees the line right under the robot (the camera can't, the body is in the way).
                This is the only thing that can say "we're ON the line right now".
-    camera     sees lines around the robot before we reach them. Gives a second escape direction and,
-               once the localisation is confident, tells boundary lines apart from penalty-area lines.
-    pose       when localisation is confident: distance to the boundary in each direction, used to slow down
-               before reaching the line and as a third escape direction.
+    camera     sees lines around the robot before we reach them. Gives a second escape direction.
+               (Only the boundary is white; the penalty box line is black, so neither sensor reacts to it.)
+    pose       when localisation is precise (spread < cfg.PRECISE_STD): the robot may go partly past the line, as
+               long as part of it still touches the line (centre up to cfg.MAX_OUT past the outer edge). The pose
+               decides when to escape, LDR hits on their own are allowed (touching the line is legal). Without a
+               precise pose the LDRs decide: seeing the line = escape.
 
 All vectors are "relative": field axes, robot at the origin, cm.
 """
@@ -23,12 +25,13 @@ LDR_VECTOR_IS_ESCAPE = True     # the LDR sum vector was used as the escape dire
                                 # drives INTO the line on the bench test, set this to False to flip it.
 CAM_NEAR = cfg.ROBOT_RADIUS + 10.0   # camera line points closer than this count as "about to touch"
 CAM_MIN_POINTS = 4
-BOUNDARY_BAND = 6.0             # cm: field-frame line points within this of the boundary are boundary lines
-IGNORE_INNER_LINES = True       # confident pose + far from the boundary -> LDR hits are penalty lines, don't escape
+BOUNDARY_BAND = field.LINE_W + 0.5   # cm: field-frame line points within this of the boundary are boundary lines
+                                     # (kept tight, so only the boundary counts if inner white markings get added)
+IGNORE_INNER_LINES = False      # True: confident pose + far from the boundary -> ignore LDR hits (only useful if the
+                                # field has white lines inside it; ours doesn't, so it could only hide a real boundary)
 INNER_CLEARANCE = 15.0          # cm robot centre must be inside the boundary for an LDR hit to count as an inner line
-SLOW_START = 25.0               # cm (robot edge to boundary line): start limiting outward speed
-SLOW_STOP = 3.0                 # cm: outward speed is zero here
-OUT_MARGIN = 2.0                # cm past the line (robot centre) = out of bounds by pose
+SLOW_START = 20.0               # cm (robot centre to the furthest-out allowed position): start limiting outward speed
+SLOW_STOP = 2.0                 # cm: outward speed is zero here
 W_LDR, W_CAM, W_POSE = 1.0, 0.7, 1.0   # escape direction blend
 SPEED_MULTI = {0: 1, 1: 0.6, 2: 0.5, 3: 0.3, 4: 0.1}  # by number of line touches in the last 3 s
 
@@ -72,11 +75,10 @@ class LineFusion:
     def boundary_escape(pose):
         """Direction back into the field from the pose, or None if comfortably inside."""
         ex = ey = 0.0
-        lim_x = field.PLAY_W / 2 - cfg.ROBOT_RADIUS
-        lim_y = field.boundary_y(pose.x, cfg.ROBOT_RADIUS) - cfg.ROBOT_RADIUS   # further in front of a goal (notch)
-        if abs(pose.x) > lim_x:
+        lim_x, lim_y = out_limits(pose.x)
+        if abs(pose.x) > lim_x - SLOW_STOP:
             ex = -math.copysign(1.0, pose.x)
-        if abs(pose.y) > lim_y:
+        if abs(pose.y) > lim_y - SLOW_STOP:
             ey = -math.copysign(1.0, pose.y)
         return _unit([ex, ey])
 
@@ -109,14 +111,20 @@ class LineFusion:
         # ---- pose
         pose_escape = None
         pose_out = False
+        precise = pose is not None and pose.std < cfg.PRECISE_STD
         if confident:
             pose_escape = self.boundary_escape(pose)
-            pose_out = not field.inside_play_area(pose.x, pose.y, -OUT_MARGIN)
+        if precise:
+            lim_x, lim_y = out_limits(pose.x)
+            pose_out = abs(pose.x) > lim_x or abs(pose.y) > lim_y
 
         # ---- decide
-        inner_line = (IGNORE_INNER_LINES and confident and
-                      field.inside_play_area(pose.x, pose.y, INNER_CLEARANCE) and not s.cam_near)
-        s.on_line = (s.ldr_hit and not inner_line) or pose_out
+        if precise:
+            s.on_line = pose_out        # touching the line is fine, only going too far past it isn't
+        else:
+            inner_line = (IGNORE_INNER_LINES and confident and
+                          field.inside_play_area(pose.x, pose.y, INNER_CLEARANCE) and not s.cam_near)
+            s.on_line = s.ldr_hit and not inner_line
 
         if s.on_line:
             ex = ey = 0.0
@@ -141,17 +149,24 @@ class LineFusion:
         return s
 
 
+def out_limits(x):
+    """How far the robot centre may go in x and y (at this x) and still touch the white line (with safety)."""
+    return (field.PLAY_W / 2 + cfg.MAX_OUT,
+            field.boundary_y(x, cfg.ROBOT_RADIUS) + cfg.MAX_OUT)
+
+
 def limit_outward(vec, pose):
-    """Scale down the part of a desired movement (relative) that heads out of the field when the robot is close
-    to the boundary. Only with a confident pose; otherwise returns vec unchanged."""
-    if pose is None or not pose.confident:
+    """Scale down the part of a desired movement (relative) that heads out of the field when the robot gets close
+    to the furthest-out allowed position. Only with a precise pose; otherwise returns vec unchanged."""
+    if pose is None or pose.std >= cfg.PRECISE_STD:
         return vec
     out = list(vec)
-    for axis, half in ((0, field.PLAY_W / 2), (1, field.boundary_y(pose.x, cfg.ROBOT_RADIUS))):
+    lim_x, lim_y = out_limits(pose.x)
+    for axis, lim in ((0, lim_x), (1, lim_y)):
         p = pose.x if axis == 0 else pose.y
         if out[axis] * p <= 0:          # moving inwards (or not at all) on this axis
             continue
-        gap = half - abs(p) - cfg.ROBOT_RADIUS
+        gap = lim - abs(p)
         f = min(max((gap - SLOW_STOP) / (SLOW_START - SLOW_STOP), 0.0), 1.0)
         out[axis] *= f
     return out

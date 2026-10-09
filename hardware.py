@@ -167,9 +167,10 @@ MOTOR_SPEED_LIMIT = 546133333         # max spd
 
 class MotorThread(threading.Thread): #setup motors with motor drivers
     """motors = list of 4 (i2c address, ELECANGLEOFFSET, SINCOSCENTRE), in VelocityToMotor order (motor1..motor4).
-    Each robot passes its own list: see hardware_attack.py / hardware_defense.py."""
+    dribbler = the same tuple for the dribbler motor, or None. Each robot passes its own: see hardware_attack.py /
+    hardware_defense.py."""
 
-    def __init__(self, motors):
+    def __init__(self, motors, dribbler=None, dribbler_speed=0):
         super().__init__()
         self.daemon = True
         self.running = True
@@ -179,24 +180,31 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         self.motorspeed2 = 0
         self.motorspeed3 = 0
         self.motorspeed4 = 0
+        self.dribblerspeed = 0
+        self.dribbler_on_speed = dribbler_speed
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
 
-        self.drivers = []
-        for addr, elec_offset, sincos_centre in motors:
-            m = PowerfulBLDCDriver(self.i2c, addr)
-            m.set_current_limit_foc(MOTOR_CURRENT_LIMIT)
-            m.set_id_pid_constants(1500, 200)
-            m.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
-            m.set_position_pid_constants(275, 0, 0)
-            m.set_position_region_boundary(250000)
-            m.set_ELECANGLEOFFSET(elec_offset)   # per-motor calibration
-            m.set_SINCOSCENTRE(sincos_centre)    # per-motor calibration
-            m.set_speed_limit(self.speedlimit)
-            m.configure_operating_mode_and_sensor(3, 1)
-            m.configure_command_mode(12)
-            self.drivers.append(m)
+        self.drivers = [self._make_driver(*m) for m in motors]
         self.motor1, self.motor2, self.motor3, self.motor4 = self.drivers
+        self.dribbler = None
+        if dribbler is not None:
+            self.dribbler = self._make_driver(*dribbler)
+            self.drivers.append(self.dribbler)
+
+    def _make_driver(self, addr, elec_offset, sincos_centre):
+        m = PowerfulBLDCDriver(self.i2c, addr)
+        m.set_current_limit_foc(MOTOR_CURRENT_LIMIT)
+        m.set_id_pid_constants(1500, 200)
+        m.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
+        m.set_position_pid_constants(275, 0, 0)
+        m.set_position_region_boundary(250000)
+        m.set_ELECANGLEOFFSET(elec_offset)   # per-motor calibration
+        m.set_SINCOSCENTRE(sincos_centre)    # per-motor calibration
+        m.set_speed_limit(self.speedlimit)
+        m.configure_operating_mode_and_sensor(3, 1)
+        m.configure_command_mode(12)
+        return m
 
     def run(self):
         while self.running:
@@ -204,10 +212,42 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
             self.motor2.set_speed(int(-self.motorspeed2))
             self.motor3.set_speed(int(-self.motorspeed3))
             self.motor4.set_speed(int(-self.motorspeed4))
+            if self.dribbler is not None:
+                self.dribbler.set_speed(int(-self.dribblerspeed))
             time.sleep(0.005)
 
     def set(self, speeds):
         self.motorspeed1, self.motorspeed2, self.motorspeed3, self.motorspeed4 = speeds
 
+    def set_dribbler(self, on):
+        self.dribblerspeed = self.dribbler_on_speed if on else 0
+
     def stop(self):
         self.set((0, 0, 0, 0))
+        self.dribblerspeed = 0
+
+
+class Kicker:
+    """Solenoid on a GPIO pin. kick() never blocks the main loop: the pulse is ended by a timer,
+    and kicks inside the cooldown are ignored (returns False)."""
+
+    def __init__(self, pin, pulse, cooldown):
+        from gpiozero import OutputDevice
+        self.out = OutputDevice(pin, active_high=True, initial_value=False)
+        self.pulse, self.cooldown = pulse, cooldown
+        self.last = -1e9
+
+    def ready(self):
+        return time.monotonic() - self.last >= self.cooldown
+
+    def kick(self):
+        if not self.ready():
+            return False
+        self.last = time.monotonic()
+        self.out.on()
+        threading.Timer(self.pulse, self.out.off).start()
+        return True
+
+    def close(self):
+        self.out.off()
+        self.out.close()

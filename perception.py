@@ -19,6 +19,9 @@ CAPTURE_HOLD = 0.3            # ball vanished into the ignore box right after be
 OBSTACLE_MATCH = 20.0         # cm: same obstacle as last frame if this close
 OBSTACLE_MIN_HITS = 3         # frames in a row before an obstacle is believed
 OBSTACLE_LOST_TIME = 0.3
+OBSTACLE_MEMORY = 1.0         # s an obstacle is remembered (field frame) after it drops out of view...
+OBSTACLE_VISIBLE = 70.0       # ...unless it's closer than this (cm), where the camera would definitely still see it
+MATE_MATCH = cfg.ROBOT_RADIUS + 15.0   # cm: an obstacle this close to where the teammate says it is = the teammate
 
 
 def in_capture_zone(ball_robot):
@@ -61,16 +64,21 @@ class World:
         self.reset_values()
 
     def reset_values(self):
-        self.ball = None              # relative, smoothed
+        self.ball = None              # relative, smoothed: our camera, or the teammate's if we can't see it
+        self.ball_source = "-"        # "cam" / "mate" / "-"
+        self.ball_own = None          # relative, our camera only
+        self.ball_own_field = None    # field frame, our camera only (this is what we send to the teammate)
         self.ball_robot = None        # robot frame, raw from the latest frame
-        self.ball_field = None
+        self.ball_field = None        # field frame, ours or the teammate's
+        self.mate_pos = None          # teammate's position (field frame) from comms, or None
         self.ball_in_capture = False
         self.attack_goal = None       # Goal(near, centre), relative
         self.own_goal = None
         self.goal_source = ""         # "cam" / "pose" per goal, for printing
         self.line_pts = np.zeros((0, 2), np.float32)   # white line points, relative
         self.obstacles = []           # [(relative pos, size cm)]
-        self.obstacles_field = []
+        self.obstacles_field = []     # [(field pos, size cm)]: seen now + remembered for OBSTACLE_MEMORY
+        self.obstacle_memory = []     # [[field pos, size, last seen]]
         self.pose = None
         self.field_visible = False
 
@@ -80,8 +88,9 @@ class World:
         self.last_capture = 0.0
         self.reset_values()
 
-    def update(self, frame_id, det, pose, attack_colour):
-        """Call every loop; only does work when there's a new camera frame."""
+    def update(self, frame_id, det, pose, attack_colour, mate=None):
+        """Call every loop; only does work when there's a new camera frame.
+        mate = the teammate's latest comms message (or None): its "ball" and "pos" are used."""
         self.pose = pose
         if det is None or frame_id == self.frame_id:
             return
@@ -92,7 +101,7 @@ class World:
 
         # ball
         self.ball_robot = det.ball
-        self.ball = self.ball_tracker.update(None if det.ball is None else rotate(det.ball, c), now)
+        self.ball_own = self.ball_tracker.update(None if det.ball is None else rotate(det.ball, c), now)
         if in_capture_zone(det.ball):
             self.last_capture = now
         self.ball_in_capture = in_capture_zone(det.ball) or (det.ball is None and now - self.last_capture < CAPTURE_HOLD)
@@ -121,10 +130,42 @@ class World:
         # obstacles
         self.obstacles = self.obstacle_tracker.update([(rotate(o.near, c), o.size) for o in det.obstacles], now)
 
-        # field-frame copies when we know where we are
-        if pose is not None and pose.confident:
-            self.ball_field = None if self.ball is None else [self.ball[0] + pose.x, self.ball[1] + pose.y]
-            self.obstacles_field = [([p[0] + pose.x, p[1] + pose.y], s) for p, s in self.obstacles]
+        # field-frame copies when we know where we are (anything from the teammate needs this too)
+        confident = pose is not None and pose.confident
+        mate_ball = mate.get("ball") if mate else None
+        self.mate_pos = mate.get("pos") if mate else None
+        if confident:
+            self.ball_own_field = None if self.ball_own is None else [self.ball_own[0] + pose.x, self.ball_own[1] + pose.y]
+            if self.mate_pos is not None:   # the teammate shows up as an obstacle: drop it
+                self.obstacles = [(p, s) for p, s in self.obstacles
+                                  if math.hypot(p[0] + pose.x - self.mate_pos[0], p[1] + pose.y - self.mate_pos[1]) > MATE_MATCH]
+            self.obstacles_field = self.remember_obstacles(
+                [([p[0] + pose.x, p[1] + pose.y], s) for p, s in self.obstacles], pose, now)
         else:
-            self.ball_field = None
+            self.ball_own_field = None
             self.obstacles_field = []
+            self.obstacle_memory = []
+
+        # ball: our own camera first, the teammate's sighting when we can't see it
+        if self.ball_own is not None:
+            self.ball, self.ball_field, self.ball_source = self.ball_own, self.ball_own_field, "cam"
+        elif confident and mate_ball is not None:
+            self.ball = [mate_ball[0] - pose.x, mate_ball[1] - pose.y]
+            self.ball_field, self.ball_source = list(mate_ball), "mate"
+        else:
+            self.ball, self.ball_field, self.ball_source = None, None, "-"
+
+    def remember_obstacles(self, seen, pose, now):
+        """Field-frame obstacles: the ones seen now, plus ones seen in the last OBSTACLE_MEMORY seconds that are now
+        out of view (far away / at the edge of the camera). Stops planning from flip-flopping when an obstacle flickers."""
+        mem = self.obstacle_memory
+        for p, size in seen:
+            match = min(mem, key=lambda m: math.hypot(m[0][0] - p[0], m[0][1] - p[1]), default=None)
+            if match is not None and math.hypot(match[0][0] - p[0], match[0][1] - p[1]) < OBSTACLE_MATCH:
+                match[0], match[1], match[2] = p, size, now
+            else:
+                mem.append([p, size, now])
+        self.obstacle_memory = [m for m in mem if m[2] == now or (
+            now - m[2] < OBSTACLE_MEMORY and math.hypot(m[0][0] - pose.x, m[0][1] - pose.y) > OBSTACLE_VISIBLE)]
+        return [(m[0], m[1]) for m in self.obstacle_memory]
+
