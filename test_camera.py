@@ -64,10 +64,12 @@ TOPDOWN_FILE = os.path.join(HERE, "topdown.npz")
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
 EXPORT_FILE = os.path.join(HERE, "robot_vision_config.json")   # made by the "Generate config file" button
 
-# Ignore box (the robot's own body) + min blob area for the goals.
-# Defined in the ROBOT-ALIGNED frame (after ROTATION, before yaw alignment), so it follows the robot.
-IGNORE_X1, IGNORE_X2 = 60, 160
-IGNORE_Y1, IGNORE_Y2 = 90, 230
+# Ignore box (the robot's own body): cm from the robot centre in each direction, front = up in the robot frame.
+# Applied in the ROBOT-ALIGNED frame (after ROTATION, before yaw alignment), so it follows the robot.
+# Keep "front" small so the ball in the capture zone stays visible. Tuned with the sliders, saved in settings.json.
+DEFAULT_IGNORE = {"left": 11.0, "right": 11.0, "back": 11.0, "front": 5.0}
+IGNORE_LIMITS = (0.0, 40.0)
+FALLBACK_PX_PER_CM = 1.0  # used for the ignore box when there is no top-down setup (raw/undistorted frames)
 MIN_BLOB_AREA = 280
 KERNEL = np.ones((3, 3), np.uint8)
 
@@ -136,6 +138,7 @@ class Config:
         self.undistort = dict(DEFAULT_UNDISTORT)
         self.yaw = dict(DEFAULT_YAW)
         self.robot = None   # [x, y] in the image that goes into ROTATION; None = image centre
+        self.ignore = dict(DEFAULT_IGNORE)
         self.arrays = {}
         self.load()
         self._rebuild()
@@ -162,13 +165,14 @@ class Config:
                         "offset": float(y["offset"]), "manual": max(-180.0, min(float(y["manual"]), 180.0))}
             r = d.get("robot")
             self.robot = [float(r[0]), float(r[1])] if r else None
+            self.ignore = self._clamp_ignore({**DEFAULT_IGNORE, **d.get("ignore", {})})
         except (OSError, ValueError, KeyError, TypeError, IndexError) as e:
             print(f"[warn] could not read {SETTINGS_FILE}: {e!r} - using defaults for what failed")
 
     def save(self):
         with self.lock:
             data = {"hsv": self.hsv, "camera": self.camera, "undistort": self.undistort,
-                    "yaw": self.yaw, "robot": self.robot}
+                    "yaw": self.yaw, "robot": self.robot, "ignore": self.ignore}
         tmp = SETTINGS_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
@@ -226,6 +230,17 @@ class Config:
     def set_robot(self, xy):
         with self.lock:
             self.robot = None if xy is None else [float(xy[0]), float(xy[1])]
+
+    # ---- ignore box (robot body)
+    @staticmethod
+    def _clamp_ignore(ign):
+        lo, hi = IGNORE_LIMITS
+        return {k: max(lo, min(float(ign[k]), hi)) for k in DEFAULT_IGNORE}
+
+    def set_ignore(self, partial):
+        with self.lock:
+            self.ignore = self._clamp_ignore({**self.ignore, **partial})
+            return dict(self.ignore)
 
 
 CFG = Config()
@@ -350,14 +365,26 @@ def merge_blobs(mask, min_size):
     return [0, 0, 0, 0]
 
 
-def compute_masks(frame, hsv_cfg):
+def ignore_rect(centre, px_per_cm, ign, shape):
+    """Ignore box (x1, y1, x2, y2) in pixels of the robot-aligned frame, from cm offsets around the robot centre."""
+    h, w = shape[:2]
+    cx, cy = centre
+    x1 = int(round(cx - ign["left"] * px_per_cm))
+    x2 = int(round(cx + ign["right"] * px_per_cm))
+    y1 = int(round(cy - ign["front"] * px_per_cm))
+    y2 = int(round(cy + ign["back"] * px_per_cm))
+    return max(x1, 0), max(y1, 0), min(max(x2, 0), w), min(max(y2, 0), h)
+
+
+def compute_masks(frame, hsv_cfg, rect):
     """Masks in the robot-aligned frame (ignore box applied here, so it follows the robot body)."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    x1, y1, x2, y2 = rect
     masks = {}
     for name in COLOURS:
         lo, hi = hsv_cfg[name]
         m = cv2.inRange(hsv, lo, hi)
-        m[IGNORE_Y1:IGNORE_Y2, IGNORE_X1:IGNORE_X2] = 0
+        m[y1:y2, x1:x2] = 0
         masks[name] = cv2.morphologyEx(m, cv2.MORPH_OPEN, KERNEL)
     return masks
 
@@ -399,15 +426,17 @@ def make_align(shape, centre, angle, enabled):
     return M, (side, side), (side / 2.0, side / 2.0)
 
 
-def analyse(frame, masks, centre, M):
+def analyse(frame, masks, centre, M, ignore):
     """Goal detection + annotation on the (possibly field-aligned) frame.
+    ignore = (x1, y1, x2, y2) ignore box in the robot-aligned frame.
     Returns (annotated, goalpos, own_goalpos, ignore_polygon)."""
     cx, cy = centre
     blue_box = merge_blobs(masks["blue"], MIN_BLOB_AREA)
     yellow_box = merge_blobs(masks["yellow"], MIN_BLOB_AREA)
 
     annotated = frame.copy()
-    rect = np.float64([[IGNORE_X1, IGNORE_Y1], [IGNORE_X2, IGNORE_Y1], [IGNORE_X2, IGNORE_Y2], [IGNORE_X1, IGNORE_Y2]])
+    x1, y1, x2, y2 = ignore
+    rect = np.float64([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
     poly = np.round(rect @ M[:, :2].T + M[:, 2]).astype(np.int32)
     cv2.polylines(annotated, [poly], True, (0, 0, 255), 1)
     tx, ty = int(poly[0][0]), int(poly[0][1])
@@ -568,6 +597,7 @@ class Shared:
         self.raw = self.undist = self.topdown = self.final = self.detect_img = None
         self.masks = None
         self.poly = None
+        self.ignore_px = None  # ignore box (x1, y1, x2, y2) in the robot-aligned frame, last frame
         self.goalpos = self.own_goalpos = None
         self.meta = {}        # what the camera is actually using right now
         self.yaw_info = {}
@@ -600,7 +630,6 @@ def capture_loop(cam):
         td = P.to_topdown(raw)
         base = td if td is not None else (und if und is not None else raw)
         robot_frame = cv2.rotate(base, ROTATION)
-        masks_r = compute_masks(robot_frame, CFG.arrays)
 
         # robot centre in the robot-aligned frame
         rh, rw = robot_frame.shape[:2]
@@ -610,6 +639,11 @@ def capture_loop(cam):
         else:
             bx, by = robot_base_point(base.shape, rcfg)
             centre = rotate_point((bx, by), (base.shape[1], base.shape[0]), ROTATION)
+
+        tdc = P.topdown
+        ppc = tdc[3] if (td is not None and tdc is not None) else FALLBACK_PX_PER_CM
+        ign = ignore_rect(centre, ppc, CFG.ignore, robot_frame.shape)
+        masks_r = compute_masks(robot_frame, CFG.arrays, ign)
 
         # field alignment from IMU yaw
         ycfg = CFG.yaw
@@ -621,7 +655,7 @@ def capture_loop(cam):
             masks = {k: cv2.warpAffine(v, M, size, flags=cv2.INTER_NEAREST) for k, v in masks_r.items()}
         else:
             final, masks = robot_frame, masks_r
-        annotated, goalpos, own_goalpos, poly = analyse(final, masks, centre_a, M)
+        annotated, goalpos, own_goalpos, poly = analyse(final, masks, centre_a, M, ign)
 
         gains = md.get("ColourGains") or (None, None)
         meta = {"exposure_us": md.get("ExposureTime"), "analogue_gain": md.get("AnalogueGain"),
@@ -632,6 +666,7 @@ def capture_loop(cam):
         with S.lock:
             S.raw, S.undist, S.topdown = raw, und, td
             S.final, S.detect_img, S.masks, S.poly = final, annotated, masks, poly
+            S.ignore_px = ign
             S.goalpos, S.own_goalpos, S.meta = goalpos, own_goalpos, meta
             S.yaw_info = {"raw": yaw_raw, "source": yaw_src, "effective": yaw_eff, "enabled": ycfg["enabled"]}
             S.canvas = [size[0], size[1]]
@@ -856,6 +891,16 @@ def api_heading_zero():
     return {"ok": True, "msg": f"Current heading ({raw:.1f} deg, {src}) is now 'forward'."}
 
 
+def api_ignore(body):
+    try:
+        ign = CFG.set_ignore({k: body[k] for k in DEFAULT_IGNORE if k in body})
+    except (ValueError, TypeError):
+        return {"ok": False, "msg": "Bad values."}
+    if body.get("save"):
+        CFG.save()
+    return {"ok": True, "ignore": ign}
+
+
 def api_robot(body):
     if body.get("reset"):
         CFG.set_robot(None)
@@ -881,7 +926,10 @@ def build_export():
         und = dict(CFG.undistort)
         yaw = dict(CFG.yaw)
         robot = CFG.robot
+        ign = dict(CFG.ignore)
     td = P.topdown
+    with S.lock:
+        ign_px = S.ignore_px
     controls = {k: (list(v) if isinstance(v, tuple) else v) for k, v in camera_controls(cam).items()}
     return {
         "version": 1,
@@ -890,7 +938,8 @@ def build_export():
         "rotation": ROTATION_NAMES[ROTATION],
         "camera": {**cam, "controls": controls},
         "hsv": hsv,
-        "detection": {"ignore_box": [IGNORE_X1, IGNORE_Y1, IGNORE_X2, IGNORE_Y2],
+        "detection": {"ignore_cm": ign,
+                      "ignore_box": list(ign_px) if ign_px else None,   # same box in px, as it was when exported
                       "min_blob_area": MIN_BLOB_AREA, "morph_kernel": int(KERNEL.shape[0])},
         "lens": None if P.K is None else {"K": P.K.tolist(), "D": P.D.tolist(), "size": list(CAPTURE_SIZE)},
         "undistort_view": und,
@@ -907,7 +956,7 @@ def api_export():
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, EXPORT_FILE)
-    parts = ["HSV (5 colours)", "camera exposure/white balance", "ignore box + blob size", "heading settings"]
+    parts = ["HSV (5 colours)", "camera exposure/white balance", "ignore box (cm) + blob size", "heading settings"]
     notes = []
     if data["lens"]:
         parts.append("lens calibration")
@@ -988,6 +1037,9 @@ PAGE = r"""<!doctype html>
   <div class="dim">Check the sign: turn the robot by hand. In the Detect tab the field should stay still while the green arrow (robot front) turns. If the field spins instead, tick Invert, then press 'Current heading = forward' again.</div>
   <button class="a" onclick="pickRobotCentre()">Set robot centre (click Top-down)</button>
   <button class="a" onclick="post('/api/robot',{reset:true})">Reset centre</button>
+  <div class="dim" style="margin-top:6px">Ignore box (robot body), cm from the robot centre. Red box in the Masks/Detect tabs.
+   Keep 'front' small enough that a ball sitting in the capture zone is still outside the box.</div>
+  <div id="ignbox"></div>
  </details>
  <details open><summary>Export for the robot script</summary>
   <div class="dim">Bundles the HSV ranges, exposure/white balance, lens calibration, top-down mapping, ignore box and heading settings into one file the robot script loads with robot_vision.py.</div>
@@ -1065,7 +1117,8 @@ function sender(path,ms){
       return fetch(path,{method:'POST',headers:JH,body:JSON.stringify(b)})};
     if(save){clearTimeout(t);return go()}
     if(!t)t=setTimeout(go,ms)}}
-const sendYaw=sender('/api/heading',80), sendUnd=sender('/api/undistort',80);
+const sendYaw=sender('/api/heading',80), sendUnd=sender('/api/undistort',80), sendIgn=sender('/api/ignore',80);
+const IGN=['front','back','left','right'];
 
 // ---------- HSV sliders ----------
 function buildColours(){
@@ -1142,6 +1195,15 @@ function pickRobotCentre(){
   s.oninput=()=>{$('uo_'+k).textContent=(+s.value).toFixed(2);sendUnd({[k]:+s.value},false)};
   s.onchange=()=>sendUnd({[k]:+s.value},true)});
 async function exportCfg(){const j=await post('/api/export');if(j.ok)$('dl').style.display='inline'}
+function buildIgn(){
+  IGN.forEach(k=>{
+    const row=document.createElement('div');row.className='row';
+    row.innerHTML=`<span class="n">${k} cm</span><input type="range" id="i_${k}" min="0" max="40" step="0.5"><output id="io_${k}"></output>`;
+    $('ignbox').appendChild(row);
+    const s=row.querySelector('input');
+    s.oninput=()=>{$('io_'+k).textContent=s.value;sendIgn({[k]:+s.value},false)};
+    s.onchange=()=>sendIgn({[k]:+s.value},true)})}
+function refreshIgn(){IGN.forEach(k=>{$('i_'+k).value=cfg.ignore[k];$('io_'+k).textContent=cfg.ignore[k]})}
 function refreshUnd(){['balance','fov_scale'].forEach(k=>{$('u_'+k).value=cfg.undistort[k];$('uo_'+k).textContent=(+cfg.undistort[k]).toFixed(2)})}
 
 // ---------- calibration / top-down ----------
@@ -1200,7 +1262,7 @@ let COLOURS_=[];
 (async()=>{
   cfg=await (await fetch('/api/settings')).json();
   COLOURS_=cfg.colours;
-  buildColours();buildHsv();buildCam();selectColour('blue');refreshCam();refreshYaw();refreshUnd();
+  buildColours();buildHsv();buildCam();selectColour('blue');refreshCam();refreshYaw();refreshUnd();buildIgn();refreshIgn();
   setMode('masks');poll()})();
 </script></body></html>
 """
@@ -1293,7 +1355,8 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/settings":
                 with CFG.lock:
                     self.send_json({"hsv": CFG.hsv, "camera": CFG.camera, "undistort": CFG.undistort,
-                                    "yaw": CFG.yaw, "robot": CFG.robot, "colours": COLOURS})
+                                    "yaw": CFG.yaw, "robot": CFG.robot, "ignore": CFG.ignore,
+                                    "colours": COLOURS})
             elif u.path == "/api/export/download":
                 if os.path.exists(EXPORT_FILE):
                     with open(EXPORT_FILE, "rb") as f:
@@ -1399,6 +1462,8 @@ class Handler(BaseHTTPRequestHandler):
                 res = api_export()
             elif path == "/api/robot":
                 res = api_robot(body)
+            elif path == "/api/ignore":
+                res = api_ignore(body)
             else:
                 return self.send_json({"ok": False, "msg": "unknown endpoint"}, 404)
             self.send_json(res)

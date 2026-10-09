@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-robot_stop.py — ExecStopPost safety shutdown.
+STOP_attack.py — ExecStopPost safety shutdown for the attack (striker) robot.
 
 Runs whenever the robot's systemd service stops, for ANY reason:
 manual `systemctl stop`, `systemctl restart`, the main process
@@ -21,7 +21,7 @@ import time
 import logging
 from pathlib import Path
 
-LOG_PATH = Path("/home/germinc2/robot_stop.log")  # adjust to your actual home dir
+LOG_PATH = Path(__file__).resolve().parent / "robot_stop.log"  # next to this script (the repo folder)
 
 logging.basicConfig(
     filename=LOG_PATH,
@@ -30,14 +30,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("robot_stop")
 
-# Same I2C addresses as MotorThread in main.py — keep these two files
-# in sync if the wiring/addresses ever change.
+# Same I2C addresses as DRIVE_MOTORS / DRIBBLER_ADDR in hardware_attack.py - keep the two files
+# in sync if the wiring/addresses ever change. (Written out here on purpose: this script must still work
+# when the robot code is broken, so it doesn't import anything from it.)
 MOTOR_ADDRESSES = {
-    "motor1": 28,
-    "motor2": 27,
-    "motor3": 25,
-    "motor4": 26,
-    "motor5": 32,  # dribbler
+    "motor1": 26,
+    "motor2": 25,
+    "motor3": 27,
+    "motor4": 28,
+    "dribbler": 32,
 }
 
 PCB_I2C_ADDR = 0x64

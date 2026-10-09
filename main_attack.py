@@ -1,32 +1,32 @@
 """
-main.py - DEFENSE (goalie) robot. main_attack.py is the striker.
+main_attack.py - ATTACK (striker) robot. main.py is the goalie.
 
-GoalieBrain.tick() is one pass of the 100 Hz loop: everything the robot decides happens there.
-simulator.py runs the very same GoalieBrain on a simulated field, so test logic changes there first.
+StrikerBrain.tick() is one pass of the 100 Hz loop: everything the robot decides happens there.
+simulator.py runs the very same StrikerBrain on a simulated field, so test logic changes there first.
 
 The work lives in:
     robot_config.py        numbers shared by both robots + coordinate conventions
-    hardware_defense.py    this robot's motor addresses / calibration, robot id
+    hardware_attack.py     this robot's motor addresses / calibration, robot id
     common.py              start-up, standby (paused) calibration, shutdown
     vision.py, detection.py, localisation.py, perception.py, lines.py, motion.py, comms.py
-    strategy.py            GoalieStrategy = what this robot decides to do
+    strategy.py            StrikerStrategy = what this robot decides to do
 
 Before running: tune the camera in test_camera.py ON THIS ROBOT and press "Generate config file"
-(robot_vision_config.json is per robot), then check detections + localisation in test_localisation.py.
+(robot_vision_config.json is per robot: each camera has its own lens, mounting and robot centre).
 """
 import time
 import traceback
 
 import robot_config as cfg
 from common import keep_rate
-from strategy import GoalieStrategy
+from strategy import StrikerStrategy
 
 
-class GoalieBrain:
+class StrikerBrain:
     def __init__(self, bot, log=print):
         self.bot = bot #common.Robot (or simulator.SimBot)
         self.log = log
-        self.strategy = GoalieStrategy()
+        self.strategy = StrikerStrategy()
         self.robot_active = None
         self.status = ""
 
@@ -45,7 +45,8 @@ class GoalieBrain:
                 self.robot_active = False
                 strategy.reset()
                 bot.on_pause()
-            bot.comms.my_state.update({"bot active": 0}) # comm say bot off
+            # bot off (likely damage or 30 sec penalty) -> tell the goalie to get the ball
+            bot.comms.my_state.update({"bot active": 0, "command": 1})
             bot.standby(colours, det)
             return
         if not self.robot_active:
@@ -62,22 +63,22 @@ class GoalieBrain:
         line = bot.lines.update(colours, compass, world.line_pts, pose) #LDR ring + camera + pose
 
 #----------------------------------------------------------------------
-#            comms from and to other bot
+#            comms from other bot
 #----------------------------------------------------------------------
         mate = bot.comms.teammate() #None if the bots aren't connected
-        comms_command = mate.get("command") if mate else None #1 for go get ball, 0 for chill in goals
-        attack_bot_state = mate.get("bot active") if mate else None #0 for bot off, 1 for bot on
+        goalie_bot_state = mate.get("bot active") if mate else None # 0 for bot off, 1 for bot on
+
+#----------------------------------------------------------------------
+#            strategy -> motors, comms to other bot
+#----------------------------------------------------------------------
+        desired_pos, desired_heading, dribbler_on = strategy.update(world, compass, goalie_bot_state, line.touches)
+
         bot.comms.my_state.update({
             "bot active": 1,
+            "command": strategy.command, #1 = goalie go get the ball, 0 = goalie stay in goal
             "pos": [round(pose.x), round(pose.y)] if pose.confident else None,
             "ball": [round(v) for v in world.ball_field] if world.ball_field else None,
         })
-
-#----------------------------------------------------------------------
-#            strategy -> motors
-#----------------------------------------------------------------------
-        desired_pos, desired_heading, dribbler_on = strategy.update(
-            world, compass, comms_command, attack_bot_state, line.touches)
 
         bot.motors.set(bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed))
 
@@ -93,12 +94,12 @@ class GoalieBrain:
 
 def main():
     from gpiozero import DigitalInputDevice
-    import hardware_defense as hw
+    import hardware_attack as hw
     from common import Robot
 
     script_activate_pin = DigitalInputDevice(cfg.SWITCH_PIN, pull_up = True) #gpio pin for on/off switch
     bot = Robot(hw)
-    brain = GoalieBrain(bot)
+    brain = StrikerBrain(bot)
     bot.wait_ready()
 
     print("Waiting for signal")

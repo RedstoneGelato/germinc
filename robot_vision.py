@@ -24,6 +24,8 @@ robot_vision.py - use the settings tuned in test_camera.py inside the robot scri
 process() does exactly what test_camera.py does: top-down (or undistort, or raw if not set up)
 -> rotation -> colour masks with the ignore box -> rotate by yaw about the robot centre.
 Positions are in pixels of res.frame, relative to the robot centre, +y = forward (up in the frame).
+The robot code (vision.py) calls process(raw, align=False) and rotates the detected points instead,
+which is much cheaper than rotating six images every frame. rv.to_cm() turns pixels into cm.
 
 Yaw offset: with the IMU's game rotation vector, 0 deg is wherever the robot was when the IMU started,
 so the offset saved from the web page is only right if you power up facing the same way. Either place
@@ -117,6 +119,9 @@ def _make_align(shape, centre, angle, max_side=1000):
     return M, (side, side), (side / 2.0, side / 2.0)
 
 
+FALLBACK_PX_PER_CM = 1.0   # same as test_camera.py: used when there is no top-down setup
+
+
 class RobotVision:
     def __init__(self, path="robot_vision_config.json"):
         with open(path) as f:
@@ -131,7 +136,6 @@ class RobotVision:
         self.upper = {n: np.array(c["hsv"][n]["hi"], np.uint8) for n in COLOURS}
 
         det = c["detection"]
-        self.ignore_box = tuple(det["ignore_box"])         # x1, y1, x2, y2 in the robot-aligned frame
         self.min_blob_area = det["min_blob_area"]
         self._kernel = np.ones((det["morph_kernel"],) * 2, np.uint8)
 
@@ -145,16 +149,49 @@ class RobotVision:
         lens, td = c.get("lens"), c.get("topdown")
         self.mode = "raw"
         self._maps = None
+        self.px_per_cm = FALLBACK_PX_PER_CM
+        base_size = self.size                               # (w, h) of the image before the rotation
         if lens:
             K, D = np.array(lens["K"], np.float64), np.array(lens["D"], np.float64)
             if td:
-                self._maps = _topdown_maps(np.array(td["Hn"], np.float64), tuple(td["out_size"]), K, D)
+                base_size = tuple(td["out_size"])
+                self._maps = _topdown_maps(np.array(td["Hn"], np.float64), base_size, K, D)
                 self.mode = "topdown"
                 self.px_per_cm = td["px_per_cm"]
             else:
                 u = c["undistort_view"]
                 self._maps = _undistort_maps(K, D, self.size, u["balance"], u["fov_scale"])
                 self.mode = "undistort"
+
+        # robot centre in the robot-aligned frame (fixed, so worked out once)
+        bw, bh = base_size
+        if self.robot_centre is None:
+            quarter = self.rotation in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            fw, fh = (bh, bw) if quarter else (bw, bh)
+            self.centre = (fw / 2.0, fh / 2.0)
+        else:
+            bx = min(max(self.robot_centre[0], 0), bw - 1)
+            by = min(max(self.robot_centre[1], 0), bh - 1)
+            self.centre = _rotate_point((bx, by), (bw, bh), self.rotation)
+
+        # ignore box: cm around the robot centre (new configs), or the old fixed pixel box
+        ign = det.get("ignore_cm")
+        if ign:
+            cx, cy = self.centre
+            ppc = self.px_per_cm
+            box = (cx - ign["left"] * ppc, cy - ign["front"] * ppc, cx + ign["right"] * ppc, cy + ign["back"] * ppc)
+        else:
+            box = det["ignore_box"]                          # x1, y1, x2, y2 in the robot-aligned frame
+        self.ignore_box = tuple(max(int(round(v)), 0) for v in box)
+
+        # pixels the camera actually sees (the top-down remap leaves black where there is no image)
+        valid = np.full((self.size[1], self.size[0]), 255, np.uint8)
+        if self._maps is not None:
+            valid = cv2.remap(valid, self._maps[0], self._maps[1], cv2.INTER_NEAREST,
+                              borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        if self.rotation is not None:
+            valid = cv2.rotate(valid, self.rotation)
+        self.valid = cv2.erode(valid, np.ones((5, 5), np.uint8))
 
     # ---- camera
     @property
@@ -177,9 +214,21 @@ class RobotVision:
         sign = -1.0 if self.invert_yaw else 1.0
         self.yaw_offset = wrap180(sign * yaw_deg)
 
+    # ---- pixels <-> cm (robot frame: +x right, +y forward, origin at the robot centre)
+    def to_cm(self, px, py):
+        """Pixel(s) of the robot-aligned frame -> cm in the robot frame. Works on scalars or numpy arrays."""
+        cx, cy = self.centre
+        return (px - cx) / self.px_per_cm, (cy - py) / self.px_per_cm
+
+    def to_px(self, x_cm, y_cm):
+        cx, cy = self.centre
+        return cx + x_cm * self.px_per_cm, cy - y_cm * self.px_per_cm
+
     # ---- per-frame processing
-    def process(self, raw, yaw_deg=0.0):
-        """raw = cam.capture_array("main"). Returns Result(frame, masks, centre)."""
+    def process(self, raw, yaw_deg=0.0, align=None):
+        """raw = cam.capture_array("main"). Returns Result(frame, masks, centre).
+        align=None uses the config's "align to field"; pass False to stay in the robot frame
+        (cheaper: rotate the detected points instead of the images)."""
         if self._maps is None:
             base = raw
         else:
@@ -194,16 +243,8 @@ class RobotVision:
             m[y1:y2, x1:x2] = 0                              # the robot's own body
             masks[n] = cv2.morphologyEx(m, cv2.MORPH_OPEN, self._kernel)
 
-        fh, fw = frame.shape[:2]
-        if self.robot_centre is None:
-            centre = (fw / 2.0, fh / 2.0)
-        else:
-            bh, bw = base.shape[:2]
-            bx = min(max(self.robot_centre[0], 0), bw - 1)
-            by = min(max(self.robot_centre[1], 0), bh - 1)
-            centre = _rotate_point((bx, by), (bw, bh), self.rotation)
-
-        if self.align_to_field:
+        centre = self.centre
+        if self.align_to_field if align is None else align:
             M, size, centre = _make_align(frame.shape, centre, self.effective_yaw(yaw_deg))
             frame = cv2.warpAffine(frame, M, size, flags=cv2.INTER_LINEAR)
             masks = {k: cv2.warpAffine(v, M, size, flags=cv2.INTER_NEAREST) for k, v in masks.items()}

@@ -7,13 +7,10 @@ from smbus2 import SMBus, i2c_msg
 I2C_BUS = 1
 I2C_ADDR = 0x64
 CMD_READ_COLOURS = 0x01
-CMD_READ_IR = 0x02
 CMD_SET_BRIGHTNESS = 0x03
 
 COLOUR_SENSOR_COUNT = 32
 COLOUR_PACKET_SIZE = COLOUR_SENSOR_COUNT * 2
-IR_SENSOR_COUNT = 12
-IR_PACKET_SIZE = 24
 
 CMD_TO_RESPONSE_DELAY_S = 0.02
 READ_RETRIES = 3
@@ -51,22 +48,6 @@ def read_colours(bus: SMBus) -> list:
     return [data[i*2] | (data[i*2+1] << 8) for i in range(COLOUR_SENSOR_COUNT)]
 
 
-def read_ir(bus: SMBus) -> list:
-    """
-    Returns list of 12 dicts, each with:
-      'detected': 1 or 0
-      'distance': 0=none, 1=far, 2=medium, 3=close, 4=very close
-    Same command 0x02 as before, now returns 24 bytes instead of 12.
-    """
-    data = _read_packet(bus, CMD_READ_IR, IR_PACKET_SIZE)
-    return [
-        {
-            'detected': data[i * 2] if data[i * 2 + 1] >= 2 else 0,
-            'distance': data[i * 2 + 1]
-        }
-        for i in range(12)
-    ]
-
 def set_brightness(bus, value: float):
     """
     Send brightness value to STM32.
@@ -99,7 +80,6 @@ def main():
 
     try:
         while True:
-            raw_ir = read_ir(bus)
             colours = read_colours(bus)
             brightness = read_input()
 
@@ -108,7 +88,6 @@ def main():
                     brightness = int(brightness)
                     set_brightness(bus,brightness)
 
-            print(raw_ir)
             print(colours)
             print("------------------------------")
             time.sleep(0.05)
