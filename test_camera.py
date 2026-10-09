@@ -26,6 +26,8 @@ Pipeline on every frame:
         --> ROTATION (camera mounting) --> colour masks (ignore box = robot body, robot frame)
         --> rotate by IMU yaw about the robot centre (field-aligned) --> goal detection
 
+Export: the "Generate config file" button writes robot_vision_config.json, which robot_vision.py loads in the robot script.
+
 Heading: this script reads the BNO08x itself (adafruit_bno08x over I2C) and rotates the frame by its yaw.
 It owns the I2C bus, so don't run it next to the robot code. If the IMU can't be read, the manual
 yaw slider is used instead and the Live panel says why.
@@ -36,6 +38,7 @@ Only needs: picamera2, opencv, numpy (web server is pure standard library).
 """
 import argparse
 import copy
+import datetime
 import json
 import math
 import os
@@ -59,6 +62,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CALIB_FILE = os.path.join(HERE, "fisheye_calib.npz")
 TOPDOWN_FILE = os.path.join(HERE, "topdown.npz")
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
+EXPORT_FILE = os.path.join(HERE, "robot_vision_config.json")   # made by the "Generate config file" button
 
 # Ignore box (the robot's own body) + min blob area for the goals.
 # Defined in the ROBOT-ALIGNED frame (after ROTATION, before yaw alignment), so it follows the robot.
@@ -496,6 +500,7 @@ class Pipeline:
         self.K = self.D = None
         self.und = None       # (map1, map2, new_K) - only for the Undistorted tab
         self.topdown = None   # (map1, map2, out_size, px_per_cm)
+        self.Hn = None        # floor homography behind `topdown` (kept so it can be exported)
         self.load()
 
     def load(self):
@@ -532,11 +537,13 @@ class Pipeline:
     def set_topdown(self, Hn, out_size, px_per_cm, save=True):
         m1, m2 = build_topdown_maps(Hn, out_size, self.K, self.D)
         self.topdown = (m1, m2, out_size, px_per_cm)
+        self.Hn = Hn
         if save:
             np.savez(TOPDOWN_FILE, Hn=Hn, out_size=np.array(out_size), px_per_cm=px_per_cm)
 
     def clear_topdown(self):
         self.topdown = None
+        self.Hn = None
         if os.path.exists(TOPDOWN_FILE):
             os.remove(TOPDOWN_FILE)
 
@@ -862,6 +869,60 @@ def api_robot(body):
     CFG.save()
     return {"ok": True, "msg": f"Robot centre set to ({x:.0f}, {y:.0f}) in the top-down image."}
 
+ROTATION_NAMES = {cv2.ROTATE_90_CLOCKWISE: "90_CLOCKWISE", cv2.ROTATE_180: "180",
+                  cv2.ROTATE_90_COUNTERCLOCKWISE: "90_COUNTERCLOCKWISE"}
+
+
+def build_export():
+    """Everything the robot script needs, in one JSON-able dict (read it with robot_vision.py)."""
+    with CFG.lock:
+        hsv = copy.deepcopy(CFG.hsv)
+        cam = dict(CFG.camera)
+        und = dict(CFG.undistort)
+        yaw = dict(CFG.yaw)
+        robot = CFG.robot
+    td = P.topdown
+    controls = {k: (list(v) if isinstance(v, tuple) else v) for k, v in camera_controls(cam).items()}
+    return {
+        "version": 1,
+        "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+        "capture_size": list(CAPTURE_SIZE),
+        "rotation": ROTATION_NAMES[ROTATION],
+        "camera": {**cam, "controls": controls},
+        "hsv": hsv,
+        "detection": {"ignore_box": [IGNORE_X1, IGNORE_Y1, IGNORE_X2, IGNORE_Y2],
+                      "min_blob_area": MIN_BLOB_AREA, "morph_kernel": int(KERNEL.shape[0])},
+        "lens": None if P.K is None else {"K": P.K.tolist(), "D": P.D.tolist(), "size": list(CAPTURE_SIZE)},
+        "undistort_view": und,
+        "topdown": None if (td is None or P.Hn is None) else
+                   {"Hn": np.asarray(P.Hn).tolist(), "out_size": list(td[2]), "px_per_cm": td[3]},
+        "robot_centre": robot,
+        "heading": {"align_to_field": yaw["enabled"], "invert": yaw["invert"], "offset_deg": yaw["offset"]},
+    }
+
+
+def api_export():
+    data = build_export()
+    tmp = EXPORT_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, EXPORT_FILE)
+    parts = ["HSV (5 colours)", "camera exposure/white balance", "ignore box + blob size", "heading settings"]
+    notes = []
+    if data["lens"]:
+        parts.append("lens calibration")
+    else:
+        notes.append("no lens calibration yet - the robot would use raw frames")
+    if data["topdown"]:
+        parts.append("top-down mapping")
+    else:
+        notes.append("no top-down setup yet")
+    msg = f"Wrote {EXPORT_FILE} with: {', '.join(parts)}."
+    if notes:
+        msg += " Missing: " + "; ".join(notes) + "."
+    return {"ok": True, "msg": msg}
+
+
 # ================================ WEB UI ===================================
 
 PAGE = r"""<!doctype html>
@@ -927,6 +988,11 @@ PAGE = r"""<!doctype html>
   <div class="dim">Check the sign: turn the robot by hand. In the Detect tab the field should stay still while the green arrow (robot front) turns. If the field spins instead, tick Invert, then press 'Current heading = forward' again.</div>
   <button class="a" onclick="pickRobotCentre()">Set robot centre (click Top-down)</button>
   <button class="a" onclick="post('/api/robot',{reset:true})">Reset centre</button>
+ </details>
+ <details open><summary>Export for the robot script</summary>
+  <div class="dim">Bundles the HSV ranges, exposure/white balance, lens calibration, top-down mapping, ignore box and heading settings into one file the robot script loads with robot_vision.py.</div>
+  <button class="a" onclick="exportCfg()">Generate config file</button>
+  <a id="dl" href="/api/export/download" style="color:#9cf;display:none">Download robot_vision_config.json</a>
  </details>
  <details><summary>Undistorted view (crop vs keep edges)</summary>
   <div class="dim">Balance 1 keeps the whole lens view (black borders), 0 crops to the clean centre and loses the edges. Zoom out shrinks it further.
@@ -1075,6 +1141,7 @@ function pickRobotCentre(){
   const s=$('u_'+k);
   s.oninput=()=>{$('uo_'+k).textContent=(+s.value).toFixed(2);sendUnd({[k]:+s.value},false)};
   s.onchange=()=>sendUnd({[k]:+s.value},true)});
+async function exportCfg(){const j=await post('/api/export');if(j.ok)$('dl').style.display='inline'}
 function refreshUnd(){['balance','fov_scale'].forEach(k=>{$('u_'+k).value=cfg.undistort[k];$('uo_'+k).textContent=(+cfg.undistort[k]).toFixed(2)})}
 
 // ---------- calibration / top-down ----------
@@ -1227,6 +1294,18 @@ class Handler(BaseHTTPRequestHandler):
                 with CFG.lock:
                     self.send_json({"hsv": CFG.hsv, "camera": CFG.camera, "undistort": CFG.undistort,
                                     "yaw": CFG.yaw, "robot": CFG.robot, "colours": COLOURS})
+            elif u.path == "/api/export/download":
+                if os.path.exists(EXPORT_FILE):
+                    with open(EXPORT_FILE, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Disposition", 'attachment; filename="robot_vision_config.json"')
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self.send_bytes(b"nothing generated yet", "text/plain", 404)
             elif u.path == "/api/snippet":
                 self.send_bytes(python_snippet().encode(), "text/plain; charset=utf-8")
             else:
@@ -1316,6 +1395,8 @@ class Handler(BaseHTTPRequestHandler):
                 res = api_heading(body)
             elif path == "/api/heading/zero":
                 res = api_heading_zero()
+            elif path == "/api/export":
+                res = api_export()
             elif path == "/api/robot":
                 res = api_robot(body)
             else:
