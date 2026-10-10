@@ -188,6 +188,7 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         self.drivers = [self._make_driver(*m) for m in motors]
         self.motor1, self.motor2, self.motor3, self.motor4 = self.drivers
         self.dribbler = None
+        self.has_dribbler = dribbler is not None
         if dribbler is not None:
             self.dribbler = self._make_driver(*dribbler)
             self.drivers.append(self.dribbler)

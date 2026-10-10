@@ -4,6 +4,7 @@ simulator.py - test the robots' logic on a simulated field, on a laptop (no Pi n
 
     python simulator.py                    # window with the field, both robots, two opponents
     python simulator.py --headless 30      # no window: simulate 30 s and print a summary (quick regression test)
+    python simulator.py --headless 30 --fast   # same without the camera simulation (see FAST MODE), ~10x faster
 
 It runs main.GoalieBrain and main_attack.StrikerBrain - the SAME code that runs on the robots: camera detection,
 localisation, perception, line fusion, strategy and motion. Only the hardware is replaced:
@@ -20,6 +21,8 @@ localisation, perception, line fusion, strategy and motion. Only the hardware is
              when an opponent touches it)
     kicker   fires the ball forward at KICK_SPEED, with the cooldown from hardware_*.py
     goals    solid side and back walls (GOAL_WALL_T thick): the ball only gets in through the front
+    referee  ball fully out of the playing area -> nearest free neutral spot at once (3 spots on the halfway line);
+             a robot fully out -> taken off as damaged for DAMAGED_TIME s or until the next kickoff
              (a robot only gets a dribbler / kicker if its hardware_attack.py / hardware_defense.py has one)
 
 NOT simulated (so test these on the real robot): lens distortion / top-down calibration errors, tall objects
@@ -64,6 +67,56 @@ from robot_vision import RobotVision  # noqa: E402
 from utils import rotate, wrap_pi  # noqa: E402
 from vision import analyse_frame  # noqa: E402
 
+import common as _common, lines as _lines, localisation as _localisation, main as _main  # noqa: E402,E401
+import main_attack as _main_attack, motion as _motion, perception as _perception  # noqa: E402,E401
+
+# everything SimBot builds from the robot code, so an older version of it can play against this one
+CODE_MODULES = ["field", "robot_config", "utils", "robot_vision", "detection", "vision", "localisation", "perception",
+                "lines", "motion", "comms", "common", "strategy_fallback", "strategy", "main", "main_attack"]
+
+
+class Code:
+    def __init__(self, name, mods):
+        self.name = name
+        self.GoalieBrain, self.StrikerBrain = mods["main"].GoalieBrain, mods["main_attack"].StrikerBrain
+        self.LocalisationThread = mods["localisation"].LocalisationThread
+        self.World, self.LineFusion = mods["perception"].World, mods["lines"].LineFusion
+        self.Mover, self.LedCalibrator = mods["motion"].Mover, mods["common"].LedCalibrator
+
+
+CURRENT_CODE = Code("current", {"main": _main, "main_attack": _main_attack, "localisation": _localisation,
+                                "perception": _perception, "lines": _lines, "motion": _motion, "common": _common})
+
+
+PAST_VERSIONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "past_versions")
+
+
+def code_folder(name):
+    """A version name from past_versions/ (e.g. "v26"), or a path to any folder with the robot code."""
+    for folder in (name, os.path.join(PAST_VERSIONS, name)):
+        if os.path.isfile(os.path.join(folder, "strategy.py")):
+            return folder
+    have = sorted(os.listdir(PAST_VERSIONS)) if os.path.isdir(PAST_VERSIONS) else []
+    raise SystemExit(f"no robot code found for '{name}' (past versions: {', '.join(d for d in have if d != 'README.md')})")
+
+
+def load_code(folder):
+    """Import another copy of the robot code (a folder with the same .py files: one of past_versions/, or e.g. an
+    old commit from `git worktree add`) next to the current one, without the two mixing. Returns a Code."""
+    import importlib
+    folder = code_folder(folder)
+    saved = {k: sys.modules.pop(k) for k in CODE_MODULES if k in sys.modules}
+    sys.path.insert(0, os.path.abspath(folder))
+    try:
+        mods = {k: importlib.import_module(k) for k in CODE_MODULES   # (older versions don't have every file)
+                if os.path.isfile(os.path.join(folder, k + ".py"))}
+    finally:
+        sys.path.pop(0)
+        for k in CODE_MODULES:
+            sys.modules.pop(k, None)
+        sys.modules.update(saved)
+    return Code(os.path.basename(os.path.normpath(folder)), mods)
+
 # ==================================== SIM SETTINGS ====================================
 DT = 0.01                    # physics + control tick (the robots' main loop is 100 Hz)
 CAMERA_EVERY = 3             # camera frame every 3 ticks = 33 fps (set to what test_localisation.py shows)
@@ -91,8 +144,16 @@ DRIBBLE_MAX_SPIN = 6.0       # rad/s: turning faster than this while dribbling l
 DRIBBLE_MAX_ACCEL = 600.0    # cm/s^2: accelerating / braking harder than this loses the ball
 DRIBBLE_CATCH_SPEED = 120.0  # cm/s: a ball arriving faster than this bounces off the dribbler instead
 
-BALL_OUT_TIME = 2.0          # referee: ball outside the white line this long -> nearest free neutral spot
+# referee: the ball fully outside the playing area -> off the field for BALL_OUT_DELAY s (no ball), then on the
+# free neutral spot nearest to where it went out
+BALL_OUT_DELAY = 2.0
+BALL_PARK = (1e4, 0.0)       # where the ball is kept while it's off the field (not drawn, not seen, no physics)
 NO_PROGRESS_TIME = 10.0      # referee: ball hasn't moved 5 cm in this long -> nearest free neutral spot
+DAMAGED_TIME = 30.0          # referee: a robot fully outside the playing area is taken off as damaged for this long
+                             # (or until the next kickoff), then put back in its own half
+PUSHED_TIME = 0.5            # referee: a robot that goes out within this long of touching an opponent, while not itself
+PUSHED_OUT_SPEED = 20.0      # driving outwards faster than this (cm/s), was pushed out: it comes straight back in
+PARK = (1e4, 1e4)            # where a taken-off robot is kept (far off the field: not drawn, not seen, no physics)
 
 LDR_RING_RADIUS = cfg.ROBOT_RADIUS - 3.0
 # Where LDR number i physically sits = the angle lines.py computes for it + this offset.
@@ -161,7 +222,9 @@ def make_rv():
 
 class FisheyeCamera:
     """Equidistant fisheye (angle from straight down proportional to distance from the image centre).
-    Precomputes: fisheye pixel -> floor point (robot frame cm), and top-down pixel -> fisheye pixel."""
+    Rendering is two steps so nothing per-pixel is computed per frame: (1) one affine warp of the field image into
+    the robot's frame (rotation + position), (2) a fixed remap from there to the fisheye pixels (precomputed).
+    Then the fisheye image -> top-down view with another fixed remap, like robot_vision's calibration."""
     SS = 2   # supersampling when rendering the fisheye image (pixels average over their area, like a real sensor)
 
     def __init__(self):
@@ -174,10 +237,20 @@ class FisheyeCamera:
         theta = np.minimum(rho * half, math.radians(89.5))
         r = CAM_HEIGHT * np.tan(theta)
         with np.errstate(invalid="ignore", divide="ignore"):
-            self.gx = np.where(rho > 0, r * dx / rho, 0).astype(np.float32)   # floor point, robot frame cm
-            self.gy = np.where(rho > 0, r * dy / rho, 0).astype(np.float32)
-        self.lens = rho <= 1.0
-        # top-down (TOPDOWN_PPC px/cm, CAM_SIZE square, robot at the centre) -> fisheye pixel (at CAM_RES)
+            gx = np.where(rho > 0, r * dx / rho, 0)        # floor point, robot frame cm
+            gy = np.where(rho > 0, r * dy / rho, 0)
+        # (1) robot-frame floor image at FIELD_PPC, robot in the middle, front = up
+        k = FIELD_PPC
+        self.half_px = int(math.ceil(VIEW_RADIUS * k)) + 4
+        self.ego_size = 2 * self.half_px
+        # (2) fisheye pixel -> robot-frame image pixel; outside the lens circle -> -1 (black)
+        ex = (self.half_px + gx * k).astype(np.float32)
+        ey = (self.half_px - gy * k).astype(np.float32)
+        ex[rho > 1.0] = -10
+        ey[rho > 1.0] = -10
+        self.lens_maps = cv2.convertMaps(ex, ey, cv2.CV_16SC2)
+        # top-down (TOPDOWN_PPC px/cm, CAM_SIZE square, robot at the centre) -> fisheye pixel (at CAM_RES);
+        # outside the "camera sees this" circle -> -1 (black), same circle as make_rv's fov mask
         m = CAM_SIZE
         u, v = np.meshgrid(np.arange(m) + 0.5, np.arange(m) + 0.5)
         x, y = (u - m / 2.0) / TOPDOWN_PPC, (m / 2.0 - v) / TOPDOWN_PPC
@@ -185,26 +258,35 @@ class FisheyeCamera:
         rho_t = np.arctan(rr / CAM_HEIGHT) / half
         cr = CAM_RES / 2.0
         with np.errstate(invalid="ignore", divide="ignore"):
-            self.map_x = np.where(rr > 0, cr + rho_t * cr * x / rr, cr).astype(np.float32)
-            self.map_y = np.where(rr > 0, cr - rho_t * cr * y / rr, cr).astype(np.float32)
+            map_x = np.where(rr > 0, cr + rho_t * cr * x / rr, cr).astype(np.float32)
+            map_y = np.where(rr > 0, cr - rho_t * cr * y / rr, cr).astype(np.float32)
+        fov = np.zeros((m, m), np.uint8)
+        cv2.circle(fov, (m // 2, m // 2), int(VIEW_RADIUS * TOPDOWN_PPC) - 3, 255, -1)
+        map_x[fov == 0] = -10
+        map_y[fov == 0] = -10
+        self.top_maps = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
 
     def render(self, field_img, robot, noise_rng=None):
         """Raw fisheye image (CAM_RES square) as the camera would see the (flat) field from this robot."""
         c, s = math.cos(robot.h), math.sin(robot.h)
-        X = robot.x + self.gx * c - self.gy * s
-        Y = robot.y + self.gx * s + self.gy * c
-        k = FIELD_PPC
-        fu = ((X + FieldImage.W / 2) * k).astype(np.float32)
-        fv = ((FieldImage.L / 2 - Y) * k).astype(np.float32)
-        img = cv2.remap(field_img, fu, fv, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=WALL)
-        img[~self.lens] = 0
+        k, h = FIELD_PPC, self.half_px
+        # robot-frame pixel (u, v) -> field image pixel (inverse map for warpAffine)
+        M = np.float32([[c, s, (FieldImage.W / 2 + robot.x) * k - c * h - s * h],
+                        [-s, c, (FieldImage.L / 2 - robot.y) * k + s * h - c * h]])
+        ego = cv2.warpAffine(field_img, M, (self.ego_size, self.ego_size), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=WALL)
+        img = cv2.remap(ego, *self.lens_maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         img = cv2.resize(img, (CAM_RES, CAM_RES), interpolation=cv2.INTER_AREA)
-        if noise_rng is not None:
-            img = cv2.add(img, noise_rng.normal(0, 8, img.shape).astype(np.int16), dtype=cv2.CV_8U)
+        if noise_rng is not None:      # pixel noise: a random pick from a bank of noise frames, randomly shifted
+            if not hasattr(self, "noise_bank"):
+                self.noise_bank = [noise_rng.normal(0, 8, img.shape).astype(np.int16) for _ in range(16)]
+            n = self.noise_bank[int(noise_rng.integers(len(self.noise_bank)))]
+            n = np.roll(n, (int(noise_rng.integers(CAM_RES)), int(noise_rng.integers(CAM_RES))), axis=(0, 1))
+            img = cv2.add(img, n, dtype=cv2.CV_8U)
         return img
 
     def topdown(self, raw):
-        return cv2.remap(raw, self.map_x, self.map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        return cv2.remap(raw, *self.top_maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
 # ==================================== FIELD DRAWING ====================================
@@ -366,9 +448,10 @@ class SimVision:
 
 
 class SimBot(Robot):
-    """Same interface as common.Robot (so the brains can't tell the difference), with sim hardware."""
+    """Same interface as common.Robot (so the brains can't tell the difference), with sim hardware.
+    code = the robot code to run (CURRENT_CODE, or an older version from load_code())."""
 
-    def __init__(self, body, rv, hw):
+    def __init__(self, body, rv, hw, code):
         self.imu = SimIMU(body)
         self.motors = SimMotors(hw.DRIBBLER is not None)
         self.kicker = None if hw.KICKER_PIN is None else SimKicker(hw.KICK_COOLDOWN)
@@ -376,11 +459,11 @@ class SimBot(Robot):
         self.comms = SimComms()
         self.vision = SimVision(rv)
         self.attack = "yellow"
-        self.loc = LocalisationThread(self.vision, lambda: self.attack)   # never started: process() is called per frame
-        self.world = World()
-        self.lines = LineFusion()
-        self.mover = Mover()
-        self.leds = LedCalibrator(self.pcb)
+        self.loc = code.LocalisationThread(self.vision, lambda: self.attack)   # never started: process() per frame
+        self.world = code.World()
+        self.lines = code.LineFusion()
+        self.mover = code.Mover()
+        self.leds = code.LedCalibrator(self.pcb)
 
 
 # ==================================== BODIES / PHYSICS ====================================
@@ -399,12 +482,17 @@ def motors_to_velocity(speeds):
 
 
 class Body:
-    def __init__(self, x, y, h, name, colour):
+    def __init__(self, x, y, h, name, colour, team="them"):
+        self.team = team
         self.x, self.y, self.h = x, y, h
         self.vx = self.vy = self.w = 0.0
         self.prev_v = (0.0, 0.0)
         self.name, self.colour = name, colour
         self.r = cfg.ROBOT_RADIUS
+        self.removed_until = None    # taken off as damaged until this sim time (None = on the field)
+        self.opp_contact_t = -1e9    # last time an opponent pushed against it
+        self.outs = 0
+        self.was_out = False
 
     def place(self, x, y, h=None):
         self.x, self.y = x, y
@@ -415,14 +503,13 @@ class Body:
 
 
 class SimRobot(Body):
-    def __init__(self, x, y, h, name, colour, brain_cls, hw, rv, log):
-        super().__init__(x, y, h, name, colour)
-        self.bot = SimBot(self, rv, hw)
+    def __init__(self, x, y, h, name, colour, brain_cls, hw, rv, log, code=None, team="us"):
+        super().__init__(x, y, h, name, colour, team)
+        self.bot = SimBot(self, rv, hw, code or CURRENT_CODE)
         self.kick_flash = 0.0
         self.brain = brain_cls(self.bot, log=lambda m: log(f"{name}: {m}"))
         self.paused = True
-        self.outs = 0
-        self.was_out = False
+        self.return_at = None        # just put back after being taken off: stays paused (calibrating) till then
 
     def drive(self, dt):
         vx_r, vy_r, spin = motors_to_velocity(self.bot.motors.speeds)
@@ -434,12 +521,26 @@ class SimRobot(Body):
 
 
 class Sim:
-    def __init__(self, noise=False):
+    def __init__(self, noise=False, seed=0, opp_code=None, fast=False):
+        """seed: changes the sensor noise, particle filters and (seed > 0) jitters the kickoff positions a little,
+        so different seeds give different games. opp_code: None = the simple opponents (key a), or a robot code
+        version from load_code() = the opponents run that code (self-play), attacking the blue goal.
+        fast: no camera rendering / detection / localisation - Detections and pose straight from the truth (see
+        FAST MODE below), ~10x faster, for screening strategy ideas."""
+        self.seed = seed
+        self.fast = fast
         self.fimg = FieldImage(FIELD_PPC)
         self.rv, self.fov = make_rv()
         self.cam = FisheyeCamera()
         self.held_by = None       # robot whose dribbler has the ball
+        self.held_since = 0.0
         self.kicks = 0
+        self.events = {}
+        self.last_touch = None    # robot that touched the ball last
+        self.last_touch_phase = ""
+        self.last_kick = -1e9
+        self.shots = []
+        self.last_restart = 0.0   # time of the last kickoff / neutral spot placement           # every kick: who, from where, did it go in (within 1.5 s)          # what happened to the ball (counts), for arena.py / tuning
         self.ball_out_since = None
         self.progress = ([0.0, 0.0], 0.0)   # (ball position, time) last time it moved 5 cm
         self.logs = []
@@ -449,19 +550,52 @@ class Sim:
         ]
         g, s = self.robots
         g.bot.comms.partner, s.bot.comms.partner = s.bot.comms, g.bot.comms
-        for i, r in enumerate(self.robots):          # fixed seeds: the same settings give the same game every run
-            r.bot.loc.loc.rng = np.random.default_rng(100 + i)
-        self.opponents = [Body(0, 0, math.pi, "opp", ROBOT), Body(0, 0, math.pi, "opp", ROBOT)]
+        if opp_code is None:
+            self.opponents = [Body(0, 0, math.pi, "opp", ROBOT), Body(0, 0, math.pi, "opp", ROBOT)]
+        else:      # same order as the kickoff spots: striker at the centre, goalie in front of the yellow goal
+            self.opponents = [
+                SimRobot(0, 0, math.pi, "opp striker", ROBOT, opp_code.StrikerBrain, hardware_attack, self.rv,
+                         self.log, opp_code, "them"),
+                SimRobot(0, 0, math.pi, "opp goalie", ROBOT, opp_code.GoalieBrain, hardware_defense, self.rv,
+                         self.log, opp_code, "them"),
+            ]
+            o_s, o_g = self.opponents
+            o_s.bot.comms.partner, o_g.bot.comms.partner = o_g.bot.comms, o_s.bot.comms
+        for i, r in enumerate(self.players):        # fixed seeds: the same settings give the same game every run
+            r.bot.loc.loc.rng = np.random.default_rng(100 + i + 10 * seed)
+            if fast:
+                r.bot.loc = TruthLoc(r, np.random.default_rng(200 + i + 10 * seed))
+        self.fast_ignore = self.rv.config["detection"]["ignore_cm"]
         self.ball = [0.0, 0.0]
         self.ball_v = [0.0, 0.0]
+        self.ball_away_until = None   # ball off the field (gone out) until this time
+        self.ball_out_at = None       # where it went out
         self.noise = noise
         self.opp_ai = False
         self.ticks = 0
         self.score = {"us": 0, "them": 0}
         self.goal_timer = None
         self.loc_err = {r.name: [] for r in self.robots}
-        self.rng = np.random.default_rng(0)
+        self.rng = np.random.default_rng(seed)
         self.kickoff()
+
+    @property
+    def players(self):
+        """Every robot running robot code (ours, plus the opponents in self-play)."""
+        return self.robots + [o for o in self.opponents if isinstance(o, SimRobot)]
+
+    def release(self, why):
+        """The ball leaves the dribbler. Possessions longer than 0.3 s are counted by how they ended."""
+        if self.held_by is not None and self.t - self.held_since > 0.3:
+            self.count(f"{self.held_by.team} possession ended: {why}")
+            gy = self.held_by.y if self.held_by.team == "us" else -self.held_by.y     # towards the goal it attacks
+            where = "own third" if gy < -30 else "middle third" if gy < 30 else "attacking third"
+            self.count(f"{self.held_by.team} possession ended: {why} in {where}")
+            self.count(f"{self.held_by.team} possession seconds", self.t - self.held_since)
+        self.held_by = None
+
+    def count(self, what, n=1):
+        self.events[what] = self.events.get(what, 0) + n
 
     def log(self, msg):
         self.logs.append(f"{_SIM_T[0] - 1000:6.2f} {msg}")
@@ -472,6 +606,10 @@ class Sim:
         return _SIM_T[0] - 1000.0
 
     def kickoff(self):
+        for b in self.robots + self.opponents:     # a new point: taken-off robots come back
+            b.removed_until = None
+            if isinstance(b, SimRobot):
+                b.return_at = None
         g, s = self.robots
         R = cfg.ROBOT_RADIUS
         g.place(0, field.OWN_GOAL_Y + R + 8, 0)
@@ -479,19 +617,31 @@ class Sim:
         for o, (x, y) in zip(self.opponents, ((0, R + 15), (0, field.ATTACK_GOAL_Y - R - 8))):
             o.place(x, y, math.pi)
         self.ball, self.ball_v = [0.0, 0.0], [0.0, 0.0]
+        self.ball_away_until = None       # a kickoff always puts the ball back on the centre spot
+        self.ball_out_at = None
+        if self.seed:                          # a little variety between games
+            for b in self.robots + self.opponents:
+                b.place(b.x + self.rng.uniform(-3, 3), b.y + self.rng.uniform(-3, 3), b.h + self.rng.uniform(-0.1, 0.1))
+            self.ball = [self.rng.uniform(-3, 3), self.rng.uniform(-3, 3)]
         self.held_by = None
         self.ball_out_since = None
-        self.progress = ([0.0, 0.0], self.t)
-        for r in self.robots:
+        self.progress = (list(self.ball), self.t)
+        for r in self.players:
             r.paused = True
+        self.last_restart = self.t + 0.5
         self.start_at = self.t + 0.5      # stand still (paused) half a second: calibrates heading + goal colour
         self.goal_timer = None
 
     # ---- sensors
+    @property
+    def on_field(self):
+        """Every body (ours and opponents) that isn't taken off."""
+        return [b for b in self.robots + self.opponents if b.removed_until is None]
+
     def draw_dynamic(self):
         img = self.fimg.img.copy()
         ppc = FIELD_PPC
-        for b in self.robots + self.opponents:
+        for b in self.on_field:
             cv2.circle(img, self.fimg.px(b.x, b.y), int(b.r * ppc), ROBOT, -1)
         cv2.circle(img, self.fimg.px(*self.ball), max(1, int(round(BALL_RADIUS * ppc))), ORANGE, -1)
         return img
@@ -500,9 +650,7 @@ class Sim:
         """Fisheye image from the robot -> top-down robot-frame image (robot front = up), like
         robot_vision gets from the real camera after its calibration."""
         raw = self.cam.render(img, robot, self.rng if self.noise else None)
-        cam = self.cam.topdown(raw)
-        cam[self.fov == 0] = 0
-        return cam
+        return self.cam.topdown(raw)        # (outside the fov circle is already black)
 
     def ldrs(self, robot):
         out = []
@@ -520,26 +668,32 @@ class Sim:
         _SIM_T[0] += DT
         self.ticks += 1
         if self.start_at is not None and self.t >= self.start_at:
-            for r in self.robots:
-                r.paused = False
+            for r in self.players:
+                if r.removed_until is None and r.return_at is None:
+                    r.paused = False
             self.start_at = None
 
-        if self.ticks % CAMERA_EVERY == 0:
+        if self.ticks % CAMERA_EVERY == 0 and self.fast:
+            for r in self.players:
+                v = r.bot.vision
+                v.detections, v.last_res = fast_detect(self, r, self.fast_ignore), None
+                v.frame_id += 1
+        elif self.ticks % CAMERA_EVERY == 0:
             img = self.draw_dynamic()
-            for r in self.robots:
+            for r in self.players:
                 v = r.bot.vision
                 det, res = analyse_frame(v.rv, self.camera(img, r), time.monotonic(), r.bot.imu.compass())
                 v.detections, v.last_res = det, res
                 v.frame_id += 1
                 r.bot.loc.process(det)
         if self.ticks % PCB_EVERY == 0:
-            for r in self.robots:
+            for r in self.players:
                 r.bot.pcb.colours = self.ldrs(r)
         if self.noise:
-            for r in self.robots:
+            for r in self.players:
                 r.bot.imu.drift += self.rng.normal(0, 0.0005)
 
-        for r in self.robots:
+        for r in self.players:
             r.brain.tick(r.paused)       # <- the real robot code
             r.drive(DT)
         self.move_opponents()
@@ -548,7 +702,9 @@ class Sim:
 
     def move_opponents(self):
         for o in self.opponents:
-            if self.opp_ai:
+            if isinstance(o, SimRobot) or o.removed_until is not None:
+                continue                 # self-play: drives itself / taken off
+            if self.opp_ai and self.start_at is None:     # same start signal as our robots (they're paused till then)
                 # get behind the ball (on the side away from our goal) and push it towards our goal (-y)
                 tx, ty = self.ball[0], self.ball[1] + o.r + BALL_RADIUS - 2
                 if o.y < self.ball[1]:
@@ -561,7 +717,7 @@ class Sim:
                 o.vx = o.vy = 0.0
 
     def physics(self):
-        bodies = self.robots + self.opponents
+        bodies = self.on_field
         for b in bodies:
             b.x += b.vx * DT
             b.y += b.vy * DT
@@ -574,6 +730,8 @@ class Sim:
                 dx, dy = b.x - a.x, b.y - a.y
                 d = math.hypot(dx, dy)
                 if 1e-6 < d < a.r + b.r:
+                    if a.team != b.team:
+                        a.opp_contact_t = b.opp_contact_t = self.t
                     push = (a.r + b.r - d) / 2
                     a.x -= dx / d * push
                     a.y -= dy / d * push
@@ -584,7 +742,12 @@ class Sim:
         cz = cfg.CAPTURE_ZONE
         rest_y = (cz[2] + cz[3]) / 2 + BALL_RADIUS     # ball centre when sitting in the capture notch
         notch_x = (cz[1] - cz[0]) / 2 + BALL_RADIUS
-        for r in self.robots:
+        order = list(self.players)
+        self.rng.shuffle(order)            # no team gets to go first every tick
+        catchers = []
+        for r in order:
+            if r.removed_until is not None:
+                continue
             fwd = rotate([0.0, 1.0], r.h)
             accel = math.hypot(r.vx - r.prev_v[0], r.vy - r.prev_v[1]) / DT
             r.prev_v = (r.vx, r.vy)
@@ -598,13 +761,24 @@ class Sim:
                     self.ball = [r.x + fwd[0] * rest_y, r.y + fwd[1] * rest_y]
                     self.ball_v = [r.vx + fwd[0] * KICK_SPEED, r.vy + fwd[1] * KICK_SPEED]
                     if self.held_by is r:
-                        self.held_by = None
+                        self.release("kicked")
                     self.kicks += 1
+                    self.last_kick = self.t
+                    self.count(f"{r.team} kicks")
+                    keeper = next((g for g in self.players if g.team != r.team and "goalie" in g.name), None)
+                    gy = field.ATTACK_GOAL_Y if r.team == "us" else field.OWN_GOAL_Y
+                    self.shots.append({"t": self.t, "team": r.team, "x": r.x, "y": r.y, "dist": math.hypot(r.x, r.y - gy),
+                                       "keeper": None if keeper is None else (keeper.x, keeper.y),
+                                       "keeper_state": None if keeper is None else keeper.brain.strategy.botstate,
+                                       "since_restart": self.t - self.last_restart, "goal": False})
                     self.log(f"{r.name} KICK")
                     continue
             if self.held_by is r:
                 if not r.bot.motors.dribbler or abs(r.w) > DRIBBLE_MAX_SPIN or accel > DRIBBLE_MAX_ACCEL:
-                    self.held_by = None                     # lost it: it keeps the robot's speed and rolls away
+                    why = ("dribbler off" if not r.bot.motors.dribbler else
+                           "spun too fast" if abs(r.w) > DRIBBLE_MAX_SPIN else "accel too hard")
+                    self.count(f"{r.team} lost: {why}")
+                    self.release(why)                    # lost it: it keeps the robot's speed and rolls away
                 else:
                     px, py = fwd[0] * rest_y, fwd[1] * rest_y
                     self.ball = [r.x + px, r.y + py]
@@ -612,9 +786,22 @@ class Sim:
             elif self.held_by is None and r.bot.motors.dribbler and in_notch:
                 relv = math.hypot(self.ball_v[0] - r.vx, self.ball_v[1] - r.vy)
                 if relv < DRIBBLE_CATCH_SPEED:
-                    self.held_by = r
+                    catchers.append(r)
+                else:
+                    self.count(f"{r.team} bounced off dribbler")
+                    self.count(f"{r.team} bounce speed sum", relv)
+        if catchers and self.held_by is None:
+            if len({r.team for r in catchers}) > 1:
+                self.count("ball squeezed between both teams' dribblers")    # nobody gets it
+            else:
+                r = catchers[0]
+                self.held_by, self.held_since = r, self.t
+                self.last_touch = r
+                self.count(f"{r.team} caught")
 
         # ball
+        if self.ball_away_until is not None:
+            return                                          # off the field (went out): nothing to move
         bx, by = self.ball
         vx, vy = self.ball_v
         decay = math.exp(-BALL_FRICTION * DT)
@@ -640,8 +827,13 @@ class Sim:
             if hit is None:
                 continue
             n, pen = hit
-            if self.held_by is not None and b not in self.robots:
-                self.held_by = None                         # an opponent knocked it out of the dribbler
+            self.last_touch = b
+            if isinstance(b, SimRobot):
+                st = b.brain.strategy
+                self.last_touch_phase = f"b{st.botstate} {st.phase}"
+            if self.held_by is not None and b.team != self.held_by.team:
+                self.count(f"{self.held_by.team} lost: knocked by opponent")
+                self.release("knocked")                        # an opponent knocked it out of the dribbler
             bx += n[0] * pen
             by += n[1] * pen
             # contact point velocity (incl. spin) pushes the ball
@@ -681,37 +873,159 @@ class Sim:
         if self.goal_timer is None and in_goal:
             who = "us" if by > 0 else "them"
             self.score[who] += 1
+            for sh in reversed(self.shots):
+                if sh["team"] == who and self.t - sh["t"] < 1.5:
+                    sh["goal"] = True
+                    break
+            self.count(f"goal {who} " + ("kicked" if self.t - self.last_kick < 1.5 else "pushed"))
+            if self.t - self.last_kick >= 1.5:
+                keeper = next((g for g in self.players if g.team != who and "goalie" in g.name), None)
+                lt = self.last_touch
+                self.count(f"goal {who} pushed: last touch {lt.name if lt else '-'}, keeper botstate "
+                           f"{keeper.brain.strategy.botstate if keeper else '-'}")
+                if lt is not None and lt.team != who:
+                    self.count(f"own goal by {lt.name} in {self.last_touch_phase}")
             self.log(f"GOAL for {who}  ({self.score['us']}-{self.score['them']})")
             self.goal_timer = self.t + 1.0
         if self.goal_timer is not None and self.t >= self.goal_timer:
             self.kickoff()
-        # referee: ball out of play / lack of progress -> nearest free neutral spot
-        if self.goal_timer is None:
+            return          # everything below would still look at where the ball was before the kickoff
+        # referee: ball out of play (fully outside the playing area) -> off for BALL_OUT_DELAY, then the nearest free
+        # neutral spot; lack of progress -> nearest free neutral spot at once
+        if self.ball_away_until is not None:
+            if self.t >= self.ball_away_until and self.goal_timer is None:
+                self.ball = list(self.ball_out_at)          # (only used to pick the nearest spot)
+                self.ball_away_until = None
+                self.place_ball_neutral("out")
+        elif self.goal_timer is None:
             out = not field.inside_play_area(bx, by, -BALL_RADIUS)
-            self.ball_out_since = (self.ball_out_since or self.t) if out else None
             if math.hypot(bx - self.progress[0][0], by - self.progress[0][1]) > 5:
                 self.progress = ([bx, by], self.t)
-            why = ("out" if self.ball_out_since is not None and self.t - self.ball_out_since > BALL_OUT_TIME else
+            why = ("out" if out else
                    "no progress" if self.t - self.progress[1] > NO_PROGRESS_TIME else None)
             if why:
-                self.place_ball_neutral(why)
-        for r in self.robots:
-            # out: the whole robot is past the white line
-            out = not field.inside_play_area(r.x, r.y, -r.r)
-            if out and not r.was_out:
-                r.outs += 1
-                self.log(f"{r.name} OUT OF BOUNDS")
-            r.was_out = out
+                self.count(f"ball {why}")
+                lt = self.last_touch
+                self.count(f"ball {why} after {lt.name if lt else 'nobody'}")
+                if why == "out":
+                    if self.held_by is not None:
+                        self.release("ball out")
+                    self.ball_out_at = [bx, by]
+                    self.ball, self.ball_v = list(BALL_PARK), [0.0, 0.0]
+                    self.ball_away_until = self.t + BALL_OUT_DELAY
+                    self.log(f"ball out - back in {BALL_OUT_DELAY:.0f} s")
+                else:
+                    self.place_ball_neutral(why)
+        for b in self.robots + self.opponents:
+            if b.removed_until is not None:
+                if self.t >= b.removed_until and self.goal_timer is None:
+                    self.put_back(b)
+                continue
+            # out: the whole robot is past the white line -> taken off as damaged (unless it was pushed out)
+            out = not field.inside_play_area(b.x, b.y, -b.r)
+            if out and not b.was_out:
+                b.outs += 1
+                if self.pushed_out(b):
+                    self.push_back_in(b)
+                    out = False
+                else:
+                    self.take_off(b)
+            b.was_out = out
+        self.multiple_defence()
+        for r in self.players:
+            if r.return_at is not None and self.t >= r.return_at:
+                r.return_at = None
+                if self.start_at is None:
+                    r.paused = False
             pose = r.bot.loc.get()
-            if not r.paused and pose.confident:
+            if not r.paused and pose.confident and r.name in self.loc_err:
                 self.loc_err[r.name].append(math.hypot(pose.x - r.x, pose.y - r.y))
 
+    def take_off(self, b):
+        """Robot fully out of the playing area: off as damaged for DAMAGED_TIME (or until the next kickoff)."""
+        if self.held_by is b:
+            self.release("robot taken off")
+        b.removed_until = self.t + DAMAGED_TIME
+        b.place(*PARK)
+        b.was_out = False
+        if isinstance(b, SimRobot):
+            b.paused = True                       # switched off while it's off the field (like the real robot)
+        self.count(f"{b.name} taken off (out of bounds)")
+        self.log(f"{b.name} OUT OF BOUNDS - off for {DAMAGED_TIME:.0f} s")
+
+    def pushed_out(self, b):
+        """Clearly pushed out: an opponent touched it just now and it wasn't driving outwards itself."""
+        if self.t - b.opp_contact_t > PUSHED_TIME:
+            return False
+        n = (math.copysign(1.0, b.x), 0.0) if abs(b.x) > field.PLAY_W / 2 else (0.0, math.copysign(1.0, b.y))
+        return b.vx * n[0] + b.vy * n[1] < PUSHED_OUT_SPEED
+
+    def push_back_in(self, b):
+        """Pushed out by an opponent: straight back, just inside the line where it went out."""
+        R = cfg.ROBOT_RADIUS
+        x = max(-(field.PLAY_W / 2 - R), min(field.PLAY_W / 2 - R, b.x))
+        y = max(-(field.PLAY_L / 2 - R), min(field.PLAY_L / 2 - R, b.y))
+        b.x, b.y = x, y
+        self.count(f"{b.name} pushed out, back at once")
+        self.log(f"{b.name} pushed out - put straight back")
+
+    def multiple_defence(self):
+        """Ball in a penalty area with both of the defending team's robots in it: the one further from the ball is
+        moved out of the area (straight out towards the halfway line)."""
+        bx, by = self.ball
+        R = cfg.ROBOT_RADIUS
+        for team, sgn in (("us", -1.0), ("them", 1.0)):        # sgn: which end that team's goal is at
+            def in_box(x, y):
+                return abs(x) < field.PENALTY_W / 2 and sgn * y > field.PLAY_L / 2 - field.PENALTY_D
+            if not in_box(bx, by):
+                continue
+            mine = [b for b in self.on_field if b.team == team and in_box(b.x, b.y)]
+            if len(mine) < 2:
+                continue
+            far = max(mine, key=lambda b: math.hypot(b.x - bx, b.y - by))
+            y = sgn * (field.PLAY_L / 2 - field.PENALTY_D - R - 3)
+            x = far.x
+            for dx in (0.0, 25.0, -25.0, 50.0, -50.0):
+                cx = max(-(field.PLAY_W / 2 - R), min(field.PLAY_W / 2 - R, far.x + dx))
+                if all(math.hypot(cx - o.x, y - o.y) > 2 * R + 2 for o in self.on_field if o is not far):
+                    x = cx
+                    break
+            if self.held_by is far:
+                self.release("multiple defence")
+            far.x, far.y = x, y
+            far.vx = far.vy = 0.0
+            self.count(f"{far.name} moved out of the penalty area (multiple defence)")
+            self.log(f"{far.name}: multiple defence - moved out of the area")
+
+    def put_back(self, b):
+        """Damage time over: back in level with its own goal (parallel to it, just inside the field), on the side
+        further from the ball, facing the goal it attacks. Our robots stay paused (calibrating heading / goal
+        colour) for 0.5 s first."""
+        R = cfg.ROBOT_RADIUS
+        sgn = -1.0 if b.team == "us" else 1.0                 # own end
+        y = sgn * (field.PLAY_L / 2 - R - 3)
+        far_side = -math.copysign(1.0, self.ball[0]) if abs(self.ball[0]) > 1 else 1.0
+        x = far_side * (field.GOAL_W / 2 + R + 8)
+        for cx in (x, x + far_side * 15, -x):
+            if all(math.hypot(cx - o.x, y - o.y) > 2 * R + 4 for o in self.on_field):
+                x = cx
+                break
+        b.removed_until = None
+        b.place(x, y, 0.0 if b.team == "us" else math.pi)
+        if isinstance(b, SimRobot):
+            b.paused = True
+            b.return_at = self.t + 0.5
+        self.log(f"{b.name} back on the field")
+
     def place_ball_neutral(self, why):
-        bodies = self.robots + self.opponents
+        bodies = self.on_field
         free = [p for p in field.NEUTRAL_SPOTS if all(math.hypot(p[0] - b.x, p[1] - b.y) > b.r + 10 for b in bodies)]
         spots = free or field.NEUTRAL_SPOTS
         spot = min(spots, key=lambda p: math.hypot(p[0] - self.ball[0], p[1] - self.ball[1]))
-        self.ball, self.ball_v, self.held_by = list(spot), [0.0, 0.0], None
+        if self.held_by is not None:
+            self.release("ball replaced")
+        self.ball, self.ball_v = list(spot), [0.0, 0.0]
+        self.last_restart = self.t
         self.ball_out_since, self.progress = None, (list(spot), self.t)
         self.log(f"ball {why} -> neutral spot ({spot[0]:.0f},{spot[1]:.0f})")
 
@@ -722,6 +1036,119 @@ class Sim:
             self.held_by = None
         r.bot.loc.relocalise()
         self.log(f"{r.name} picked up and moved")
+
+# ==================================== FAST MODE ====================================
+# Sim(fast=True): no camera rendering / detection / localisation. Each camera frame's Detections are made straight
+# from the true positions (+ a little noise), in the same format detection.py produces, and the pose comes from
+# the truth (+ noise). Everything after that (perception, lines, strategy, motion) is still the real robot code.
+# ~10x faster: use it to screen ideas, then confirm the good ones in the full simulator.
+FAST_POSE_NOISE = 1.5        # cm
+FAST_BALL_RANGE = 75.0       # cm the camera finds the ball out to (240 px fisheye, see GUIDE.md)
+FAST_LINE_RANGE = 100.0      # cm
+FAST_LINE_STEP = 2.0         # cm between line points
+FAST_RELOCALISE = 0.3        # s without a confident pose after being picked up
+
+
+class TruthLoc:
+    """Stands in for localisation.LocalisationThread in fast mode."""
+
+    def __init__(self, body, rng):
+        self.body, self.rng = body, rng
+        self.lost_until = 0.0
+
+    def relocalise(self):
+        self.lost_until = time.monotonic() + FAST_RELOCALISE
+
+    def process(self, det):
+        pass
+
+    def get(self):
+        from localisation import Pose
+        t = time.monotonic()
+        if t < self.lost_until:
+            return Pose(0.0, 0.0, 1e3, t)
+        n = self.rng.normal(0, FAST_POSE_NOISE, 2)
+        sgn = 1.0 if self.body.team == "us" else -1.0   # the opponents' field frame is ours turned round (they
+        return Pose(sgn * self.body.x + n[0], sgn * self.body.y + n[1], 3.0, t)   # attack the other goal)
+
+    def particles(self):
+        return np.zeros((0, 2))
+
+
+def _line_points():
+    pts = []
+    for a, b in field.white_line_segments():
+        n = max(2, int(math.hypot(b[0] - a[0], b[1] - a[1]) / FAST_LINE_STEP))
+        for k in range(n + 1):
+            pts.append((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
+    return np.array(pts, np.float32)
+
+
+FAST_LINE_PTS = _line_points()
+
+
+def _goal_parts(sgn):
+    """The coloured parts of a goal as rectangles (x0, x1, y0, y1): side walls (drawn 5 cm wide) and back wall."""
+    gw, y0, y1 = field.GOAL_W / 2, field.PLAY_L / 2, field.PLAY_L / 2 + field.GOAL_DEPTH
+    rects = [(-gw - 5, -gw, y0, y1 + 2), (gw, gw + 5, y0, y1 + 2), (-gw - 5, gw + 5, y1, y1 + 2)]
+    return [(x0, x1, min(sgn * ya, sgn * yb), max(sgn * ya, sgn * yb)) for x0, x1, ya, yb in rects]
+
+
+GOAL_PARTS = {"yellow": _goal_parts(1), "blue": _goal_parts(-1)}
+
+
+def fast_detect(sim, r, ignore):
+    """Detections for robot r from the true positions (robot frame cm), like detection.detect() would give."""
+    from detection import Detections, Goal, Obstacle
+    rng = sim.rng
+    det = Detections(time.monotonic(), r.bot.imu.compass())
+    det.field_visible = True
+
+    def to_robot(px, py):
+        return rotate([px - r.x, py - r.y], -r.h)
+
+    def hidden(p):           # inside the ignore box (our own body)
+        return -ignore["left"] < p[0] < ignore["right"] and -ignore["back"] < p[1] < ignore["front"]
+
+    # ball: nearest point
+    dx, dy = sim.ball[0] - r.x, sim.ball[1] - r.y
+    d = math.hypot(dx, dy)
+    if 1e-6 < d < FAST_BALL_RANGE:
+        near = to_robot(sim.ball[0] - dx / d * BALL_RADIUS, sim.ball[1] - dy / d * BALL_RADIUS)
+        if not hidden(near):
+            s = 0.3 + 0.01 * d
+            det.ball = [near[0] + rng.normal(0, s), near[1] + rng.normal(0, s)]
+    # goals: nearest coloured point + centre
+    for colour, parts in GOAL_PARTS.items():
+        best = None
+        for x0, x1, y0, y1 in parts:
+            cx, cy = min(max(r.x, x0), x1), min(max(r.y, y0), y1)
+            dd = math.hypot(cx - r.x, cy - r.y)
+            if best is None or dd < best[0]:
+                best = (dd, cx, cy)
+        if best[0] < VIEW_RADIUS - 5:
+            sgn = 1 if colour == "yellow" else -1
+            det.goals[colour] = Goal(to_robot(best[1], best[2]),
+                                     to_robot(0.0, sgn * (field.PLAY_L / 2 + field.GOAL_DEPTH + 1)))
+    # other robots: nearest point
+    for b in sim.on_field:
+        if b is r:
+            continue
+        dx, dy = b.x - r.x, b.y - r.y
+        d = math.hypot(dx, dy)
+        if b.r < d < 90.0:
+            near = to_robot(b.x - dx / d * b.r, b.y - dy / d * b.r)
+            centre = to_robot(b.x, b.y)
+            n = rng.normal(0, 1.0, 2)
+            det.obstacles.append(Obstacle([near[0] + n[0], near[1] + n[1]], 2 * b.r, [centre[0] + n[0], centre[1] + n[1]]))
+    # white line points
+    rel = FAST_LINE_PTS - np.float32([r.x, r.y])
+    rel = rel[(rel[:, 0] ** 2 + rel[:, 1] ** 2) < FAST_LINE_RANGE ** 2]
+    if len(rel) > 250:
+        rel = rel[np.linspace(0, len(rel) - 1, 250).astype(int)]
+    c, s = math.cos(-r.h), math.sin(-r.h)
+    det.line_pts = np.stack([rel[:, 0] * c - rel[:, 1] * s, rel[:, 0] * s + rel[:, 1] * c], axis=1).astype(np.float32)
+    return det
 
 
 # ==================================== WINDOW ====================================
@@ -819,10 +1246,18 @@ class Viewer:
         if self.show_particles:
             for x, y in sel.bot.loc.particles()[::2]:
                 cv2.circle(img, P(x, y), 1, (170, 170, 170), -1)
+        pose = sel.bot.loc.get()
+        if pose.confident:          # opponents as the selected robot believes them (both robots' cameras): circles
+            for o in sel.bot.world.opponents:
+                cv2.circle(img, P(*o), int(cfg.ROBOT_RADIUS * UI_PPC), (0, 0, 255), 1, cv2.LINE_AA)
         for o in s.opponents:
+            if o.removed_until is not None:
+                continue
             cv2.circle(img, P(o.x, o.y), int(o.r * UI_PPC), ROBOT, -1)
             cv2.circle(img, P(o.x, o.y), int(o.r * UI_PPC), (0, 0, 200), 2)
         for r in s.robots:
+            if r.removed_until is not None:
+                continue
             c = P(r.x, r.y)
             rad = int(r.r * UI_PPC)
             cv2.circle(img, c, rad, ROBOT, -1)
@@ -852,7 +1287,8 @@ class Viewer:
             cv2.putText(img, label, (c[0] + rad + 2, c[1] - rad), cv2.FONT_HERSHEY_PLAIN, 1.0, r.colour, 1)
         cv2.circle(img, P(*s.ball), max(2, int(BALL_RADIUS * UI_PPC)), ORANGE, -1)
         cv2.putText(img, f"t={s.t:5.1f}s  x{self.speed:g}{'' if self.running else '  PAUSED'}   "
-                         f"score {s.score['us']}-{s.score['them']}   opp AI {'on' if s.opp_ai else 'off'}"
+                         f"score {s.score['us']}-{s.score['them']}   "
+                         f"opp {getattr(s, 'opp_name', 'simple AI')}{'' if getattr(s, 'opp_name', 'simple AI') != 'simple AI' else (' on' if s.opp_ai else ' off')}"
                          f"   noise {'on' if s.noise else 'off'}",
                     (8, 18), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), 1)
         return img
@@ -879,7 +1315,9 @@ class Viewer:
         err = math.hypot(pose.x - r.x, pose.y - r.y)
         e = s.loc_err[r.name]
         lines = [
-            f"[{self.sel + 1}] {r.name}  ({'PAUSED' if r.paused else 'running'})  camera: {self.cam_mode}",
+            f"[{self.sel + 1}] {r.name}  ("
+            f"{f'OFF (damaged) {r.removed_until - s.t:.0f}s' if r.removed_until is not None else 'PAUSED' if r.paused else 'running'})"
+            f"  camera: {self.cam_mode}",
             f"true  ({r.x:6.1f},{r.y:6.1f}) {math.degrees(r.h):6.1f}deg",
             f"est   ({pose.x:6.1f},{pose.y:6.1f}) +-{pose.std:4.1f}  err {err:4.1f}",
             f"mean err {np.mean(e) if e else 0:4.1f}cm  outs {r.outs}",
@@ -943,7 +1381,9 @@ def draw_detections(img, det):
         if g is not None:
             cv2.drawMarker(img, px(g.near), colour, cv2.MARKER_CROSS, 10, 2)
     for o in det.obstacles:
-        cv2.circle(img, px(o.near), 5, (0, 0, 255), 2)
+        cv2.circle(img, px(o.near), 3, (0, 0, 255), -1)
+        if getattr(o, "centre", None) is not None:      # the whole robot it belongs to
+            cv2.circle(img, px(o.centre), int(round(cfg.ROBOT_RADIUS * rv.px_per_cm)), (0, 0, 255), 2)
     if det.ball is not None:
         cv2.circle(img, px(det.ball), 6, (0, 140, 255), 2)
     return img
@@ -976,8 +1416,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--headless", type=float, metavar="SECONDS", help="no window: simulate this long and print a summary")
     ap.add_argument("--noise", action="store_true", help="start with sensor noise on")
+    ap.add_argument("--fast", action="store_true", help="no camera simulation: detections + pose from the truth")
+    ap.add_argument("--seed", type=int, default=0, help="game seed: with --noise this replays arena.py's game of the "
+                                                        "same seed (that side round: our code as 'us')")
+    ap.add_argument("--opp", metavar="VERSION", help="opponents run this version of our code (a name from "
+                                                     "past_versions/, e.g. v26, or a folder) instead of the simple AI")
     args = ap.parse_args()
-    sim = Sim(noise=args.noise)
+    sim = Sim(noise=args.noise, seed=args.seed, fast=args.fast, opp_code=load_code(args.opp) if args.opp else None)
+    sim.opp_name = args.opp or "simple AI"
     RV_FOR_DRAW.append(sim.rv)
     if args.headless:
         headless(sim, args.headless)

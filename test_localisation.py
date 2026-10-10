@@ -109,7 +109,9 @@ class Debug:
             if g is not None:
                 cv2.drawMarker(img, px(g.near), colour, cv2.MARKER_CROSS, 10, 2)
         for o in det.obstacles:
-            cv2.circle(img, px(o.near), 5, (0, 0, 255), 2)
+            cv2.circle(img, px(o.near), 3, (0, 0, 255), -1)
+            if getattr(o, "centre", None) is not None:   # the whole robot it belongs to
+                cv2.circle(img, px(o.centre), int(round(cfg.ROBOT_RADIUS * rv.px_per_cm)), (0, 0, 255), 2)
         if det.ball is not None:
             cv2.circle(img, px(det.ball), 6, (0, 140, 255), 2)
         c = px((0, 0))

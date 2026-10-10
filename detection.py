@@ -13,6 +13,7 @@ floor, so anything tall (ball, goal walls, robots) gets stretched outwards; its 
 touches the floor.
 """
 import collections
+import math
 
 import cv2
 import numpy as np
@@ -29,14 +30,20 @@ HULL_MARGIN = 6.0              # cm the field hull is grown by before filtering 
 LINE_MAX_POINTS = 250          # white pixels are subsampled to at most this many
 LINE_MAX_RANGE = 120.0         # cm; far points are less accurate in the top-down view
 OBSTACLE_MIN_AREA = 40.0
+OBSTACLE_MIN_SIZE = 12.0       # cm across (sqrt of the blob area): a robot is never smaller, even 90 cm away; smaller
+                               # blobs far away were the field corners (black outer area + blur), not robots
 OBSTACLE_KERNEL = field.PENALTY_LINE_W + 2.0   # cm; opening of the "unknown colour" mask: removes anything thinner,
                                               # i.e. the black penalty box line (robots are ~20 cm across)
 OBSTACLE_BODY_MARGIN = 2.0     # cm past our own body (ROBOT_RADIUS circle + ignore box) where obstacles are ignored
-OBSTACLE_LINE_MARGIN = 3.0     # cm around white lines that never counts as obstacle (blurry line edges far away)
-OBSTACLE_MAX_RANGE = 90.0      # cm: further than this the camera resolution is too low to tell robots from blur
+OBSTACLE_LINE_MARGIN = 3.0     # cm around white lines that never counts as obstacle (blurry line edges)...
+OBSTACLE_LINE_MARGIN_FAR = 6.0 # ...this much further than OBSTACLE_FAR from us (the lens blurs far lines into grey,
+OBSTACLE_FAR = 60.0            # which isn't white or green: the far side lines showed up as robots)
+OBSTACLE_MAX_RANGE = 82.0      # cm: further than this the camera resolution is too low to tell robots from blur (the far
+                               # ends of the black penalty line and the white lines blur into robot-sized blobs)
 
 Goal = collections.namedtuple("Goal", "near centre")      # both [x, y] robot frame cm
-Obstacle = collections.namedtuple("Obstacle", "near size")  # near = [x, y] cm, size = rough diameter cm
+Obstacle = collections.namedtuple("Obstacle", "near size centre", defaults=(None,))
+# near = [x, y] cm (nearest point), size = rough diameter cm, centre = [x, y] estimated centre of the whole robot
 
 
 class Detections:
@@ -63,6 +70,31 @@ def _nearest_point(rv, contours):
     x, y = rv.to_cm(pts[:, 0], pts[:, 1])
     i = int(np.argmin(x * x + y * y))
     return [float(x[i]), float(y[i])]
+
+
+def _robot_centre(rv, contour, near):
+    """Centre of the whole robot behind an obstacle blob: in the middle of the blob's angular extent (as seen from
+    us), one robot radius beyond its nearest point. (The nearest point alone is only the bit facing us, and not on
+    the robot's centre line when it's seen at an angle or partly out of view; the far side of the blob is
+    stretched outwards by the top-down view, so its depth is no use.)"""
+    pts = contour.reshape(-1, 2).astype(np.float32)
+    x, y = rv.to_cm(pts[:, 0], pts[:, 1])
+    a_near = math.atan2(near[1], near[0])
+    rel = (np.arctan2(y, x) - a_near + math.pi) % (2 * math.pi) - math.pi      # angles relative to the nearest point
+    mid = a_near + (float(rel.min()) + float(rel.max())) / 2
+    r = math.hypot(near[0], near[1]) + cfg.ROBOT_RADIUS
+    return [r * math.cos(mid), r * math.sin(mid)]
+
+
+def _far_mask(rv, shape):
+    """255 where the image is further than OBSTACLE_FAR from the robot centre (cached on rv)."""
+    cached = getattr(rv, "_far_mask", None)
+    if cached is None or cached.shape != shape:
+        cached = np.full(shape, 255, np.uint8)
+        cx, cy = (int(round(v)) for v in rv.centre)
+        cv2.circle(cached, (cx, cy), int(round(OBSTACLE_FAR * rv.px_per_cm)), 0, -1)
+        rv._far_mask = cached
+    return cached
 
 
 def _big_contours(mask, min_area):
@@ -126,6 +158,9 @@ def detect(rv, res, t, compass):
     if field is not None:
         kl = max(1, int(round(2 * OBSTACLE_LINE_MARGIN * ppc))) | 1
         white_grown = cv2.dilate(m["white"], np.ones((kl, kl), np.uint8))   # square kernel: much faster than round
+        kf = max(1, int(round(2 * OBSTACLE_LINE_MARGIN_FAR * ppc))) | 1
+        white_far = cv2.dilate(m["white"], np.ones((kf, kf), np.uint8))
+        white_grown |= cv2.bitwise_and(white_far, _far_mask(rv, white_far.shape))
         known = m["green"] | white_grown | m["orange"] | m["yellow"] | m["blue"]
         unknown = cv2.bitwise_and(field, cv2.bitwise_not(known))
         # our own body: the ignore box no longer covers the front (so the ball in the dribbler stays visible),
@@ -137,9 +172,19 @@ def detect(rv, res, t, compass):
                    int(round((cfg.ROBOT_RADIUS + OBSTACLE_BODY_MARGIN) * ppc)), 0, -1)
         k = max(1, int(round(OBSTACLE_KERNEL * ppc)))
         unknown = cv2.morphologyEx(unknown, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        found = []
         for c in _big_contours(unknown, _area_px(rv, OBSTACLE_MIN_AREA)):
             size = float(np.sqrt(cv2.contourArea(c)) / ppc)
             near = _nearest_point(rv, [c])
             if near[0] ** 2 + near[1] ** 2 < OBSTACLE_MAX_RANGE ** 2:
-                d.obstacles.append(Obstacle(near, size))
+                found.append(Obstacle(near, size, _robot_centre(rv, c, near)))
+        # one robot can come out as two blobs (e.g. cut in two by a white line it stands on): same centre = same robot
+        for o in sorted(found, key=lambda o: o.near[0] ** 2 + o.near[1] ** 2):
+            twin = next((k for k, q in enumerate(d.obstacles)
+                         if math.hypot(q.centre[0] - o.centre[0], q.centre[1] - o.centre[1]) < cfg.ROBOT_RADIUS), None)
+            if twin is not None:
+                q = d.obstacles[twin]
+                d.obstacles[twin] = q._replace(size=math.hypot(q.size, o.size))
+            elif o.size >= OBSTACLE_MIN_SIZE:
+                d.obstacles.append(o)
     return d

@@ -16,13 +16,14 @@ DRIVE_MOTORS = [
 ]
 
 # dribbler: (i2c address, ELECANGLEOFFSET, SINCOSCENTRE), or None if this robot has no dribbler.
-# The goalie's old dribbler (Oct 3) was address 25, which is now motor4, so its current address (27?) and
-# calibration are unknown: calibrate it, fill this in, and it's used everywhere (robot, simulator, STOP_defense.py).
-DRIBBLER = None                     # e.g. (27, <ELECANGLEOFFSET>, <SINCOSCENTRE>)
+# The goalie has the same dribbler + kicker as the striker. !! PLACEHOLDER VALUES: the address (27?) and the
+# calibration below are NOT this robot's - calibrate its dribbler driver and put the real numbers here (and in
+# STOP_defense.py) before running it. Set DRIBBLER = None to run without one.
+DRIBBLER = (27, 1431223552, 1245)   # VERIFY address + calibration (placeholder copied from the striker's)
 DRIBBLER_SPEED = 200000000
 
 # kicker: solenoid GPIO pin, or None if this robot has no kicker
-KICKER_PIN = None                   # set to 17 (or whichever pin) if the goalie has a solenoid
+KICKER_PIN = 17                     # VERIFY the pin on this robot (test_solenoid.py)
 KICK_PULSE = 0.05
 KICK_COOLDOWN = 1.0
 
