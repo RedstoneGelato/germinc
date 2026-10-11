@@ -47,11 +47,15 @@ AIM_POINTS = 7                    # candidate aim points across the goal
 KICK_RANGE = 50.0                 # kick when the aim point is closer than this (against a goalie that guards well,
                                   # in the simulator < 50 cm scored 3x as often as 50-75 cm)...
 PRESSURE_RANGE = 60.0             # ...or this, when about to lose the ball anyway (PRESSURE_DIST)
+LONG_RANGE = field.PLAY_L / 2     # ...or this (half the field) at an OPEN goal: no robot within OPEN_GOAL_DIST of the
+OPEN_GOAL_DIST = 30.0             # goal's centre (their goalie is out) or the shot passes every robot by OPEN_CLEAR cm
+OPEN_CLEAR = 20.0
 KICK_ANGLE = math.radians(8)      # ...and the robot faces it within this (goalie clears; the striker instead checks
                                   # that its actual heading would put the ball between the posts)...
-KICK_CLEARANCE = 8.0              # ...and no obstacle's edge is closer than this to the ball's path
-PRESSURE_DIST = 2 * R + 12.0      # an opponent's centre this close = about to lose the ball: shoot as long as the
-                                  # ball's path misses every robot (no KICK_CLEARANCE margin), better than losing it
+KICK_CLEARANCE = 8.0              # goalie clearing / passing: no obstacle's edge closer than this to the ball's path
+                                  # (the striker shoots as soon as the path misses every robot, see can_shoot())
+PRESSURE_DIST = 2 * R + 12.0      # an opponent's centre this close = about to lose the ball: shoot from up to
+                                  # PRESSURE_RANGE, better than losing it
 CARRY_MULTI = 0.8                 # speed multiplier while carrying the ball (on top of motion.py's dribbler slow-down
                                   # for moving sideways / backwards, robot_config.DRIBBLE_SPEED_MIN)
 SHOT_GRID = 12.0                  # cm between candidate shooting spots
@@ -65,7 +69,7 @@ SHOT_KEEP_SLACK = 5.0             # cm of clearance / range a spot we're already
                                   # on it (far obstacles' positions wobble by a few cm from frame to frame)
 SHOT_DIST_COST = 0.2              # score lost per cm of shot length (short shots are more reliable)
 CARRY_BACK_COST = 3.0             # carrying the ball: cost per cm a shooting spot / dodge waypoint is behind the robot
-CARRY_MARGIN = R + 4.0            # carrying the ball: robot centre kept this far inside the line (the ball sits in
+CARRY_MARGIN = R + 16.0           # carrying the ball: robot centre kept this far inside the line (the ball sits in
                                   # front of the robot: going partly past the line with it puts the ball out)
 CARRY_BACK_ALLOW = 2.0            # carrying the ball: never drive more than this (cm) backwards - go sideways instead
 LEAD_TIME_MAX = 0.6               # s: go for where a moving ball will be in up to this long...
@@ -75,8 +79,8 @@ CATCH_MULTI_PER_CM = 0.015        # instead of knocked away), rising this much p
 RACE_MARGIN = 15.0                # ...unless an opponent is less than this much further from the ball than us: then
                                   # full speed (PUSH_MULTI), getting there first matters more than catching it cleanly
 
-GUARD_RADIUS = min(field.PENALTY_D - 5.0, 25.0)   # goalie: distance from the goal centre it guards at
-GUARD_LEAD = 0.2                  # goalie guarding: guard where the ball will be this many seconds ahead
+GUARD_RADIUS = min(field.PENALTY_D - 5.0, 20.0)   # goalie: distance from the goal centre it guards at
+GUARD_LEAD = 0.1                  # goalie guarding: guard where the ball will be this many seconds ahead
 GUARD_GAIN = 15.0                 # goalie guarding / blocking: full speed when this far (cm) from its spot, slower
                                   # in proportion closer (the default speed curve crawls over short distances)
 GUARD_SMOOTH = 0.3                # goalie guarding / blocking: motion.Mover smoothing (default 0.1 lags ~0.1 s)
@@ -88,21 +92,50 @@ CARRIER_WEIGHT = 0.0              # goalie, an opponent has the ball: how far to
 CARRIER_WIDEN = 10.0              # line it's facing along (if that line hits the goal +- this): 1 = all the way.
                                   # 0 = off: 0.6 did slightly worse in the simulator (a striker turns before it kicks,
                                   # so the goalie moving onto its current line just opens the other side)
-GOALIE_KICK_TURN = math.radians(60)   # goalie with the ball: kicks it clear facing at most this far off up-field...
-GOALIE_KICK_CLEAR = 50.0          # ...when no robot is in the way for this far (cm)
+GOALIE_KICK_TURN = math.radians(60)   # goalie with the ball (striker off): kicks it clear facing at most this far off
+GOALIE_KICK_CLEAR = 50.0          # up-field, when no robot is in the way for this far (cm)
+PASS_SIDE = 30.0                  # goalie with the ball, striker on: kicks it past the striker, aiming this far to one
+PASS_AHEAD = 20.0                 # side of it and this far up-field of it (the more open side; both open: the one
+PASS_TOL = 0.25                   # nearer the middle), once facing it within this (rad)
 EST_SPEED = 120.0                 # rough driving speed (cm/s), turning speed (rad/s) and turning speed with the ball in
 EST_TURN = 3.5                    # the dribbler, for choosing between catching the ball from the front or orbiting
 CATCH_TURN_WEIGHT = 0.5           # turning back with the ball counts this much (we already have it then: better than
                                   # counting it fully in the simulator)
 EST_TURN_DRIBBLE = 2.4            # round it (catch_is_faster) - TUNE on the robot (TURN_MAX, DRIBBLE_TURN_MAX x top spin)
 BLOCKER_WIDTH = 2.0               # an opponent's centre within 2R + this of our straight line to the ball = in the way
+BLOCKER_UPFIELD = 0.4             # ...unless we'd push the group this up-field (direction's y component)
 BLOCKER_CLEAR = 8.0               # going round an opponent + ball: pass this far (cm, robot edges) clear of the group
 SOLO_CHASE_Y = 0.0                # goalie on its own (striker off): goes for the ball only in our half (y below this)
 SOLO_CLOSER = 15.0                # ...or when it's this much closer to the ball than every opponent; else it guards
 DODGE_DIST = 2 * R + 20.0         # striker with the ball, no shot, an opponent's centre this close: sidestep away
 DODGE_NEAR = 2 * R + 6.0          # ...that is this close (touching, e.g. a scrum)...
 DODGE_CLOSING = 20.0              # ...or coming at us faster than this (cm/s)
-DODGE_STEP = 30.0                 # cm the sidestep target is to the side
+PUSHBACK_GAP = 6.0                # an opponent's centre within 2R + this of ours, with the ball between us (in front,
+PUSHBACK_ANGLE = math.radians(50) # within this angle of the line to it) = a shoving match: shove back at full speed
+PUSHBACK_REACH = 40.0             # (a close target means a slow robot, which just gets pushed back to our goal)
+GOALIE_KICK_OUT = True            # goalie in a shoving match with the ball in its dribbler: kick it out over a side line
+GOALIE_OUT_UP = 0.3               # (this much up-field per cm sideways), once facing within
+GOALIE_KICK_OUT_TOL = 0.4         # this (rad) - an out ball comes back on the halfway line, far from our goal. The side
+GOALIE_OUT_CLEAR = 60.0           # with no robot within this (cm) of the kick's path first (kick_out_side()), else the nearer
+ORBIT_SPD_MIN = 1.0               # going round the ball / an opponent: at least this speed multiplier (the waypoints are
+                                  # close, and motion.py's speed drops with the distance: it crawled round, getting pushed.
+                                  # 1 = full speed: without the ball there's nothing to lose by hurrying; 0.5-0.85 worse)
+CHALLENGE_DIST = 35.0             # goalie: an opponent has the ball this close (cm) to our goal centre -> go and knock it
+CHALLENGE_UP = 40.0               # out over the nearer side line (aim this far up-field of the ball, past the line):
+                                  # standing guard just gets the goalie shoved back into its goal
+DODGE_MARGIN = R + 4.0            # sidestepping: the robot's centre may come this close to the line (CARRY_MARGIN left
+                                  # too narrow a lane to get past a robot standing in the middle: it shuffled in front
+                                  # of it, side to side, for ever)
+DODGE_HOLD = 0.25                 # s: switching between sidestepping and going to the shooting spot, stay in the new
+                                  # one at least this long (they flicked back and forth many times a second)
+DODGE_PASS_GAP = 4.0              # sidestep side: least cm still to go across to pass the opponent (centres 2R + this
+DODGE_CROWDED = 50.0              # apart), + this if another robot is at the sidestep spot, + DODGE_CENTRE_COST per cm
+DODGE_CENTRE_COST = 0.1           # off the middle (only a tie-break)
+DODGE_STEP = 15.0                 # cm the sidestep target is to the side (30 sidestepped far out of the way, losing
+                                  # the attack)
+DODGE_FORWARD = 15.0              # ...and this far up-field: past the opponent, shouldering it aside, not backing away
+PUSHER_DIST = 28.0                # ...except an opponent pushing it at our goal (ball this close to the goal centre and
+PUSHER_SPEED = 10.0               # rolling towards our goal faster than this): meet it, guarding just gets it pushed in
 OPP_ON_BALL = 12.0                # ...unless an opponent has it (its centre within R + this of the ball): then guard
 CLEAR_RETURN_Y = field.OWN_GOAL_Y + 55.0   # goalie: stop clearing once the ball is past this
 CLEAR_AWAY_Y = field.OWN_GOAL_Y + 50.0     # goalie: ball closer to our goal line than this -> push it straight away
@@ -132,6 +165,9 @@ OUT_SOON_DIST = 15.0              # ball last seen this close to the line and ro
 OUT_SOON_SPEED = 0.0              # this (cm/s) = it went out
 RESTART_WAIT = 4.0                # s the striker waits at the restart spot after the ball disappeared there
 RESTART_SIDE = 0.0                # ...diagonally behind it, this far towards the middle (not head-on with their striker)
+RESTART_X_SHARE = 0.5             # ...and this share of the way from the middle across to that spot (1 = right behind
+                                  # it): the camera can't see a spot on the far side from behind the other side one, and
+                                  # the referee often uses another spot than the nearest
 NEUTRAL_WAIT = R + 11.0           # ball out: striker waits this far behind the neutral spot it'll come back to
                                   # (not on it: an occupied spot isn't used, the ball would go somewhere else)
 
@@ -486,6 +522,68 @@ def restart_spot(ball):
     return min(field.NEUTRAL_SPOTS, key=lambda p: dist(p, ball))
 
 
+def shover(me, ball, centres):
+    """The opponent shoving against us over the ball (touching, ball in between, not pushing it towards our own
+    goal), or None."""
+    if dist(me, ball) > R + cfg.BALL_RADIUS + 6:
+        return None
+    to_ball = math.atan2(ball[1] - me[1], ball[0] - me[0])
+    for c in centres:
+        if dist(c, me) > 2 * R + PUSHBACK_GAP:
+            continue
+        a = math.atan2(c[1] - me[1], c[0] - me[0])
+        if abs(math.atan2(math.sin(a - to_ball), math.cos(a - to_ball))) < PUSHBACK_ANGLE and c[1] - me[1] > -0.3 * dist(c, me):
+            return c
+    return None
+
+
+def possession(world, mate):
+    """Who has the ball: "us" (in our dribbler or the teammate's), "them" (an opponent's centre right behind it, see
+    GoalieStrategy.carrier) or None (free / not seen)."""
+    if world.ball_in_capture or (mate and mate.get("has ball")):
+        return "us"
+    if world.ball_field is not None and GoalieStrategy.carrier(world.ball_field, world.opponents) is not None:
+        return "them"
+    return None
+
+
+def knock_out_aim(ball, me):
+    """Goalie challenging an opponent that has the ball: knock it out over the nearer side line (the side away from
+    the goalie when the ball is in the middle), a bit up-field so the goalie comes at it from our goal's side."""
+    side = math.copysign(1.0, (ball[0] - me[0]) if abs(ball[0]) < 10 else ball[0])
+    return (side * (field.PLAY_W / 2 + 30.0), ball[1] + CHALLENGE_UP)
+
+
+def kick_out_side(me, ball, centres, current=None):
+    """Goalie kicking the ball out: which side line (+1 / -1). The side with no robot in the way of the kick (path
+    clear for GOALIE_OUT_CLEAR cm), the nearer one if both or neither are clear. Keeps `current` while it's clear
+    (re-deciding every loop as the robots move would turn it back and forth)."""
+    def clear(side):
+        u = unit((side, GOALIE_OUT_UP))
+        return clearance(me, (me[0] + u[0] * GOALIE_OUT_CLEAR, me[1] + u[1] * GOALIE_OUT_CLEAR), centres) > 0
+    if current is not None and clear(current):
+        return current
+    near = math.copysign(1.0, ball[0] or me[0] or 1.0)
+    return near if clear(near) or not clear(-near) else -near
+
+
+def pass_aim(me, striker, centres):
+    """Goalie clearing to the striker: a point beside the striker (PASS_SIDE to one side, PASS_AHEAD up-field), so
+    the ball rolls past it up-field and it can take it facing the way it's going (instead of turning round). The side
+    with the clear path; both clear (or both blocked): the one nearer the middle of the field (both blocked: the one
+    with more room)."""
+    cands = []
+    for side in (1.0, -1.0):
+        p = clamp_in_field([striker[0] + side * PASS_SIDE, striker[1] + PASS_AHEAD])
+        cands.append((clearance(me, p, [c for c in centres if dist(c, striker) > R]), p))
+    open_ = [c for c in cands if c[0] > KICK_CLEARANCE]
+    if len(open_) == 1:
+        return open_[0][1]
+    if open_:
+        return min(open_, key=lambda c: abs(c[1][0]))[1]
+    return max(cands, key=lambda c: c[0])[1]
+
+
 def rel(p, pose):
     return [p[0] - pose.x, p[1] - pose.y]
 
@@ -512,6 +610,8 @@ class GoalieStrategy:
         self.kick = False
         self.chasing = False
         self.phase = ""
+        self.possession = None   # "us" / "them" / None: who has the ball (possession())
+        self.out_side = None     # kicking the ball out: over which side line (kick_out_side())
         self.avoid = Avoider()
 
     def reset(self):
@@ -521,6 +621,7 @@ class GoalieStrategy:
     def update(self, world, compass, mate, line_touches):
         pose = world.pose
         self.kick = False
+        self.possession = possession(world, mate)
         if pose is None or not pose.confident:
             out = self.fallback.update(world, compass, mate.get("command") if mate else None,
                                        mate.get("bot active") if mate else None, line_touches)
@@ -543,11 +644,13 @@ class GoalieStrategy:
             in_box = abs(ball[0]) < field.PENALTY_W / 2 and ball[1] < field.OWN_GOAL_Y + field.PENALTY_D
             told = striker_on and mate.get("command") == 1
             clearing = self.botstate in (1, 2)
-            opp_on_ball = self.carrier(ball, world.opponents) is not None
+            opp_on_ball = self.possession == "them"
             if not striker_on:          # alone: clear what's in our half or clearly ours, otherwise mind the goal
                 closest_opp = min((dist(c, ball) for c in world.opponents), default=1e9)
                 raw = 2 if ball[1] < SOLO_CHASE_Y or dist(me, ball) + SOLO_CLOSER < closest_opp else 3
-            elif opp_on_ball:
+            elif opp_on_ball and dist(ball, goal) < CHALLENGE_DIST:
+                raw = 2     # ...unless it's bringing it at our goal: go and knock it out over the side line
+            elif opp_on_ball and not (dist(ball, goal) < PUSHER_DIST and world.ball_vel[1] < -PUSHER_SPEED):
                 raw = 3     # an opponent has it: cover the goal, don't challenge (in the simulator most goals against
                             # came from an opponent shooting past a goalie that had come out for the ball)
             elif told or (in_box and dist(me, ball) < DANGER_DIST):
@@ -560,6 +663,24 @@ class GoalieStrategy:
         if ball is None and self.botstate != 0:
             self.botstate = 0
         self.chasing = self.botstate in (1, 2)
+
+        # ---- an opponent shoving the ball against the goalie: shove straight back (guarding = crawling = getting
+        # pushed into our goal), or with the ball in the dribbler, kick it out over the side line
+        centres = obstacle_centres(me, world.obstacles_field)
+        sh = shover(me, ball, centres) if ball is not None else None
+        if sh is None:
+            self.out_side = None
+        else:
+            if GOALIE_KICK_OUT and world.ball_in_capture and self.has_dribbler:
+                self.out_side = kick_out_side(me, ball, [c for c in centres if c is not sh], self.out_side)
+                heading = heading_for((self.out_side, GOALIE_OUT_UP))
+                err = abs(math.atan2(math.sin(heading - compass), math.cos(heading - compass)))
+                self.kick, self.speed, self.phase = err < GOALIE_KICK_OUT_TOL, {}, "kick out"
+                return rel(list(me), pose), heading, True
+            d = unit((sh[0] - me[0], sh[1] - me[1]))     # (pushing off sideways towards the line opened the goal)
+            target = clamp_in_field([me[0] + d[0] * PUSHBACK_REACH, me[1] + d[1] * PUSHBACK_REACH], OUT_MARGIN)
+            self.speed, self.phase = {"spd_multi": 1.0}, "push back"
+            return rel(target, pose), 0.0, False
 
         # ---- act
         dribbler = False
@@ -596,16 +717,27 @@ class GoalieStrategy:
                 # ball in the dribbler: stay put, turn up-field (towards the open part of their goal, at most
                 # GOALIE_KICK_TURN off straight up-field) and kick it clear as soon as we face up-field with room
                 dribbler = True
-                want = heading_for((aim[0] - me[0], aim[1] - me[1]))
-                heading = max(-GOALIE_KICK_TURN, min(GOALIE_KICK_TURN, want))
                 target = list(me)
-                fwd = (-math.sin(compass), math.cos(compass))
-                ahead = (me[0] + fwd[0] * GOALIE_KICK_CLEAR, me[1] + fwd[1] * GOALIE_KICK_CLEAR)
-                self.kick = abs(compass) < GOALIE_KICK_TURN + 0.1 and clearance(me, ahead, centres) > 0
-                self.phase = "clear kick"
+                striker = mate.get("pos") if striker_on else None
+                if striker is not None and striker[1] > me[1] + R:
+                    # pass it past the striker (up-field of us): to its more open side, kick when facing it
+                    p = pass_aim(me, striker, centres)
+                    heading = heading_for((p[0] - me[0], p[1] - me[1]))
+                    err = abs(math.atan2(math.sin(heading - compass), math.cos(heading - compass)))
+                    self.kick = err < PASS_TOL
+                    self.phase = "clear pass"
+                else:
+                    want = heading_for((aim[0] - me[0], aim[1] - me[1]))
+                    heading = max(-GOALIE_KICK_TURN, min(GOALIE_KICK_TURN, want))
+                    fwd = (-math.sin(compass), math.cos(compass))
+                    ahead = (me[0] + fwd[0] * GOALIE_KICK_CLEAR, me[1] + fwd[1] * GOALIE_KICK_CLEAR)
+                    self.kick = abs(compass) < GOALIE_KICK_TURN + 0.1 and clearance(me, ahead, centres) > 0
+                    self.phase = "clear kick"
             else:
                 defending = ball[1] < CLEAR_AWAY_Y
-                if defending:                     # deep in our half: away from our goal, never round the ball
+                if self.possession == "them":     # challenging the opponent that has it: knock it out of play
+                    aim, defending = knock_out_aim(ball, me), True
+                elif defending:                   # deep in our half: away from our goal, never round the ball
                     aim = clear_aim(ball)
                 target, heading, dribbler = self.go_for_ball(me, ball, world.ball_vel, aim, centres, defending)
                 # never go round the ball: that leaves the goal open (nearly every goal against us in the simulator) -
@@ -675,6 +807,8 @@ class GoalieStrategy:
         target, heading, self.phase = approach(me, b, choose_push_aim(b, aim, defending))
         if self.phase != "push":
             target = around_ball(me, target, b)
+        if self.phase in ("orbit", "line up"):
+            self.speed = {"spd_min": ORBIT_SPD_MIN}
         if self.phase == "push":
             race = any(dist(c, ball) < dist(me, ball) + RACE_MARGIN for c in centres)   # an opponent could get there first
             self.speed = {"spd_multi": PUSH_MULTI if race else catch_speed(me, ball)}
@@ -687,18 +821,23 @@ class GoalieStrategy:
     @staticmethod
     def can_shoot(compass, me, centres):
         """Would kicking now score? The robot's actual heading must cross the goal line between the posts (with
-        room for the ball), within KICK_RANGE, with nothing in the way. Under pressure (an opponent within
-        PRESSURE_DIST) the path only has to miss the robots, without the KICK_CLEARANCE margin."""
+        room for the ball), within KICK_RANGE (PRESSURE_RANGE with an opponent within PRESSURE_DIST), and the ball's
+        path must miss every robot - no extra margin (waiting / moving for more room wasted chances). Further, up to
+        LONG_RANGE, only at an open goal."""
         fx, fy = -math.sin(compass), math.cos(compass)
         if fy < 0.2:
             return False
         t = (field.ATTACK_GOAL_Y - me[1]) / fy
         cross = (me[0] + fx * t, field.ATTACK_GOAL_Y)
         pressed = any(dist(c, me) < PRESSURE_DIST for c in centres)
-        if not (0 < t < (PRESSURE_RANGE if pressed else KICK_RANGE)
-                and abs(cross[0]) <= field.GOAL_W / 2 - cfg.BALL_RADIUS - POST_MARGIN):
+        if not (0 < t < LONG_RANGE and abs(cross[0]) <= field.GOAL_W / 2 - cfg.BALL_RADIUS - POST_MARGIN):
             return False
-        return clearance(me, cross, centres) > (0.0 if pressed else KICK_CLEARANCE)
+        clear = clearance(me, cross, centres)
+        if t >= (PRESSURE_RANGE if pressed else KICK_RANGE):          # a long shot: only at an open goal
+            goal_empty = all(dist(c, (0.0, field.ATTACK_GOAL_Y)) > OPEN_GOAL_DIST for c in centres)
+            wide = clear > OPEN_CLEAR
+            return clear > 0.0 and (goal_empty or wide)
+        return clear > 0.0
 
     @staticmethod
     def can_kick(compass, heading, me, aim, clear, kick_range=KICK_RANGE):
@@ -722,6 +861,7 @@ class StrikerStrategy:
         self.botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
         self.botstate = 2
         self.command = 0
+        self.possession = None   # "us" / "them" / None: who has the ball (possession())
         self.speed = {}
         self.kick = False
         self.chasing = False
@@ -730,6 +870,8 @@ class StrikerStrategy:
         self.avoid = Avoider()
         self.shot = ShotPlanner()
         self.group_side = None          # side picked to go round an opponent in front of the ball
+        self.carry_phase, self.carry_since = "", 0.0   # with the ball: "dodge" / "to spot" and since when (DODGE_HOLD)
+        self.last_dodge = None          # the last sidestep target
 
     def reset(self):
         self.fallback.reset()
@@ -740,6 +882,7 @@ class StrikerStrategy:
     def update(self, world, compass, mate, line_touches):
         pose = world.pose
         self.kick = False
+        self.possession = possession(world, mate)
         if pose is None or not pose.confident:
             out = self.fallback.update(world, compass, mate.get("bot active") if mate else None, line_touches)
             self.botstate, self.speed, self.command, self.phase = 10 + self.fallback.botstate, self.fallback.speed, self.fallback.command, "fallback"
@@ -786,7 +929,7 @@ class StrikerStrategy:
             self.shot.reset()
         if self.botstate == 5:
             spot = restart_spot(ball)
-            target = clamp_in_field([spot[0], spot[1] - NEUTRAL_WAIT], R)     # own-goal side of the spot
+            target = clamp_in_field([spot[0] * RESTART_X_SHARE, spot[1] - NEUTRAL_WAIT], R)   # own-goal side of the spot
             target = self.avoid(me, target, centres)
             self.phase = "ball out"
         elif self.botstate == 0:
@@ -794,8 +937,10 @@ class StrikerStrategy:
             if lb is not None and lb[2] and time.monotonic() - lb[1] < RESTART_WAIT:
                 # restart play: the ball went out and comes back on that neutral spot - wait just behind it,
                 # facing their goal, to take it the moment it's there
-                target = [lb[0][0] - math.copysign(RESTART_SIDE, lb[0][0] or 1.0), lb[0][1] - NEUTRAL_WAIT]
+                target = [lb[0][0] * RESTART_X_SHARE - math.copysign(RESTART_SIDE, lb[0][0] or 1.0), lb[0][1] - NEUTRAL_WAIT]
                 target, self.phase = self.avoid(me, target, centres), "restart"
+                if lb[0][1] > me[1]:          # face the spot it'll most likely be on (if it's ahead: never backwards)
+                    heading = heading_for((lb[0][0] - me[0], lb[0][1] - me[1]))
             elif lb is not None and time.monotonic() - lb[1] < SEARCH_TIME:
                 target, self.phase = clamp_in_field(lb[0]), "search"    # go and look where it was
                 target = self.avoid(me, target, centres)
@@ -806,7 +951,7 @@ class StrikerStrategy:
         elif self.botstate == 4:
             target = clamp_in_field([-ball[0] * 0.5, ball[1] + SUPPORT_OFFSET])
             target = self.avoid(me, target, centres)
-            heading = heading_for((ball[0] - me[0], ball[1] - me[1]))
+            heading = 0.0       # face up-field (facing the goalie's ball meant turning round to take a clearance)
             self.phase = "support"
         else:
             aim, clear = best_aim(ball, centres)
@@ -815,10 +960,17 @@ class StrikerStrategy:
                 self.speed = {"spd_multi": CARRY_MULTI}
                 heading = heading_for((aim[0] - me[0], aim[1] - me[1]))
                 threat = self.dodge_threat(me, world)
+                now = time.monotonic()
+                want_dodge = threat is not None and dist(threat, me) < DODGE_DIST
+                if (self.carry_phase in ("dodge", "to spot") and now - self.carry_since < DODGE_HOLD
+                        and want_dodge != (self.carry_phase == "dodge")):
+                    want_dodge = self.carry_phase == "dodge" and self.last_dodge is not None   # don't flick back yet
                 if GoalieStrategy.can_shoot(compass, me, centres):
                     target, self.kick, self.phase = list(me), True, "shoot"   # clear shot from here: take it
-                elif threat is not None and dist(threat, me) < DODGE_DIST:
-                    target, self.phase = self.dodge(me, threat), "dodge"      # about to be tackled: sidestep
+                elif want_dodge:                                              # about to be tackled: sidestep
+                    if threat is not None and dist(threat, me) < DODGE_DIST:
+                        self.last_dodge = self.dodge(me, threat, centres)
+                    target, self.phase = list(self.last_dodge), "dodge"
                 else:
                     spot, spot_aim = self.shot.plan(me, centres)
                     if spot is None:                       # no good spot anywhere: push towards the goal
@@ -832,9 +984,15 @@ class StrikerStrategy:
                         else:
                             target, self.phase = list(spot), "line up shot"
                             self.kick = GoalieStrategy.can_shoot(compass, me, centres)
+                if self.phase != self.carry_phase:
+                    self.carry_phase, self.carry_since = self.phase, now
                 if target[1] < me[1] - CARRY_BACK_ALLOW:     # never back off with the ball: go sideways instead
                     target = [target[0], me[1]]
-                target = clamp_in_field(target, CARRY_MARGIN)   # the ball is in front of us: keep it in the field
+                # the ball is in front of us: keep it in the field (sidestepping a bit closer to the line)
+                # (going round a robot: the waypoint may be wider - clamped back into the carrying lane it pulled the
+                # robot back in front of the robot it was going round, and it swung to and fro there)
+                wide = self.phase == "dodge" or (self.phase in ("to spot", "carry") and self.avoid.wp is not None)
+                target = clamp_in_field(target, DODGE_MARGIN if wide else CARRY_MARGIN)
             else:
                 # ball in our half and we're between it and our goal: clear it from here (like the goalie) instead
                 # of going round it, which would leave the opponent a free push at our goal
@@ -851,12 +1009,14 @@ class StrikerStrategy:
                     self.speed = {"spd_multi": catch_speed(me, ball)}
                     self.phase = "catch"
                 blocker = blocker_between(me, ball, centres)
+                if blocker is not None and unit((ball[0] - me[0], ball[1] - me[1]))[1] > BLOCKER_UPFIELD:
+                    blocker = None      # shoving it up-field (towards their goal) is fine: just go
                 if blocker is not None:
                     # an opponent between us and the ball: going straight at the ball would shove it onto the ball
                     # (and maybe into our goal) - go round the opponent and the ball together instead
                     target = self.around_group(me, ball, blocker)
                     heading, dribbler = heading_for((ball[0] - me[0], ball[1] - me[1])), False
-                    self.speed, self.phase = {}, "round blocker"
+                    self.speed, self.phase = {"spd_min": ORBIT_SPD_MIN}, "round blocker"
                 else:
                     self.group_side = None
                 if not goalie_on and self.solo_defend(me, ball, world.opponents):
@@ -865,6 +1025,15 @@ class StrikerStrategy:
                     block = GoalieStrategy.block_point(ball, world.ball_vel)
                     target = around_ball(me, block or target, ball)
                     self.speed, dribbler, self.phase = guard_speed(me, target), False, "solo guard"
+        if self.botstate == 2 and ball is not None:
+            # going for the ball and an opponent shoves against us over it (kickoffs): shove back at full speed
+            # (with the ball already ours, dodging round it scored more)
+            sh = shover(me, ball, centres)
+            if sh is not None:
+                d = unit((sh[0] - me[0], sh[1] - me[1]))
+                target = clamp_in_field([me[0] + d[0] * PUSHBACK_REACH, me[1] + d[1] * PUSHBACK_REACH], OUT_MARGIN)
+                heading = heading_for(d)
+                self.speed, self.phase = {"spd_multi": 1.0}, "push back"
         return rel(target, pose), heading, dribbler
 
     def around_group(self, me, ball, blocker):
@@ -892,18 +1061,33 @@ class StrikerStrategy:
         return ball[1] < 0.0 and closest_opp + SOLO_CLOSER < dist(me, ball)
 
     @staticmethod
-    def dodge(me, threat):
+    def dodge(me, threat, centres=()):
         """Sidestep away from an opponent about to tackle (keeping the heading, so the shot stays lined up): to the
-        side of the line between us, the up-field side if both are in the field. (Tried: ignoring opponents behind
-        us, keeping the chosen side for a while, adding forward progress, only dodging opponents moving towards us -
-        all worse in self-play.)"""
+        side of the line between us that is the least effort to get past it going up-field (the sidestep spot
+        furthest across and up-field from it, not into another robot or out of the field), then the one nearer the
+        middle.
+        It goes DODGE_FORWARD up-field at the same time - past the opponent, shouldering it aside - instead of
+        backing away from it (backing away it went left-right in front of a chasing opponent and lost ground).
+        Their goalie (at its penalty area): sidestep towards the more open part of the goal (away from the side it
+        stands on). (Straight across there, without the step forwards, was worse.)
+        (Tried: keeping the chosen side for a while, only dodging opponents moving towards us - both worse.)"""
         d = unit((threat[0] - me[0], threat[1] - me[1]))
+        keeper = threat[1] > field.ATTACK_GOAL_Y - field.PENALTY_D - R      # their goalie (in / at its area)
         best = None
         for side in (1.0, -1.0):
-            p = [me[0] - d[1] * side * DODGE_STEP - d[0] * 10.0, me[1] + d[0] * side * DODGE_STEP - d[1] * 10.0]
-            score = p[1] - 3.0 * dist(p, clamp_in_field(p, CARRY_MARGIN))
-            if best is None or score > best[0]:
-                best = (score, p)
+            p = [me[0] - d[1] * side * DODGE_STEP, me[1] + d[0] * side * DODGE_STEP + DODGE_FORWARD]
+            if keeper:                    # their goalie: sidestep to the more open part of the goal
+                open_side = -math.copysign(1.0, threat[0]) if abs(threat[0]) > 2 else math.copysign(1.0, me[0] or 1.0)
+                cost = 3.0 * dist(p, clamp_in_field(p, DODGE_MARGIN)) + (0.0 if (p[0] - me[0]) * open_side > 0 else 100.0)
+                if best is None or cost < best[0]:
+                    best = (cost, p)
+                continue
+            still = max(0.0, 2 * R + DODGE_PASS_GAP - abs(p[0] - threat[0]))   # cm across still to go to pass it
+            crowded = any(dist(c, p) < AVOID_DIST and dist(c, threat) > R for c in centres)
+            cost = (still + 3.0 * dist(p, clamp_in_field(p, DODGE_MARGIN)) + (DODGE_CROWDED if crowded else 0.0)
+                    + DODGE_CENTRE_COST * abs(p[0]) - p[1])                    # (up-field is less effort)
+            if best is None or cost < best[0]:
+                best = (cost, p)
         return best[1]
 
     @staticmethod

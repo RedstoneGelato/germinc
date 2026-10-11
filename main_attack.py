@@ -79,13 +79,14 @@ class StrikerBrain:
             "bot active": 1,
             "command": strategy.command, #1 = goalie go get the ball, 0 = goalie stay in goal
             "chasing": strategy.chasing, #going for the ball
+            "has ball": world.ball_in_capture, #ball in our dribbler
             "pos": [round(pose.x), round(pose.y)] if pose.confident else None,
             "ball": [round(v) for v in world.ball_own_field] if world.ball_own_field else None, #own camera only
             "opps": [[round(v) for v in o] for o in world.opponents_own], #opponent robots our camera sees (centres)
         })
 
         self.desired_pos, self.line, self.dribbler_on = desired_pos, line, dribbler_on #kept for the simulator display
-        self.status = (f"botstate={strategy.botstate} {strategy.phase} line={'ON ' + line.source if line.on_line else 'off'} "
+        self.status = (f"botstate={strategy.botstate} {strategy.phase} ball:{strategy.possession or '-'} line={'ON ' + line.source if line.on_line else 'off'} "
                        f"pos=({pose.x:.0f},{pose.y:.0f})+-{pose.std:.0f} ball={world.ball}({world.ball_source}) goals={world.goal_source}")
 
 #==========================================================================================#

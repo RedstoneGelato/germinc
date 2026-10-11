@@ -17,8 +17,8 @@ localisation, perception, line fusion, strategy and motion. Only the hardware is
     comms    the two robots' my_state handed straight to each other
     switch   per robot, P key
     motors   the 4 motor speeds -> robot movement with an ideal omni-wheel model
-    dribbler holds the ball in the capture notch while on (loses it when turning / accelerating too hard, or
-             when an opponent touches it)
+    dribbler holds the ball in the capture notch while on (loses it when spinning / moving sideways or backwards
+             too fast, or when an opponent touches it)
     kicker   fires the ball forward at KICK_SPEED, with the cooldown from hardware_*.py
     goals    solid side and back walls (GOAL_WALL_T thick): the ball only gets in through the front
     referee  ball fully out of the playing area -> nearest free neutral spot at once (3 spots on the halfway line);
@@ -137,11 +137,13 @@ BALL_RADIUS = cfg.BALL_RADIUS   # robot_config.py
 BALL_FRICTION = 0.8          # 1/s velocity decay
 BALL_BOUNCE = 0.5            # wall restitution
 GOAL_WALL_T = 2.0            # cm, thickness of the goal's side and back walls (solid: the ball only gets in the front)
+OPP_PRESS_SPEED = 100.0      # cm/s, the pressing opponents (opp_style "press": they also chase our ball carrier)
 OPP_SPEED = 60.0             # cm/s, opponents chasing the ball
 
 KICK_SPEED = 250.0           # cm/s the kicker gives the ball - MEASURE
 DRIBBLE_MAX_SPIN = 6.0       # rad/s: turning faster than this while dribbling loses the ball
-DRIBBLE_MAX_ACCEL = 600.0    # cm/s^2: accelerating / braking harder than this loses the ball
+DRIBBLE_MAX_SIDE = 60.0      # cm/s: moving sideways (across the way the robot faces) or backwards faster than this
+                             # loses the ball (accelerating / braking doesn't)
 DRIBBLE_CATCH_SPEED = 120.0  # cm/s: a ball arriving faster than this bounces off the dribbler instead
 
 # referee: the ball fully outside the playing area -> off the field for BALL_OUT_DELAY s (no ball), then on the
@@ -151,6 +153,8 @@ BALL_PARK = (1e4, 0.0)       # where the ball is kept while it's off the field (
 NO_PROGRESS_TIME = 10.0      # referee: ball hasn't moved 5 cm in this long -> nearest free neutral spot
 DAMAGED_TIME = 30.0          # referee: a robot fully outside the playing area is taken off as damaged for this long
                              # (or until the next kickoff), then put back in its own half
+KICKOFF_SIDE = 20.0          # kickoff: the team that just scored has its striker this far to the side of its goalie,
+                             # touching the front of its penalty area
 PUSHED_TIME = 0.5            # referee: a robot that goes out within this long of touching an opponent, while not itself
 PUSHED_OUT_SPEED = 20.0      # driving outwards faster than this (cm/s), was pushed out: it comes straight back in
 PARK = (1e4, 1e4)            # where a taken-off robot is kept (far off the field: not drawn, not seen, no physics)
@@ -572,6 +576,8 @@ class Sim:
         self.ball_out_at = None       # where it went out
         self.noise = noise
         self.opp_ai = False
+        self.last_scorer = None   # who scored last: the other team kicks off (kickoff())
+        self.opp_style = "push"   # simple opponents: "push" the ball at our goal, or "press" (faster, chase our carrier)
         self.ticks = 0
         self.score = {"us": 0, "them": 0}
         self.goal_timer = None
@@ -606,15 +612,24 @@ class Sim:
         return _SIM_T[0] - 1000.0
 
     def kickoff(self):
+        """Kickoff positions. The team that just conceded (at the start: us) kicks off: its striker just behind the
+        centre spot in its own half. Every other robot - both of the team that just scored, and the kicking-off team's
+        goalie - starts in (or touching) its own penalty area: goalie in front of its goal, striker touching the
+        front of the area, KICKOFF_SIDE to the side."""
         for b in self.robots + self.opponents:     # a new point: taken-off robots come back
             b.removed_until = None
             if isinstance(b, SimRobot):
                 b.return_at = None
         g, s = self.robots
         R = cfg.ROBOT_RADIUS
+        box_y = field.OWN_GOAL_Y + field.PENALTY_D + R - 2          # centre with the robot's edge just in the area
         g.place(0, field.OWN_GOAL_Y + R + 8, 0)
-        s.place(0, -(R + 15), 0)
-        for o, (x, y) in zip(self.opponents, ((0, R + 15), (0, field.ATTACK_GOAL_Y - R - 8))):
+        if self.last_scorer == "us":
+            s.place(KICKOFF_SIDE, box_y, 0)
+        else:
+            s.place(0, -(R + 15), 0)
+        opp_striker = (-KICKOFF_SIDE, -box_y) if self.last_scorer == "them" else (0, R + 15)
+        for o, (x, y) in zip(self.opponents, (opp_striker, (0, field.ATTACK_GOAL_Y - R - 8))):
             o.place(x, y, math.pi)
         self.ball, self.ball_v = [0.0, 0.0], [0.0, 0.0]
         self.ball_away_until = None       # a kickoff always puts the ball back on the centre spot
@@ -652,16 +667,32 @@ class Sim:
         raw = self.cam.render(img, robot, self.rng if self.noise else None)
         return self.cam.topdown(raw)        # (outside the fov circle is already black)
 
+    _LDR_RING = None    # (N, 2) robot-frame LDR positions (computed once)
+
     def ldrs(self, robot):
-        out = []
-        for i in range(cfg.LDR_COUNT):
-            a = i * 2 * math.pi / cfg.LDR_COUNT + cfg.LDR_START_ANGLE + LDR_PHYSICAL_OFFSET
-            px, py = rotate([LDR_RING_RADIUS * math.cos(a), LDR_RING_RADIUS * math.sin(a)], robot.h)
-            v = LDR_WHITE if self.fimg.is_white(robot.x + px, robot.y + py) else LDR_GREEN
-            if self.noise:
-                v += int(self.rng.normal(0, 150))
-            out.append(v)
-        return out
+        """LDR readings: white / green under each sensor (+ noise). Vectorised (it was a big share of a fast-mode
+        game); same values and random numbers as reading them one by one."""
+        if Sim._LDR_RING is None:
+            ring = []
+            for i in range(cfg.LDR_COUNT):
+                a = i * 2 * math.pi / cfg.LDR_COUNT + cfg.LDR_START_ANGLE + LDR_PHYSICAL_OFFSET
+                ring.append([LDR_RING_RADIUS * math.cos(a), LDR_RING_RADIUS * math.sin(a)])
+            Sim._LDR_RING = np.array(ring)
+        c, s = math.cos(robot.h), math.sin(robot.h)
+        r = Sim._LDR_RING
+        x = robot.x + (r[:, 0] * c - r[:, 1] * s)
+        y = robot.y + (r[:, 0] * s + r[:, 1] * c)
+        f = self.fimg
+        u = np.round((x + f.W / 2) * f.ppc).astype(int)
+        v = np.round((f.L / 2 - y) * f.ppc).astype(int)
+        h, w = f.white.shape
+        ok = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+        white = np.zeros(len(u), bool)
+        white[ok] = f.white[v[ok], u[ok]] > 0
+        out = np.where(white, LDR_WHITE, LDR_GREEN)
+        if self.noise:
+            out = out + np.array([int(n) for n in self.rng.normal(0, 150, len(out))])
+        return [int(o) for o in out]
 
     # ---- one tick
     def step(self):
@@ -704,14 +735,21 @@ class Sim:
         for o in self.opponents:
             if isinstance(o, SimRobot) or o.removed_until is not None:
                 continue                 # self-play: drives itself / taken off
-            if self.opp_ai and self.start_at is None:     # same start signal as our robots (they're paused till then)
-                # get behind the ball (on the side away from our goal) and push it towards our goal (-y)
-                tx, ty = self.ball[0], self.ball[1] + o.r + BALL_RADIUS - 2
-                if o.y < self.ball[1]:
-                    tx += math.copysign(25, o.x - self.ball[0] or 1)
-                    ty = self.ball[1] + 25
+            if self.opp_ai and self.start_at is None and self.ball_away_until is None:
+                # (same start signal as our robots; while the ball is off the field they wait)
+                bx, by = self.ball
+                held = self.held_by is not None and self.held_by.team == "us"
+                if self.opp_style == "press" and held:
+                    tx, ty = bx, by                     # pressing: go straight for the ball our robot is carrying
+                else:
+                    # get behind the ball (on the side away from our goal) and push it towards our goal (-y)
+                    tx, ty = bx, by + o.r + BALL_RADIUS - 2
+                    if o.y < by:
+                        tx += math.copysign(25, o.x - bx or 1)
+                        ty = by + 25
                 d = math.hypot(tx - o.x, ty - o.y)
-                sp = min(OPP_SPEED, d * 4)
+                top = OPP_PRESS_SPEED if self.opp_style == "press" else OPP_SPEED
+                sp = min(top, d * 4)
                 o.vx, o.vy = ((tx - o.x) / d * sp, (ty - o.y) / d * sp) if d > 1e-6 else (0, 0)
             else:
                 o.vx = o.vy = 0.0
@@ -749,7 +787,8 @@ class Sim:
             if r.removed_until is not None:
                 continue
             fwd = rotate([0.0, 1.0], r.h)
-            accel = math.hypot(r.vx - r.prev_v[0], r.vy - r.prev_v[1]) / DT
+            rv = rotate([r.vx, r.vy], -r.h)                    # robot frame: [sideways, forwards]
+            side = max(abs(rv[0]), -rv[1])                     # sideways or backwards speed
             r.prev_v = (r.vx, r.vy)
             rx, ry = rotate([self.ball[0] - r.x, self.ball[1] - r.y], -r.h)
             in_notch = abs(rx) < notch_x and 0 < ry < rest_y + 2.5
@@ -774,9 +813,9 @@ class Sim:
                     self.log(f"{r.name} KICK")
                     continue
             if self.held_by is r:
-                if not r.bot.motors.dribbler or abs(r.w) > DRIBBLE_MAX_SPIN or accel > DRIBBLE_MAX_ACCEL:
+                if not r.bot.motors.dribbler or abs(r.w) > DRIBBLE_MAX_SPIN or side > DRIBBLE_MAX_SIDE:
                     why = ("dribbler off" if not r.bot.motors.dribbler else
-                           "spun too fast" if abs(r.w) > DRIBBLE_MAX_SPIN else "accel too hard")
+                           "spun too fast" if abs(r.w) > DRIBBLE_MAX_SPIN else "moved sideways / backwards")
                     self.count(f"{r.team} lost: {why}")
                     self.release(why)                    # lost it: it keeps the robot's speed and rolls away
                 else:
@@ -886,6 +925,7 @@ class Sim:
                 if lt is not None and lt.team != who:
                     self.count(f"own goal by {lt.name} in {self.last_touch_phase}")
             self.log(f"GOAL for {who}  ({self.score['us']}-{self.score['them']})")
+            self.last_scorer = who
             self.goal_timer = self.t + 1.0
         if self.goal_timer is not None and self.t >= self.goal_timer:
             self.kickoff()
@@ -1420,9 +1460,13 @@ def main():
     ap.add_argument("--seed", type=int, default=0, help="game seed: with --noise this replays arena.py's game of the "
                                                         "same seed (that side round: our code as 'us')")
     ap.add_argument("--opp", metavar="VERSION", help="opponents run this version of our code (a name from "
-                                                     "past_versions/, e.g. v26, or a folder) instead of the simple AI")
+                                                     "past_versions/, e.g. v26 or comp, or a folder) instead of the "
+                                                     "simple AI; 'press' = the simple AI pressing our ball carrier")
     args = ap.parse_args()
-    sim = Sim(noise=args.noise, seed=args.seed, fast=args.fast, opp_code=load_code(args.opp) if args.opp else None)
+    simple = args.opp in (None, "ai", "press")
+    sim = Sim(noise=args.noise, seed=args.seed, fast=args.fast, opp_code=None if simple else load_code(args.opp))
+    if args.opp == "press":
+        sim.opp_style, sim.opp_ai = "press", True
     sim.opp_name = args.opp or "simple AI"
     RV_FOR_DRAW.append(sim.rv)
     if args.headless:

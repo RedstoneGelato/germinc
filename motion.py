@@ -26,16 +26,21 @@ def VelocityToMotor(xvel, yvel, rot, maxspd): #convert variables into specific m
 
 BRAKE_SMOOTH = 0.5   # velocity smoothing when the new direction is the opposite of the current one (blends from
                      # `smooth` when it's the same): sharp changes of direction / slowing down react much faster
-TURN_DEADBAND = 0.03 # rad: closer than this to the wanted heading = don't turn
+TURN_DEADBAND = 0.03 # rad: closer than this to the wanted heading = stop turning...
+TURN_RESUME = 0.10   # ...and don't start again until it's this far off (no jitter / battery drain sitting still)
+PARK_ENTER = 2.0     # cm: this close to the target = stop moving (wheels off)...
+PARK_RESUME = 5.0    # ...until the target is this far away again (pose / ball noise moves it by a cm or two)
 
 
 def dribble_speed_multi(move, compass):
-    """1 when moving the way the robot faces, down to cfg.DRIBBLE_SPEED_MIN moving straight backwards (linear in
-    the angle between them). move = relative movement vector, compass = robot heading."""
+    """Speed multiplier with the ball: 1 straight forwards; otherwise capped so the sideways and the backwards part
+    of the movement each stay below cfg.DRIBBLE_SPEED_MIN (those lose the ball - braking / accelerating doesn't).
+    move = relative movement vector, compass = robot heading."""
     if math.hypot(move[0], move[1]) < 1e-6:
         return 1.0
-    angle = abs(wrap_pi(math.atan2(-move[0], move[1]) - compass))   # 0 = straight ahead, pi = straight back
-    return 1.0 - (1.0 - cfg.DRIBBLE_SPEED_MIN) * angle / math.pi
+    angle = wrap_pi(math.atan2(-move[0], move[1]) - compass)   # 0 = straight ahead, +-pi = straight back
+    side, back = abs(math.sin(angle)), max(0.0, -math.cos(angle))
+    return min(1.0, cfg.DRIBBLE_SPEED_MIN / max(side, back, 1e-6))
 
 
 class Mover:
@@ -45,6 +50,8 @@ class Mover:
     def reset(self):
         self.vel = [0.0, 0.0]          # smoothed velocity command, relative (field axes), motor speed units
         self.last_speeds = (0, 0, 0, 0)
+        self.parked = False            # sitting still at the target (PARK_*)
+        self.turn_parked = False       # facing the wanted heading closely enough (TURN_*)
 
     def step(self, desired_pos, desired_heading, compass, line, pose,
              base_speed=cfg.BASE_SPEED, spd_min=0.2, spd_multi=None, dribbler_on=False, smooth=0.1):
@@ -63,7 +70,11 @@ class Mover:
         # ---- turning: faster the further off the wanted heading
         heading_error = wrap_pi(desired_heading - compass) #angle difference between desired and actual
         turn_max = cfg.DRIBBLE_TURN_MAX if dribbler_on else cfg.TURN_MAX
-        if abs(heading_error) < TURN_DEADBAND: #dont spin if difference too small
+        if abs(heading_error) < TURN_DEADBAND:
+            self.turn_parked = True
+        elif abs(heading_error) > TURN_RESUME or not self.parked or dribbler_on:
+            self.turn_parked = False    # (the wider turning tolerance is only for sitting still: aiming needs precision)
+        if self.turn_parked: #dont spin if difference too small
             rot = 0.0
         else:
             rot = cfg.BASE_SPEED * turn_max * max(-1.0, min(1.0, heading_error / cfg.TURN_FULL_ERR))
@@ -78,7 +89,11 @@ class Mover:
         if dribbler_on:
             speed *= dribble_speed_multi(desired_pos, compass)
         d = math.hypot(desired_pos[0], desired_pos[1])
-        want = [desired_pos[0] / d * speed, desired_pos[1] / d * speed] if d > 0.5 else [0.0, 0.0]
+        if d < PARK_ENTER and not dribbler_on:
+            self.parked = True
+        elif d > PARK_RESUME or dribbler_on:
+            self.parked = False           # (never parked with the ball: carrying / aiming needs fine moves)
+        want = [0.0, 0.0] if self.parked or d < 0.5 else [desired_pos[0] / d * speed, desired_pos[1] / d * speed]
 
         if line.on_line and line.escape is not None:
             self.vel = [line.escape[0] * cfg.LINE_ESCAPE_SPEED, line.escape[1] * cfg.LINE_ESCAPE_SPEED]  # straight away from the line
@@ -90,6 +105,8 @@ class Mover:
             if wm < vm:
                 a = max(a, 2 * smooth)                                  # slowing down is quicker than speeding up
             self.vel = [v[0] + (want[0] - v[0]) * a, v[1] + (want[1] - v[1]) * a] #alpha beta smoothing
+            if self.parked and math.hypot(self.vel[0], self.vel[1]) < 0.02 * cfg.BASE_SPEED:
+                self.vel = [0.0, 0.0]                                   # parked: wheels really off
 
         # relative (field axes) -> robot frame, the axes VelocityToMotor uses
         x_field = -self.vel[1]

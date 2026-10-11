@@ -94,10 +94,10 @@ Both robots plan in **field coordinates** using the localisation. While a robot 
 | Goalie botstate | Striker botstate |
 | --- | --- |
 | 0 no ball known: guard the middle of the goal | 0 no ball known: if it went out, wait behind the neutral spot it comes back on (restart play); else look where it was last seen (`SEARCH_TIME`, 1 s), then wait just behind the centre spot (`WAIT_POS`) |
-| 1 ball in dribbler: stay put, turn up-field (max `GOALIE_KICK_TURN`), kick it clear | 1 ball in dribbler: carry to the best aim point, kick when lined up (sidestep if about to be tackled) |
+| 1 ball in dribbler: stay put, pass it past the striker to its more open side (`pass_aim()`, `PASS_*`; striker off: turn up-field, max `GOALIE_KICK_TURN`, and kick it clear) | 1 ball in dribbler: carry to the best aim point, kick when lined up (sidestep if about to be tackled) |
 | 2 clearing: go for the ball | 2 ball known: get behind it (orbit, then line up, then push) |
 | 3 guarding: on an arc between ball and goal | 3 no ball, goalie off: stand in front of our goal |
-| 4 ball out: guard as if it were on the neutral spot it'll come back to | 4 goalie is clearing: wait up-field for a pass |
+| 4 ball out: guard as if it were on the neutral spot it'll come back to | 4 goalie is clearing: wait up-field for a pass, facing up-field (no turning round to take it) |
 | | 5 ball out: wait just behind the neutral spot nearest the ball, facing the attack goal |
 
 The parts it's built from (all in `strategy.py`):
@@ -126,7 +126,8 @@ The parts it's built from (all in `strategy.py`):
   `command = 1`. The goalie also clears by itself when the ball is in its penalty area and close.
 - **Kick (striker):** only when the ball is in the dribbler and the robot's *actual heading* would put the ball
   between the posts: the heading line must cross the goal line at least `BALL_RADIUS + POST_MARGIN` inside a post,
-  within `KICK_RANGE`, with nothing in the way (`KICK_CLEARANCE`) - `GoalieStrategy.can_shoot()`. (Facing the aim
+  within `KICK_RANGE`, and the ball's path misses every robot (no extra margin: moving for more room wasted
+  chances) - `GoalieStrategy.can_shoot()`. (Facing the aim
   point within an angle isn't enough: from close and at a steep angle a few degrees off hits the post.) Aim points
   are on the goal line, `BALL_RADIUS + AIM_MARGIN` inside the posts. The goalie clears with the simpler angle check
   (`KICK_ANGLE`), from anywhere.
@@ -144,11 +145,31 @@ The parts it's built from (all in `strategy.py`):
   the side, it orbits.
 - **Opponent in the way:** an opponent between the striker and the ball (`blocker_between()`) isn't driven into (that
   shoves it onto the ball, maybe into our goal): the striker goes round the opponent and the ball together
-  (`around_group()`, `BLOCKER_*`), then gets on with it.
-- **Shoot from close:** planned shots only from within `KICK_RANGE` (35 cm) along the heading - against a goalie
-  that guards well, longer shots were mostly saved. Under pressure up to `PRESSURE_RANGE`.
-- **Under pressure:** with an opponent within `PRESSURE_DIST` the striker shoots as soon as its heading crosses
-  the goal mouth and the ball's path misses every robot (no `KICK_CLEARANCE` margin) - better than losing the ball.
+  (`around_group()`, `BLOCKER_*`), then gets on with it. Except when that shove would go mostly up-field
+  (`BLOCKER_UPFIELD`): then it just drives through - pushing the opponent and ball towards their goal is fine.
+- **Shoving matches:** an opponent touching us with the ball between us (`shover()`, `PUSHBACK_*`, e.g. at kickoff) is
+  shoved back at full speed - motion.py's speed drops when the target is close, so the robot crawled and got pushed
+  back towards our goal. The striker only does this going for the ball (with the ball, dodging scored more). The
+  goalie shoves straight back too, and with the ball in its dribbler kicks it out over a side line
+  (`GOALIE_KICK_OUT`): it comes back on the halfway line. It picks the side with no robot in the way of the kick,
+  else the nearer side (`kick_out_side()`, `GOALIE_OUT_CLEAR`).
+- **Who has the ball:** `possession()` -> `strategy.possession` = "us" (in our or the teammate's dribbler - shared as
+  "has ball"), "them" (an opponent right behind it) or None; shown in the status line as `ball:`.
+- **Goalie challenge:** an opponent has the ball within `CHALLENGE_DIST` (35 cm) of our goal centre -> the goalie
+  goes and knocks it out over the nearer side line (`knock_out_aim()`). Further out it still guards: challenging
+  from 45 cm+ conceded more in self-play.
+- **Coming in to the ball:** gently (`catch_speed()`), full speed when an opponent could get there first
+  (`RACE_MARGIN`). With the ball the robot brakes hard (the dribbler holds it braking / accelerating, see
+  `DRIBBLE_*` in robot_config.py: only sideways / backwards movement or spinning lose it).
+- **Going round (orbit, line up, round an opponent):** at least `ORBIT_SPD_MIN` (1.0 = full) speed - motion.py slows down
+  as the target gets close, and these waypoints are always close, so it crawled round (and got shoved). Lower
+  (0.5 - 0.85) was worse once the dribbler could brake hard.
+- **Shoot from close:** planned shots only from within `KICK_RANGE` (50 cm) along the heading - against a goalie
+  that guards well, longer shots were mostly saved. Under pressure up to `PRESSURE_RANGE`. At an open goal (no
+  robot within `OPEN_GOAL_DIST` of its centre, or the shot passes every robot by `OPEN_CLEAR`) from up to
+  `LONG_RANGE` (half the field).
+- **Under pressure:** with an opponent within `PRESSURE_DIST` the striker shoots from up to `PRESSURE_RANGE` -
+  better than losing the ball.
 - **Defending (from the simulator: nearly every goal against came while the goalie was off its line):**
   - the goalie **never goes round the ball**. If it isn't already between ball and goal when clearing, it stays
     on its guard arc until it is (`GoalieStrategy.guard()`).
@@ -157,7 +178,9 @@ The parts it's built from (all in `strategy.py`):
   - the striker does the same when the ball is in our half (`STRIKER_CLEAR_Y`) and it's goal-side of the ball:
     clear it from there instead of going round it (which leaves the opponent a free push at our goal).
   - the striker only waits for the goalie's clearance (botstate 4) while no opponent is on the ball.
-  - the goalie doesn't challenge a ball an opponent has (`OPP_ON_BALL`): it guards. It only goes for free balls.
+  - the goalie doesn't challenge a ball an opponent has (`OPP_ON_BALL`): it guards. It only goes for free balls -
+    except an opponent pushing the ball at our goal from close by (`PUSHER_*`): then it meets it (guarding just
+    got it bulldozed in by the old competition code).
   - **block:** a free ball rolling towards our goal line that will cross between the posts (`BLOCK_*`): the
     goalie goes to where it will cross the goalie's line, whatever it was doing (`block_point()`).
   - guarding moves use a proportional speed (`GUARD_GAIN`) and less smoothing (`GUARD_SMOOTH`, passed to
@@ -174,14 +197,23 @@ The parts it's built from (all in `strategy.py`):
     on the halfway line, far from our goal.
   - **goalie with the ball** (it has the striker's dribbler + kicker): stays put, turns up-field and kicks it clear.
 - **Restart play:** when the ball goes out (or was last seen at the line rolling out), the striker waits just
-  behind the neutral spot it'll come back on, facing their goal (`RESTART_WAIT`, `NEUTRAL_WAIT`).
+  behind the neutral spot it'll come back on, facing their goal (`RESTART_WAIT`, `NEUTRAL_WAIT`) - halfway in
+  from that spot towards the middle (`RESTART_X_SHARE`): right behind a side spot it couldn't see the ball when the
+  referee put it on the other side spot. It faces the spot it expects the ball on.
 - **On its own** (the other robot is off): the goalie only goes for the ball in our half or when it's clearly the
   closest (`SOLO_CHASE_Y`, `SOLO_CLOSER`); the striker guards our goal like a goalie when an opponent will get to a
   ball in our half first (`solo_defend()`).
 - **Dodge:** striker with the ball, no shot, an opponent within `DODGE_DIST` that is coming at it (`DODGE_CLOSING`,
   from the opponent velocities perception tracks) or already touching (`DODGE_NEAR`): sidestep (`DODGE_STEP`) away
-  from it, still facing the aim, up-field side if possible. An opponent standing still further away is just gone
-  round (dodging it made the striker shuffle left and right in front of it).
+  from it, still facing the aim: the side that's least effort to get past it (furthest across and up-field from it,
+  no robot there, in the field - `DODGE_PASS_GAP`, `DODGE_CROWDED`), then the side nearer the middle
+  (`DODGE_CENTRE_COST`). It sidesteps forwards (`DODGE_FORWARD`, 15 cm up-field), shouldering past the opponent -
+  backing away from it, it went left-right in front of a chasing opponent and lost ground (10 / 20 / 25 cm: worse).
+  Against their goalie it sidesteps towards the more open part of the goal. An opponent standing still further away is just gone
+  round (dodging it made the striker shuffle left and right in front of it). Sidestepping it may go closer to the
+  line (`DODGE_MARGIN`) than carrying (`CARRY_MARGIN`): the carrying lane was too narrow to get past a robot in the
+  middle of the field. (Tried: always finishing a sidestep / always dodging the same side again - fine against
+  robots standing still, much worse against v26.)
 - `around_ball()`: when the robot isn't meant to touch the ball (guarding, going round it, lining up) and the
   straight path would hit it, go via a point beside it.
 - `approach()` goes round (orbit) instead of straight to the line-up point when the straight path would clip the
@@ -250,7 +282,7 @@ The escape direction is a blend of whichever sources are available.
 | **Behaviour** | | |
 | goalie / striker behaviour (localised) | `strategy.py` `GoalieStrategy` / `StrikerStrategy` + constants at the top | all marked TUNE |
 | how far behind the ball to line up, orbit distance | `strategy.py`: `BEHIND_DIST`, `ORBIT_DIST`, `ALIGN_TOL` | |
-| when to kick | `strategy.py`: `KICK_RANGE`, `POST_MARGIN`, `KICK_CLEARANCE` (`KICK_ANGLE`: goalie clears) | |
+| when to kick | `strategy.py`: `KICK_RANGE`, `POST_MARGIN`, `LONG_RANGE`, `OPEN_*` (`KICK_CLEARANCE`, `KICK_ANGLE`: goalie clears) | |
 | ball size | `robot_config.py`: `BALL_RADIUS` | used by aims, the kick check and the simulator |
 | going for a moving ball, catching it gently | `strategy.py`: `LEAD_*`, `CATCH_MULTI_*`; `perception.py`: `BALL_VEL_*` | |
 | what counts as "ball out", where to wait for the restart | `strategy.py`: `BALL_OUT_MARGIN`, `NEUTRAL_WAIT`; spots in `field.NEUTRAL_SPOTS` | |
@@ -268,6 +300,7 @@ The escape direction is a blend of whichever sources are available.
 | top speed, line escape speed, wheel limit | `robot_config.py`: `BASE_SPEED`, `LINE_ESCAPE_SPEED`, `MOTOR_MAX` | shared by both |
 | how fast it turns | `robot_config.py`: `TURN_MAX` (x `BASE_SPEED` on every wheel), `TURN_FULL_ERR` (heading error for full turn speed), `DRIBBLE_TURN_MAX` | turning speed is proportional to the heading error and doesn't depend on how fast it moves |
 | how quickly it brakes / changes direction | `motion.py`: `BRAKE_SMOOTH` (vs the strategy's `smooth`) | the velocity is smoothed as one vector, faster the more the direction changes |
+| sitting still without jittering (saves battery) | `motion.py`: `PARK_ENTER` / `PARK_RESUME`, `TURN_DEADBAND` / `TURN_RESUME` | within 2 cm of its target the wheels stop until the target is 5 cm away (not with the dribbler on) |
 | speed vs distance curve | `motion.py` `Mover.step` | |
 | how much slower it drives sideways / backwards with the dribbler on | `robot_config.py`: `DRIBBLE_SPEED_MIN` | `motion.dribble_speed_multi()` |
 | how gently it speeds up / turns with the dribbler on | `robot_config.py`: `DRIBBLE_MAX_ACCEL` | `Mover.step` limits wheel speed changes |
@@ -359,6 +392,8 @@ python arena.py --games 22                       # against the simple opponents 
 python arena.py --games 22 --opp ../old_version  # against another copy of our own code (self-play)
 python arena.py --games 44 --fast --opp ../old   # fast mode, ~10x quicker (see below)
 python arena.py --games 22 --opp v35 --watch     # also watch all the running games live in one window
+python arena.py --games 22 --opp press           # simple AI that also chases our ball carrier (harder)
+python arena.py --games 22 --opp comp            # the old competition logic (past_versions/comp) - the toughest
 ```
 
 **Past versions:** `past_versions/` holds milestone snapshots of the robot code (see its README). Play against one

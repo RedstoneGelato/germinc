@@ -46,10 +46,10 @@ MOTOR_MAX = BASE_SPEED * 1.5               # no wheel is ever asked for more tha
 TURN_MAX = 0.6
 TURN_FULL_ERR = 1.0
 DRIBBLE_TURN_MAX = 0.4                     # ...at most this with the dribbler on (turning too fast loses the ball)
-# dribbler on: slow down the more the movement direction differs from where the robot faces (the ball stays in the
-# dribbler best when driving forwards). Speed multiplier = 1 driving straight forwards, falling linearly with the
-# angle to DRIBBLE_SPEED_MIN driving straight backwards (sideways = halfway between).
-DRIBBLE_SPEED_MIN = 0.3
-# dribbler on: each wheel's speed may change by at most this many BASE_SPEEDs per second (2.5 = standstill to full
-# speed in 0.4 s), so sudden changes of direction don't jerk the ball out of the dribbler
-DRIBBLE_MAX_ACCEL = 2.5
+# dribbler on: accelerating and braking don't lose the ball - moving SIDEWAYS or BACKWARDS too fast (relative to where
+# the robot faces), or spinning fast (DRIBBLE_TURN_MAX), does. So the speed is capped so that neither the sideways
+# nor the backwards part of the movement is faster than DRIBBLE_SPEED_MIN x the speed (forwards: no limit).
+DRIBBLE_SPEED_MIN = 0.38           # TUNE on the robot: fastest sideways / backwards speed (x BASE_SPEED) keeping the ball
+# dribbler on: each wheel's speed may change by at most this many BASE_SPEEDs per second (10 = standstill to full
+# speed in 0.1 s) - braking / accelerating doesn't lose the ball, this only smooths out jerks
+DRIBBLE_MAX_ACCEL = 10.0

@@ -41,9 +41,11 @@ def play(args):
     cv2.setNumThreads(1)          # one game per core already: OpenCV's own threads would only fight over the cores
     import simulator as S
     S._SIM_T[0] = 1000.0          # the sim clock is per process, and pool processes play several games
-    code = S.load_code(opp) if opp != "ai" else None
+    code = S.load_code(opp) if opp not in ("ai", "press") else None
     sim = S.Sim(noise=True, seed=seed, opp_code=code, fast=fast)
     sim.opp_ai = True
+    if opp == "press":
+        sim.opp_style = "press"
     held = {"us": 0, "them": 0}
     ball_y = 0.0
     n = 0
@@ -150,8 +152,9 @@ def watch(q, pending, args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--opp", default="ai", help="'ai' (simple opponents), a name from past_versions/ (e.g. v26) or a "
-                                                "folder with another version of the code")
+    ap.add_argument("--opp", default="ai", help="'ai' (simple opponents pushing the ball at our goal), 'press' (simple "
+                                                "opponents that also chase our ball carrier), a name from past_versions/ "
+                                                "(e.g. v26, comp = the old competition logic) or a folder with the code")
     ap.add_argument("--games", type=int, default=10)
     ap.add_argument("--seconds", type=float, default=60)
     ap.add_argument("--jobs", type=int, default=max(1, mp.cpu_count() - 1))
@@ -163,7 +166,7 @@ def main():
     ap.add_argument("--dump", help="also save every game's results (incl. each kick) to this JSON file")
     args = ap.parse_args()
 
-    if args.opp != "ai":         # check the opponent exists here (in the game processes it would just hang the pool)
+    if args.opp not in ("ai", "press"):         # check the opponent exists here (in the game processes it would just hang the pool)
         from simulator import code_folder
         args.opp = code_folder(args.opp)
     t0 = time.perf_counter()
