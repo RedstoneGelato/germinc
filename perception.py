@@ -25,8 +25,10 @@ OBSTACLE_MEMORY = 0.4         # s an obstacle is remembered (field frame) after 
                               # that had moved on stayed behind as ghosts)...
 OBSTACLE_VISIBLE = 70.0       # ...unless it's closer than this (cm), where the camera would definitely still see it
 MATE_MATCH = cfg.ROBOT_RADIUS + 15.0   # cm: an obstacle this close to where the teammate says it is = the teammate
-OPP_MATCH = 15.0              # cm: an opponent this close to one in the previous frame = the same robot (velocity)
-OPP_VEL_SMOOTH = 0.3          # 0..1 how much of each frame's opponent velocity is taken
+OPP_MATCH = 15.0              # cm: an opponent this close to where its track was last = the same robot (velocity)
+OPP_VEL_WINDOW = 0.3          # s: opponent velocity = straight-line fit through its positions over this long (frame to
+OPP_VEL_MIN_SPAN = 0.1        # frame differences were mostly noise: +-30 cm/s for a robot standing still); 0 until
+OPP_TRACK_LOST = 0.3          # it's been tracked this long (s). A track not matched for OPP_TRACK_LOST s is dropped
 OPP_MERGE = 15.0              # cm: a teammate's opponent this close to one of ours = the same robot
 
 
@@ -39,6 +41,18 @@ def front_of(o):
     d = math.hypot(o.centre[0], o.centre[1]) or 1.0
     k = max(d - cfg.ROBOT_RADIUS, 0.0) / d
     return [o.centre[0] * k, o.centre[1] * k]
+
+
+def fit_velocity(track):
+    """Least-squares slope (cm/s) of x and y against time through [(t, x, y), ...]."""
+    n = len(track)
+    mt = sum(p[0] for p in track) / n
+    mx = sum(p[1] for p in track) / n
+    my = sum(p[2] for p in track) / n
+    var = sum((p[0] - mt) ** 2 for p in track)
+    if var < 1e-9:
+        return [0.0, 0.0]
+    return [sum((p[0] - mt) * (p[1] - mx) for p in track) / var, sum((p[0] - mt) * (p[2] - my) for p in track) / var]
 
 
 def centre_of(pose, near):
@@ -108,7 +122,7 @@ class World:
         self.opponents_own = []       # field frame CENTRES of the opponents our camera sees now (sent to the teammate)
         self.opponents = []           # field frame centres: ours (incl. remembered) + the teammate's that we don't see
         self.opponent_vel = []        # field frame cm/s, one per opponents entry ([0, 0] when it's new)
-        self.prev_opponents = ([], 0.0)
+        self.opp_tracks = []          # [[(t, x, y), ...]] recent positions of each opponent (opponent_velocities())
         self.pose = None
         self.field_visible = False
 
@@ -208,22 +222,25 @@ class World:
         self.prev_ball = (list(b), now)
 
     def opponent_velocities(self, now):
-        """Each opponent's velocity: matched to the nearest one in the previous frame, smoothed."""
-        prev, t_prev = self.prev_opponents
-        prev_vel = getattr(self, "_prev_vel", [])
+        """Each opponent's velocity (field frame cm/s): it's matched to the nearest track (its recent positions), and
+        the velocity is the slope of a straight-line fit through the last OPP_VEL_WINDOW s of them - averaging over
+        many frames instead of differencing two (a few mm of position noise per frame was tens of cm/s)."""
+        tracks = [t for t in self.opp_tracks if now - t[-1][0] < OPP_TRACK_LOST]
+        free = list(range(len(tracks)))
         vels = []
-        dt = now - t_prev
         for o in self.opponents:
-            v = [0.0, 0.0]
-            if prev and 1e-3 < dt < 0.3:
-                k = min(range(len(prev)), key=lambda i: math.hypot(prev[i][0] - o[0], prev[i][1] - o[1]))
-                if math.hypot(prev[k][0] - o[0], prev[k][1] - o[1]) < OPP_MATCH:
-                    raw = [(o[0] - prev[k][0]) / dt, (o[1] - prev[k][1]) / dt]
-                    old = prev_vel[k] if k < len(prev_vel) else raw
-                    v = [old[0] * (1 - OPP_VEL_SMOOTH) + raw[0] * OPP_VEL_SMOOTH,
-                         old[1] * (1 - OPP_VEL_SMOOTH) + raw[1] * OPP_VEL_SMOOTH]
-            vels.append(v)
-        self.prev_opponents, self._prev_vel = (list(self.opponents), now), vels
+            k = min(free, key=lambda i: math.hypot(tracks[i][-1][1] - o[0], tracks[i][-1][2] - o[1]), default=None)
+            if k is None or math.hypot(tracks[k][-1][1] - o[0], tracks[k][-1][2] - o[1]) > OPP_MATCH:
+                tracks.append([(now, o[0], o[1])])
+                vels.append([0.0, 0.0])
+                continue
+            free.remove(k)
+            tr = tracks[k]
+            tr.append((now, o[0], o[1]))
+            while now - tr[0][0] > OPP_VEL_WINDOW:
+                tr.pop(0)
+            vels.append(fit_velocity(tr) if tr[-1][0] - tr[0][0] >= OPP_VEL_MIN_SPAN else [0.0, 0.0])
+        self.opp_tracks = tracks
         return vels
 
     def merge_opponents(self, pose, mate):

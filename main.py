@@ -70,6 +70,8 @@ class GoalieBrain:
         speeds = bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed,
                                 dribbler_on=dribbler_on) #slower the more sideways/backwards it moves while dribbling
         bot.actuate(speeds, dribbler_on, strategy.kick)
+        if hasattr(strategy, "note_kick"):
+            strategy.note_kick()
 
 #----------------------------------------------------------------------
 #            comms to other bot

@@ -91,7 +91,28 @@ Both robots plan in **field coordinates** using the localisation. While a robot 
 (`pose.confident` false: just put down, or lost), it automatically falls back to the comp-style relative logic in
 `strategy_fallback.py`. In the simulator / printout those states show as 10 + the fallback botstate.
 
-| Goalie botstate | Striker botstate |
+**The striker (`StrikerStrategy`)** was rebuilt by playing ports of other teams' strategies in the simulator
+(`past_versions/ts`, `ba`, `lx`, `tn`, see section 11):
+- **Ball in play, not ours: "chase"** (`chase()`, `CHASE_*`) - straight along the ball's angle at
+  (nearly) full speed, aiming further round it the closer it is so it curls in behind it, turning to face it once
+  close and in front. (The old careful orbit / line-up lost every race for the ball.)
+- **Ball in the dribbler: "carry"** - straight at their goal, facing it. Kicks when facing the
+  goal for `CARRY_KICK_HOLD` within `CARRY_KICK_RANGE`, right after winning the ball (`QUICK_SHOT_*`), or when an
+  opponent charges at it (`CHARGED_*`) - each only if the shot is open (`shot_open()`).
+- **Carry direction (`carry_dir()`, `CARRY_*`):** the direction nearest straight at their goal that keeps every
+  opponent coming at us (closing faster than `CARRY_CLOSING`, within `CARRY_CONTACT_RANGE`, allowing for
+  `CARRY_LEAD` s of its movement) outside our front ±`CARRY_FRONT_CONE` - so if we bump into it, it's with the side
+  or back of the robot, not the capture zone with the ball.
+- **"slip past"**: an opponent pressed head-on against the ball (kickoffs) - step forwards past it on the open side
+  (`HEAD_ON_*`, `SLIP_*`) instead of driving into it.
+- **Ball out / not seen: "restart: ..."** - the old striker (`CarefulStriker`, runs every loop for its ball memory)
+  plays restarts, searching and waiting (the table below). It waits right behind the neutral spot it expects
+  (`RESTART_X_SHARE` 1) - restarts decide many games, the ball goes out ~20 times a game - and faces the far
+  corner when their goalie is home (an opponent within 30 cm of their goal), to shoot straight away.
+- Never goes into our penalty area while the goalie is on (`keep_out_of_box()`, `BOX_KEEP`): both robots in it with
+  the ball is multiple defence, and the referee moves the goalie out.
+
+| Goalie botstate | Striker botstate (`CarefulStriker`: ball out / not seen) |
 | --- | --- |
 | 0 no ball known: guard the middle of the goal | 0 no ball known: if it went out, wait behind the neutral spot it comes back on (restart play); else look where it was last seen (`SEARCH_TIME`, 1 s), then wait just behind the centre spot (`WAIT_POS`) |
 | 1 ball in dribbler: stay put, pass it past the striker to its more open side (`pass_aim()`, `PASS_*`; striker off: turn up-field, max `GOALIE_KICK_TURN`, and kick it clear) | 1 ball in dribbler: carry to the best aim point, kick when lined up (sidestep if about to be tackled) |
@@ -100,7 +121,8 @@ Both robots plan in **field coordinates** using the localisation. While a robot 
 | 4 ball out: guard as if it were on the neutral spot it'll come back to | 4 goalie is clearing: wait up-field for a pass, facing up-field (no turning round to take it) |
 | | 5 ball out: wait just behind the neutral spot nearest the ball, facing the attack goal |
 
-The parts it's built from (all in `strategy.py`):
+The parts it's built from (all in `strategy.py`; `ShotPlanner`, `approach()`'s orbit / line up, the dodge are
+`CarefulStriker`'s own ball play, now unused while the ball is in play):
 - `approach()`: get behind the ball relative to an aim point. If the robot is on the wrong side, it goes round
   (`orbit`, on whichever side stays in the field), then lines up (`line up`), then drives through (`push`).
 - `best_aim()`: tries `AIM_POINTS` points across the goal and picks the one with the most room between the
@@ -155,6 +177,17 @@ The parts it's built from (all in `strategy.py`):
   else the nearer side (`kick_out_side()`, `GOALIE_OUT_CLEAR`).
 - **Who has the ball:** `possession()` -> `strategy.possession` = "us" (in our or the teammate's dribbler - shared as
   "has ball"), "them" (an opponent right behind it) or None; shown in the status line as `ball:`.
+- **Goalie under pressure with the ball:** an opponent within 2R + 20 cm -> no lining up a pass, it clears the
+  first moment it faces up-field / out ("clear now").
+- **Goalie looks at the other spot:** ball out (striker on) -> it comes up to `LOOK_DIST` (55 cm) from the neutral
+  spot the striker isn't waiting at, facing it (from right behind one side spot the striker's camera can't see the
+  other), so the striker learns at once where the ball came back ("look at spot"). (Going all the way up to cover a
+  spot left the goal open; 70 cm was worse.)
+- **Goalie steps up:** ball deep in their half (y > 50) and no opponent back in our half -> it moves up behind the
+  striker for rebounds / clearances ("step up"), and back when the ball comes back.
+- **Goalie back in goal after clearing:** after it kicks, it doesn't go for the ball again for `KICK_RETURN_T` (1 s),
+  and it never chases further than `GOALIE_MAX_OUT` past its penalty area (unless the striker hands it the ball) -
+  it used to chase a cleared ball up-field and leave the goal empty.
 - **Goalie challenge:** an opponent has the ball within `CHALLENGE_DIST` (35 cm) of our goal centre -> the goalie
   goes and knocks it out over the nearer side line (`knock_out_aim()`). Further out it still guards: challenging
   from 45 cm+ conceded more in self-play.
@@ -163,7 +196,8 @@ The parts it's built from (all in `strategy.py`):
   `DRIBBLE_*` in robot_config.py: only sideways / backwards movement or spinning lose it).
 - **Going round (orbit, line up, round an opponent):** at least `ORBIT_SPD_MIN` (1.0 = full) speed - motion.py slows down
   as the target gets close, and these waypoints are always close, so it crawled round (and got shoved). Lower
-  (0.5 - 0.85) was worse once the dribbler could brake hard.
+  (0.5 - 0.85) was worse once the dribbler could brake hard. The goalie keeps `GOALIE_ORBIT_SPD_MIN` (0.5): at full
+  speed it overshot near its goal (on its own, striker off, it conceded a third more).
 - **Shoot from close:** planned shots only from within `KICK_RANGE` (50 cm) along the heading - against a goalie
   that guards well, longer shots were mostly saved. Under pressure up to `PRESSURE_RANGE`. At an open goal (no
   robot within `OPEN_GOAL_DIST` of its centre, or the shot passes every robot by `OPEN_CLEAR`) from up to
@@ -199,7 +233,7 @@ The parts it's built from (all in `strategy.py`):
 - **Restart play:** when the ball goes out (or was last seen at the line rolling out), the striker waits just
   behind the neutral spot it'll come back on, facing their goal (`RESTART_WAIT`, `NEUTRAL_WAIT`) - halfway in
   from that spot towards the middle (`RESTART_X_SHARE`): right behind a side spot it couldn't see the ball when the
-  referee put it on the other side spot. It faces the spot it expects the ball on.
+  referee put it on the other side spot. It faces up-field (ready to go round the ball towards their goal).
 - **On its own** (the other robot is off): the goalie only goes for the ball in our half or when it's clearly the
   closest (`SOLO_CHASE_Y`, `SOLO_CLOSER`); the striker guards our goal like a goalie when an opponent will get to a
   ball in our half first (`solo_defend()`).
@@ -356,7 +390,13 @@ python simulator.py                  # window: field, both robots, two opponents
 python simulator.py --headless 30    # no window: 30 simulated seconds, prints score / outs / localisation error
 python simulator.py --opp v26        # opponents run a past version of our code (past_versions/) instead of the AI
 python simulator.py --fast           # no camera simulation (see Fast mode below)
+python simulator.py --opp ba         # other teams' strategies (approximate ports, in our coordinates):
+                                     #   ts = TS (2025 Nationals), ba = Bodensee Adler (2026 international Open vision),
+                                     #   lx = lnxrobots (Open gen 3), tn = Technulgy (Open 2025) striker + our v79 goalie
 ```
+
+**Kickoff rule:** the team that just conceded kicks off; the team that scored starts with both robots in / touching
+its penalty area. The window's top line shows the seed (`--seed`) and time, to replay a moment.
 
 It runs the real `GoalieBrain` / `StrikerBrain`, so everything from camera detection through to motor speeds
 is the robot's own code. Only the hardware is fake:
@@ -364,7 +404,7 @@ is the robot's own code. Only the hardware is fake:
 | Real | Simulated |
 | --- | --- |
 | camera + lens + top-down calibration | the field through a `CAM_FOV_DEG` fisheye lens `CAM_HEIGHT` cm up at `CAM_RES` pixels (far things get blurry like the real one), turned into a `TOPDOWN_PPC` px/cm top-down view, then the real `robot_vision.py` masks and `detection.py` |
-| dribbler | holds the ball in the capture notch while on; loses it when turning faster than `DRIBBLE_MAX_SPIN`, accelerating harder than `DRIBBLE_MAX_ACCEL`, or when an opponent touches it |
+| dribbler | holds the ball in the capture notch while on; loses it when spinning faster than `DRIBBLE_MAX_SPIN`, moving sideways / backwards faster than `DRIBBLE_MAX_SIDE`, or when an opponent touches it. A ball squeezed between two robots: the contacts are handled in a random order each tick (a fixed order let one robot shove the other back at full speed) |
 | kicker | ball leaves at `KICK_SPEED` (+ robot speed), cooldown from the hardware file |
 | goals | solid side and back walls (`GOAL_WALL_T` thick): the ball bounces off them, robots can't drive through them, so goals only count through the front |
 | referee | ball **fully** outside the playing area (goal mouths count as in) → off the field for `BALL_OUT_DELAY` (2 s, no ball), then on the free neutral spot nearest to where it went out; not moving for `NO_PROGRESS_TIME` → nearest free spot at once. **Multiple defence:** ball in a penalty area with both defending robots in it → the one further from the ball is moved just outside the area. A robot **pushed** out by an opponent (`PUSHED_TIME`, `PUSHED_OUT_SPEED`) is put straight back in. Neutral spots (`field.NEUTRAL_SPOTS`): the kickoff spot and `NEUTRAL_SIDE` (30 cm) left / right of it on the halfway line. A robot fully outside the playing area is taken off as damaged for `DAMAGED_TIME` (30 s) or until the next kickoff (switched off, its teammate sees it as inactive), then put back level with its own goal, on the side further from the ball |

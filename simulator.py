@@ -859,7 +859,9 @@ class Sim:
             if vn < 0:
                 vx -= (1 + BALL_BOUNCE) * vn * n[0]
                 vy -= (1 + BALL_BOUNCE) * vn * n[1]
-        for b in bodies:
+        contact_order = list(bodies)
+        self.rng.shuffle(contact_order)          # no robot gets the last push every tick (in a squeeze between two
+        for b in contact_order:                  # robots the last one won: it shoved the other back at full speed)
             if b is self.held_by:
                 continue
             hit = self.ball_overlap(b, bx, by, rest_y, notch_x)
@@ -1329,7 +1331,7 @@ class Viewer:
         cv2.putText(img, f"t={s.t:5.1f}s  x{self.speed:g}{'' if self.running else '  PAUSED'}   "
                          f"score {s.score['us']}-{s.score['them']}   "
                          f"opp {getattr(s, 'opp_name', 'simple AI')}{'' if getattr(s, 'opp_name', 'simple AI') != 'simple AI' else (' on' if s.opp_ai else ' off')}"
-                         f"   noise {'on' if s.noise else 'off'}",
+                         f"   noise {'on' if s.noise else 'off'}   seed {s.seed}",
                     (8, 18), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), 1)
         return img
 
