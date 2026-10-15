@@ -148,7 +148,7 @@ DRIBBLE_CATCH_SPEED = 120.0  # cm/s: a ball arriving faster than this bounces of
 
 # referee: the ball fully outside the playing area -> off the field for BALL_OUT_DELAY s (no ball), then on the
 # free neutral spot nearest to where it went out
-BALL_OUT_DELAY = 2.0
+BALL_OUT_DELAY = 0.5          # s an out ball is off the field before the referee puts it back (real referees: ~0.5 s)
 BALL_PARK = (1e4, 0.0)       # where the ball is kept while it's off the field (not drawn, not seen, no physics)
 NO_PROGRESS_TIME = 10.0      # referee: ball hasn't moved 5 cm in this long -> nearest free neutral spot
 DAMAGED_TIME = 30.0          # referee: a robot fully outside the playing area is taken off as damaged for this long

@@ -1,24 +1,32 @@
 """
-strategy.py - what each robot decides to do, in FIELD coordinates (uses the localisation).
+strategy.py - what each robot decides to do, every loop.
 
-    GoalieStrategy   (main.py)         guard an arc in front of our goal, clear the ball when it's ours to take
-    StrikerStrategy  (main_attack.py)  chase the ball fast (like team TS), carry it straight at the goal and kick
-                                       (like Bodensee Adler); restarts / ball out: CarefulStriker (our old striker)
+(New to this file? Read STRATEGY_EXPLAINED.md first: it explains the Python and the maths used here.)
 
-While the localisation isn't confident, both hand over to the comp-style relative logic in strategy_fallback.py.
+The three "brains" in this file:
+    GoalieStrategy   (main.py)         guard the goal, clear the ball when it's ours to take
+    StrikerStrategy  (main_attack.py)  chase the ball fast, carry it at their goal and kick
+    CarefulStriker   (inside StrikerStrategy)  our old striker - only used while the ball is out / not seen
+                                       (waiting at the restart spot, searching, ...)
 
-Interface (used by the brains in main.py / main_attack.py):
+While the robot doesn't know where it is on the field (pose not confident), both hand over to the comp-style
+relative logic in strategy_fallback.py.
+
+Every brain has the same update() - main.py / main_attack.py call it once per loop:
     update(world, compass, mate, line_touches) -> (desired_pos, desired_heading, dribbler_on)
-        desired_pos      relative vector (field axes, cm) to drive along
-        desired_heading  compass heading to turn to (radians, 0 = facing the attack goal, CCW +)
+        desired_pos      arrow (x, y in cm, field directions) from the robot to where it should go
+        desired_heading  compass heading to turn to (radians, 0 = facing the goal we attack, + = anticlockwise)
+        dribbler_on      True / False
+and sets these for the main loop to read:
     .kick      True = fire the kicker this loop (ignored without a kicker / while it recharges)
-    .speed     speed profile for motion.Mover.step
-    .botstate  number for printing / the simulator
+    .speed     speed settings for motion.Mover.step, e.g. {"spd_multi": 0.6} = 60% speed
+    .botstate  a number for printing / the simulator
+    .phase     a word for printing / the simulator ("chase", "carry", "guard", ...)
     .chasing   True = this robot is going for the ball (sent to the teammate)
     .command   striker only: 1 = goalie take the ball, 0 = goalie stay in goal (sent to the goalie)
 
-Who goes for the ball: both robots know both positions and the ball (comms), and the striker decides with the
-same cost for both (distance to the ball, plus a penalty for being on the wrong side of it).
+FIELD COORDINATES (cm): (0, 0) = centre of the field, +y = towards the goal we attack, +x = right when facing it.
+A point is a pair (x, y): p[0] = x, p[1] = y.
 """
 import math
 import time
@@ -117,6 +125,7 @@ STEP_UP_CLEAR_Y = -20.0           # step up to (ball x * STEP_UP_X_SHARE, STEP_U
 STEP_UP_X_SHARE = 0.3             # clearances
 STEP_UP_Y = -40.0
 LOOK_DIST = 55.0                  # goalie, ball out: stand this far from the spot the striker can't see
+GOALIE_ALONE_ATTACKS = True       # striker off: the goalie plays the striker's logic
 KICK_RETURN_T = 1.0               # goalie: after kicking / clearing, this long (s) before it goes for the ball again
 GOALIE_MAX_OUT = 12.0             # goalie going for the ball: not further than this past the penalty area's front
 PUSHBACK_REACH = 40.0             # (a close target means a slow robot, which just gets pushed back to our goal)
@@ -181,155 +190,205 @@ NEUTRAL_WAIT = R + 11.0           # ball out: striker waits this far behind the 
                                   # (not on it: an occupied spot isn't used, the ball would go somewhere else)
 
 
-# ==================================== helpers ====================================
+# =====================================================================================================================
+#                                                  HELPERS
+# Small tools used by the brains further down. Each takes points / numbers and gives back an answer.
+# Reminder: a point or an arrow is a pair (x, y). "unit arrow" = an arrow of length 1 (just a direction).
+# =====================================================================================================================
+
+# ---------------------------------------------- basic geometry -----------------------------------------------------
+
 def unit(v):
-    n = math.hypot(v[0], v[1])
-    return (0.0, 0.0) if n < 1e-9 else (v[0] / n, v[1] / n)
+    """The arrow v shortened (or stretched) to length 1 - just its direction. (0, 0) if v has no length."""
+    length = math.hypot(v[0], v[1])
+    if length < 1e-9:                      # (almost) zero: can't divide by it
+        return (0.0, 0.0)
+    return (v[0] / length, v[1] / length)
 
 
 def heading_for(d):
-    """Direction (field axes) -> compass heading that faces it."""
+    """Arrow d (field directions) -> the compass heading that faces along it."""
     return math.atan2(-d[0], d[1])
 
 
 def clamp_in_field(p, margin=FIELD_MARGIN):
-    hx = field.PLAY_W / 2 - margin
-    hy = field.PLAY_L / 2 - margin
-    return [min(max(p[0], -hx), hx), min(max(p[1], -hy), hy)]
+    """Point p moved back inside the field (at least `margin` cm inside the white line)."""
+    half_x = field.PLAY_W / 2 - margin     # furthest the point may be from the centre, sideways
+    half_y = field.PLAY_L / 2 - margin     # ...and up / down the field
+    x = min(max(p[0], -half_x), half_x)
+    y = min(max(p[1], -half_y), half_y)
+    return [x, y]
 
 
 def dist(a, b):
+    """Distance (cm) between points a and b."""
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 def seg_dist(p, a, b):
-    """Distance from p to the segment a-b, and how far along it (0..1) the closest point is."""
-    ab = (b[0] - a[0], b[1] - a[1])
-    L2 = ab[0] ** 2 + ab[1] ** 2
-    t = 0.0 if L2 < 1e-9 else max(0.0, min(1.0, ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / L2))
-    c = (a[0] + t * ab[0], a[1] + t * ab[1])
-    return dist(p, c), t
+    """How close point p comes to the straight line from a to b.
+    Returns (that distance, t): t = where along the line the closest point is (0 = at a, 1 = at b)."""
+    ab = (b[0] - a[0], b[1] - a[1])                  # arrow a -> b
+    length_squared = ab[0] ** 2 + ab[1] ** 2
+    if length_squared < 1e-9:                        # a and b are the same point
+        t = 0.0
+    else:
+        along = (p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]     # dot product: how far p is along a -> b
+        t = max(0.0, min(1.0, along / length_squared))            # ...as a share of the line, kept 0..1
+    closest = (a[0] + t * ab[0], a[1] + t * ab[1])
+    return dist(p, closest), t
 
+
+# ------------------------------------------ robots and the ball ----------------------------------------------------
 
 def ball_cost(pos, ball):
-    """How bad a robot at pos is placed to take the ball (cm): distance, + penalty if it's up-field of the ball."""
+    """How badly a robot at pos is placed to take the ball (cm): its distance to the ball, + WRONG_SIDE_COST if it's
+    up-field of the ball (it would have to go round it)."""
     if pos is None:
-        return float("inf")
-    return dist(pos, ball) + (WRONG_SIDE_COST if pos[1] > ball[1] + 5 else 0.0)
+        return float("inf")                          # position unknown: worst possible
+    cost = dist(pos, ball)
+    if pos[1] > ball[1] + 5:
+        cost = cost + WRONG_SIDE_COST
+    else:
+        cost = cost + 0.0
+    return cost
 
 
 def obstacle_centres(me, obstacles):
-    """Obstacles are stored as the point nearest to us (their front edge as we see it); their centre is about one
-    robot radius further away."""
-    out = []
-    for o, size in obstacles:
-        u = unit((o[0] - me[0], o[1] - me[1]))
-        out.append((o[0] + u[0] * R, o[1] + u[1] * R))
-    return out
+    """The camera stores each robot it sees as the point nearest to us (its front edge as we see it). Its centre is
+    about one robot radius further away from us - this gives the list of centres."""
+    centres = []
+    for edge_point, size in obstacles:
+        away = unit((edge_point[0] - me[0], edge_point[1] - me[1]))     # direction from us to it
+        centres.append((edge_point[0] + away[0] * R, edge_point[1] + away[1] * R))
+    return centres
 
+
+# ----------------------------------------------- shooting ----------------------------------------------------------
 
 def best_aim(ball, centres, max_range=None):
-    """Point in the attack goal with the most room around the ball's path to it (only points within max_range).
-    centres = obstacle centres. Returns (aim, clearance = gap between the path and the nearest obstacle's edge);
-    clearance is -1e9 if no aim point is in range."""
-    half = field.GOAL_W / 2 - cfg.BALL_RADIUS - AIM_MARGIN
-    y = field.ATTACK_GOAL_Y                     # on the goal line: a ball through these clears the posts
+    """The point in their goal with the most room around the ball's path to it (only points within max_range).
+    centres = robot centres. Returns (aim point, clearance = gap between the path and the nearest robot's edge);
+    clearance is -1e9 if no point is in range."""
+    half = field.GOAL_W / 2 - cfg.BALL_RADIUS - AIM_MARGIN    # how far left / right of the goal's centre we may aim
+    y = field.ATTACK_GOAL_Y                                   # on the goal line: a ball through these clears the posts
     best, best_score, best_clear = (0.0, y), -1e9, -1e9
-    for i in range(AIM_POINTS):
+    for i in range(AIM_POINTS):                               # AIM_POINTS points spread evenly across the goal
         x = -half + 2 * half * i / (AIM_POINTS - 1)
         if max_range is not None and dist(ball, (x, y)) > max_range:
-            continue
+            continue                                          # too far: skip this point
         clear = clearance(ball, (x, y), centres)
-        score = min(clear, 40.0) - 0.05 * abs(x)      # prefer room, then the middle
+        score = min(clear, 40.0) - 0.05 * abs(x)              # prefer room (up to 40 cm counts), then the middle
         if score > best_score:
             best, best_score, best_clear = (x, y), score, clear
     return best, best_clear
 
 
 def clearance(a, b, centres):
-    """Gap between the path a -> b and the nearest obstacle's edge."""
-    return min((seg_dist(c, a, b)[0] - R for c in centres), default=100.0)
+    """Gap (cm) between the path a -> b and the nearest robot's edge (below 0 = a robot is in the way).
+    100 if there are no robots."""
+    gaps = [seg_dist(c, a, b)[0] - R for c in centres]
+    return min(gaps, default=100.0)
 
 
 def path_blocked(a, b, centres, ignore_near=None):
-    """First obstacle centre on the way from a to b (closer than AVOID_DIST to the path), or None. A robot we're
-    already level with and not touching doesn't count (the path's closest point to it is within 2R of where we
-    are): counting it sent robots on detours forwards / sideways round robots they were just passing."""
-    worst = None
+    """The first robot (centre) in the way of driving from a to b, or None.
+    Robots near `ignore_near` don't count (usually the ball: an opponent on the ball isn't "in the way" of going
+    for the ball). A robot we're already level with and not touching doesn't count either (the path's closest
+    point to it is within 2R of where we are): counting it sent robots on detours round robots they were just
+    passing."""
+    worst = None                                     # (robot, how far along the path) of the first one in the way
     for c in centres:
         if ignore_near is not None and dist(c, ignore_near) < 15 + R:
             continue
         d, t = seg_dist(c, a, b)
-        if t * dist(a, b) < 2 * R and dist(a, c) > 2 * R + 2:
-            continue          # the closest it gets is right here, and we're not touching it: we're already past it
-        if d < AVOID_DIST and 0 < t < 1 and (worst is None or t < worst[1]):
+        closest_point_is_right_here = t * dist(a, b) < 2 * R
+        touching_it = dist(a, c) <= 2 * R + 2
+        if closest_point_is_right_here and not touching_it:
+            continue                                 # we're already past it
+        in_the_way = d < AVOID_DIST and 0 < t < 1
+        if in_the_way and (worst is None or t < worst[1]):
             worst = (c, t)
-    return None if worst is None else worst[0]
+    if worst is None:
+        return None
+    return worst[0]
 
 
 class Avoider:
-    """Drives round obstacles. If the straight path is blocked it tries a waypoint beside each obstacle (both
-    sides), keeps the ones where BOTH legs (robot -> waypoint -> target) are clear of every obstacle, and takes the
-    shortest. It keeps its waypoint unless one is clearly shorter (otherwise it re-decides every loop and shuffles
-    left-right). If nothing is clear it falls back to going round the first obstacle on the path."""
+    """Drives round robots in the way. Use it like a function: target = self.avoid(me, target, centres).
+    If the straight path is blocked it tries a waypoint beside each robot (both sides), keeps the ones where BOTH
+    legs (robot -> waypoint -> target) are clear, and takes the shortest. It keeps its waypoint unless another is
+    clearly shorter (otherwise it re-decides every loop and shuffles left-right). If nothing is clear it goes round
+    the first robot on the path."""
     STICK = 15.0       # cm: a new route must be this much shorter to switch to it
 
     def __init__(self):
-        self.wp = None
-        self.obstacle = None
-        self.side = 1.0
+        self.wp = None           # the waypoint we're going via (None = going straight)
+        self.obstacle = None     # the robot we're going round (fallback())
+        self.side = 1.0          # ...on which side
 
     def __call__(self, robot, target, centres, ignore_near=None, back_cost=0.0):
         """back_cost: extra cost per cm a waypoint is behind the robot (towards our goal) - used when carrying."""
+        # straight path clear: just go
         if path_blocked(robot, target, centres, ignore_near) is None:
-            self.wp = self.obstacle = None
+            self.wp = None
+            self.obstacle = None
             return target
+
+        # try a waypoint each side of each robot, keep the cheapest one with both legs clear
         used = [c for c in centres if ignore_near is None or dist(c, ignore_near) >= 15 + R]
         best, best_cost = None, None
         for c in used:
-            for wp in (self.beside(c, target, 1.0), self.beside(c, target, -1.0),
-                       self.beside_seen(c, robot, 1.0), self.beside_seen(c, robot, -1.0)):
+            candidates = (self.beside(c, target, 1.0), self.beside(c, target, -1.0),
+                          self.beside_seen(c, robot, 1.0), self.beside_seen(c, robot, -1.0))
+            for wp in candidates:
                 if wp is None or not field.inside_play_area(wp[0], wp[1], OUT_MARGIN):
-                    continue
+                    continue                             # no such point / outside the field
                 if path_blocked(robot, wp, used) is not None or path_blocked(wp, target, used) is not None:
-                    continue
+                    continue                             # a leg is blocked
                 cost = dist(robot, wp) + dist(wp, target) + back_cost * max(0.0, robot[1] - wp[1])
                 if self.wp is not None and dist(wp, self.wp) < 10:
-                    cost -= self.STICK          # this is (about) the route we're already on
+                    cost -= self.STICK                   # this is (about) the route we're already on
                 if best_cost is None or cost < best_cost:
                     best, best_cost = wp, cost
         if best is not None:
             self.wp = best
             return clamp_in_field(best, OUT_MARGIN)
+
+        # nothing fully clear: go round the first robot on the path
         self.wp = None
         return self.fallback(robot, target, path_blocked(robot, target, centres, ignore_near))
 
     @staticmethod
     def beside(c, target, side):
-        """Point to the side of obstacle c, far enough out that the line from there to the target clears it too
+        """Point to the side of robot c, far enough out that the line from there to the target misses it too
         (a point just AVOID_DIST to the side would still clip it when the target is close behind it)."""
-        u = unit((target[0] - c[0], target[1] - c[1]))
-        n = (-u[1], u[0])
+        u = unit((target[0] - c[0], target[1] - c[1]))       # direction robot -> target
+        n = (-u[1], u[0])                                    # ...turned 90 degrees: sideways
         L = dist(c, target)
         need = AVOID_DIST + 3
         if L <= need + 1:
-            return None                          # the target is right next to the obstacle
+            return None                                      # the target is right next to the robot
         off = min(need * L / math.sqrt(L * L - need * need), 80.0)
         return [c[0] + n[0] * side * off, c[1] + n[1] * side * off]
 
     @staticmethod
     def beside_seen(c, robot, side):
-        """Point to the side of obstacle c as seen from the robot (straight across its line of sight)."""
+        """Point to the side of robot c as seen from our robot (straight across our line of sight)."""
         u = unit((c[0] - robot[0], c[1] - robot[1]))
         off = AVOID_DIST + 3
         return [c[0] - u[1] * side * off, c[1] + u[0] * side * off]
 
     def fallback(self, robot, target, c):
-        """Nothing fully clear: go round the first obstacle on the path, keeping the side we picked."""
+        """Nothing fully clear: go round the first robot on the path (c), keeping the side we picked."""
         u = unit((target[0] - c[0], target[1] - c[1]))
         n = (-u[1], u[0])
         if self.obstacle is None or dist(c, self.obstacle) > 20:
-            self.side = 1.0 if (robot[0] - c[0]) * n[0] + (robot[1] - c[1]) * n[1] >= 0 else -1.0
+            # a new robot to go round: pick the side we're already on
+            if (robot[0] - c[0]) * n[0] + (robot[1] - c[1]) * n[1] >= 0:
+                self.side = 1.0
+            else:
+                self.side = -1.0
         self.obstacle = c
         wp = self.beside(c, target, self.side) or [c[0] + n[0] * self.side * (AVOID_DIST + 3),
                                                    c[1] + n[1] * self.side * (AVOID_DIST + 3)]
@@ -340,17 +399,18 @@ class Avoider:
 
 
 class ShotPlanner:
-    """Picks a spot to shoot from: in kick range, a clear line to some part of the goal, cheap to get to.
-    Sticks with its spot unless another one is clearly better or it stops being usable."""
+    """(CarefulStriker only.) Picks a spot to shoot from: in kick range, a clear line to some part of the goal,
+    cheap to get to. Sticks with its spot unless another one is clearly better or it stops being usable."""
 
     def __init__(self):
-        self.spot = None
-        self.since = 0.0
+        self.spot = None       # the spot we're going to
+        self.since = 0.0       # ...since when
 
     def reset(self):
         self.spot = None
 
     def score(self, p, me, centres, min_clear=SHOT_MIN_CLEAR, max_range=KICK_RANGE):
+        """How good spot p is to shoot from (higher = better), and where to aim from it. (None, aim) = unusable."""
         aim, clear = best_aim(p, centres, max_range)
         if clear < min_clear:
             return None, aim
@@ -363,23 +423,24 @@ class ShotPlanner:
 
     def plan(self, me, centres):
         """Returns (spot, aim) or (None, None) if nowhere works."""
+        # every point on a grid (SHOT_GRID cm apart) within kick range of their goal
         hx = field.PLAY_W / 2 - FIELD_MARGIN
         y_hi = field.ATTACK_GOAL_Y - R - 5
         y_lo = max(field.ATTACK_GOAL_Y - KICK_RANGE, -field.PLAY_L / 2 + FIELD_MARGIN)
-        best = (None, None, None)
+        best = (None, None, None)                    # (score, spot, aim)
         nx = int(2 * hx // SHOT_GRID) + 1
         ny = int((y_hi - y_lo) // SHOT_GRID) + 1
         for i in range(nx):
             for j in range(ny):
                 p = (-hx + i * SHOT_GRID, y_lo + j * SHOT_GRID)
                 if any(dist(p, c) < AVOID_DIST for c in centres):
-                    continue
+                    continue                         # a robot is standing there
                 sc, aim = self.score(p, me, centres)
                 if sc is not None and (best[0] is None or sc > best[0]):
                     best = (sc, p, aim)
         if self.spot is not None:
             # keep the current spot while it's still usable (lower bar than for picking a new one, so small
-            # wobbles in where the obstacles seem to be don't make it hop between spots), unless clearly beaten
+            # wobbles in where the robots seem to be don't make it hop between spots), unless clearly beaten
             sc, aim = self.score(self.spot, me, centres, min_clear=KICK_CLEARANCE - SHOT_KEEP_SLACK,
                                  max_range=KICK_RANGE + SHOT_KEEP_SLACK)
             young = time.monotonic() - self.since < SHOT_HOLD
@@ -389,39 +450,44 @@ class ShotPlanner:
         return best[1], best[2]
 
 
+# ------------------------------------- going for the ball (get behind it, push) ------------------------------------
+
 def choose_push_aim(ball, goal_aim, defending=False):
     """Which way to push the ball. Normally at goal_aim, but if getting behind it for that would mean standing past
     the white line (ball hugging the line), push it somewhere reachable instead: straight up-field, or inwards.
-    defending: the goalie clearing near our goal - the fallbacks are sideways, away from the goal mouth."""
+    defending: the goalie clearing near our goal - the other choices are sideways, away from the goal mouth."""
     if defending:
-        side = math.copysign(1.0, ball[0] or 1.0)
+        side = math.copysign(1.0, ball[0] or 1.0)              # the side of the field the ball is on
         candidates = [goal_aim, (side * field.PLAY_W / 2, ball[1] + 40.0), (side * field.PLAY_W / 2, ball[1])]
     else:
         candidates = [goal_aim, (ball[0] * 0.5, field.ATTACK_GOAL_Y), (0.0, field.ATTACK_GOAL_Y), (0.0, 0.0)]
     best, best_cost = goal_aim, None
-    for k, a in enumerate(candidates):
+    for k, a in enumerate(candidates):                         # k = 0 for the first choice, 1, 2, ... after
         u = unit((a[0] - ball[0], a[1] - ball[1]))
-        behind = (ball[0] - u[0] * BEHIND_DIST, ball[1] - u[1] * BEHIND_DIST)
-        cost = 2.0 * dist(behind, clamp_in_field(behind, OUT_MARGIN)) + 8.0 * k   # unreachable, then less goal-ward
+        behind = (ball[0] - u[0] * BEHIND_DIST, ball[1] - u[1] * BEHIND_DIST)   # where we'd stand to push it there
+        # cost: how far that spot is outside the field (can't stand there), then a little for each later choice
+        cost = 2.0 * dist(behind, clamp_in_field(behind, OUT_MARGIN)) + 8.0 * k
         if best_cost is None or cost < best_cost:
             best, best_cost = a, cost
     return best
 
 
 def approach(robot, ball, aim):
-    """Where to go to push the ball towards aim. Returns (target, heading, phase) in field coordinates.
+    """Where to go to push the ball towards aim. Returns (target, heading, phase), field coordinates.
     phase: "orbit" (wrong side, going round), "line up" (behind it, not lined up), "push"."""
-    u = unit((aim[0] - ball[0], aim[1] - ball[1]))
-    n = (-u[1], u[0])
-    r = (robot[0] - ball[0], robot[1] - ball[1])
-    along = r[0] * u[0] + r[1] * u[1]              # < 0 = behind the ball (good)
-    perp = r[0] * n[0] + r[1] * n[1]
-    heading = heading_for(u)
-    behind = [ball[0] - u[0] * BEHIND_DIST, ball[1] - u[1] * BEHIND_DIST]
+    u = unit((aim[0] - ball[0], aim[1] - ball[1]))     # direction ball -> aim
+    n = (-u[1], u[0])                                  # ...sideways
+    r = (robot[0] - ball[0], robot[1] - ball[1])       # arrow ball -> robot
+    along = r[0] * u[0] + r[1] * u[1]                  # how far in front of the ball we are (< 0 = behind it, good)
+    perp = r[0] * n[0] + r[1] * n[1]                   # how far off to the side
+    heading = heading_for(u)                           # face where the ball should go
+    behind = [ball[0] - u[0] * BEHIND_DIST, ball[1] - u[1] * BEHIND_DIST]    # the line-up point
+    lined_up_tol = ALIGN_TOL + ALIGN_TOL_PER_CM * (-along)
+
     # going straight to the line-up point would clip the ball (and maybe knock it the wrong way): go round instead
-    clips = (abs(perp) > ALIGN_TOL + ALIGN_TOL_PER_CM * (-along)
-             and seg_dist(ball, robot, behind)[0] < R + cfg.BALL_RADIUS + 3)
+    clips = abs(perp) > lined_up_tol and seg_dist(ball, robot, behind)[0] < R + cfg.BALL_RADIUS + 3
     if along > -R * 0.6 or clips:
+        # "orbit": to a point beside the ball (our side of it first, the other side if that's outside the field)
         side = 1.0 if perp >= 0 else -1.0
         for s in (side, -side):
             wp = [ball[0] - u[0] * ORBIT_DIST * 0.3 + n[0] * s * ORBIT_DIST,
@@ -429,8 +495,9 @@ def approach(robot, ball, aim):
             if field.inside_play_area(wp[0], wp[1], OUT_MARGIN):
                 break
         return clamp_in_field(wp, OUT_MARGIN), heading, "orbit"
-    if abs(perp) > ALIGN_TOL + ALIGN_TOL_PER_CM * (-along):
+    if abs(perp) > lined_up_tol:
         return clamp_in_field(behind, OUT_MARGIN), heading, "line up"
+    # lined up: drive through the ball, aiming PUSH_DIST past it
     return [ball[0] + u[0] * PUSH_DIST, ball[1] + u[1] * PUSH_DIST], heading, "push"
 
 
@@ -438,12 +505,12 @@ def around_ball(me, target, ball):
     """If driving straight from me to target would hit the ball, go via a point beside it instead (the side that's
     shorter and inside the field). Used whenever the robot isn't meant to touch the ball: guarding, going round it,
     lining up - knocking it on the way there was putting it in our own goal."""
-    clear = R + cfg.BALL_RADIUS + 3
+    clear = R + cfg.BALL_RADIUS + 3                    # centre-to-centre distance that just misses the ball
     d, t = seg_dist(ball, me, target)
     if d >= clear or t <= 0.0 or t >= 1.0 or dist(me, ball) < clear:
-        return target
+        return target                                  # the ball isn't in the way (or we're already at it)
     u = unit((target[0] - me[0], target[1] - me[1]))
-    best = None
+    best = None                                        # (cost, waypoint)
     for side in (1.0, -1.0):
         wp = [ball[0] - u[1] * side * (clear + 3), ball[1] + u[0] * side * (clear + 3)]
         if not field.inside_play_area(wp[0], wp[1], OUT_MARGIN):
@@ -451,7 +518,9 @@ def around_ball(me, target, ball):
         cost = dist(me, wp) + dist(wp, target)
         if best is None or cost < best[0]:
             best = (cost, wp)
-    return target if best is None else best[1]
+    if best is None:
+        return target
+    return best[1]
 
 
 def clear_aim(ball):
@@ -459,37 +528,43 @@ def clear_aim(ball):
     than just sideways, so it actually leaves our end)."""
     if abs(ball[0]) > CLEAR_OUT_X:    # out to the side: an out ball goes back to the halfway line (field.NEUTRAL_SPOTS)
         return (math.copysign(field.PLAY_W / 2 + 30.0, ball[0]), ball[1] + 15.0)
-    away = unit((ball[0], ball[1] - field.OWN_GOAL_Y))
-    away = unit((away[0], away[1] + 1.0))
+    away = unit((ball[0], ball[1] - field.OWN_GOAL_Y))     # direction goal centre -> ball
+    away = unit((away[0], away[1] + 1.0))                  # ...turned half way to up-field
     return (ball[0] + away[0] * 100.0, ball[1] + away[1] * 100.0)
 
 
 def lead_ball(me, ball, vel):
-    """Where the ball will be when we get there (roughly): it keeps rolling at vel (field frame cm/s)."""
-    t = min(dist(me, ball) / LEAD_SPEED, LEAD_TIME_MAX)
+    """Where the ball will be when we get there (roughly): it keeps rolling at vel (cm/s)."""
+    t = min(dist(me, ball) / LEAD_SPEED, LEAD_TIME_MAX)    # seconds until we get there (at most LEAD_TIME_MAX)
     return clamp_in_field([ball[0] + vel[0] * t, ball[1] + vel[1] * t], -cfg.BALL_RADIUS)
 
 
 def catch_speed(me, ball):
     """Speed multiplier for running onto a free ball: slow right at it, faster further away."""
-    return min(1.0, CATCH_MULTI_MIN + CATCH_MULTI_PER_CM * max(0.0, dist(me, ball) - R))
+    gap = max(0.0, dist(me, ball) - R)                     # cm between our bumper and the ball
+    return min(1.0, CATCH_MULTI_MIN + CATCH_MULTI_PER_CM * gap)
 
 
 def guard_speed(me, target):
-    """Speed profile for the goalie's guarding moves: proportional to how far off its spot it is, and reacting
+    """Speed settings for the goalie's guarding moves: in proportion to how far off its spot it is, and reacting
     faster than the default smoothing (GUARD_SMOOTH)."""
-    return {"spd_multi": min(1.0, max(0.1, dist(me, target) / GUARD_GAIN)), "smooth": GUARD_SMOOTH}
+    multi = min(1.0, max(0.1, dist(me, target) / GUARD_GAIN))
+    return {"spd_multi": multi, "smooth": GUARD_SMOOTH}
+
+
+def angle_diff(a, b):
+    """Difference between two angles (radians), wrapped to -pi..pi (= your angdiff)."""
+    return math.atan2(math.sin(a - b), math.cos(a - b))
 
 
 def catch_is_faster(me, compass, ball, aim, orbit_target):
-    """Would catching the ball from where we are (turn to face it while driving to it, then turn with it until we
-    face the aim, slower because of the dribbler) be quicker than going round it (orbit_target, then to the line-up
-    point behind it, then onto the ball)? With the ball behind us, turning round and back takes longer than a
-    short orbit."""
+    """(CarefulStriker.) Would catching the ball from where we are (turn to face it while driving to it, then turn
+    with it until we face the aim, slower because of the dribbler) be quicker than going round it (orbit_target,
+    then to the line-up point behind it, then onto the ball)?"""
     to_ball = (ball[0] - me[0], ball[1] - me[1])
-    turn_to_ball = abs(math.atan2(math.sin(heading_for(to_ball) - compass), math.cos(heading_for(to_ball) - compass)))
+    turn_to_ball = abs(angle_diff(heading_for(to_ball), compass))
     to_aim = heading_for((aim[0] - ball[0], aim[1] - ball[1]))
-    turn_back = abs(math.atan2(math.sin(to_aim - heading_for(to_ball)), math.cos(to_aim - heading_for(to_ball))))
+    turn_back = abs(angle_diff(to_aim, heading_for(to_ball)))
     t_catch = (max(turn_to_ball / EST_TURN, max(0.0, dist(me, ball) - R) / EST_SPEED)
                + CATCH_TURN_WEIGHT * turn_back / EST_TURN_DRIBBLE)
     u = unit((aim[0] - ball[0], aim[1] - ball[1]))
@@ -501,18 +576,23 @@ def catch_is_faster(me, compass, ball, aim, orbit_target):
 def blocker_between(me, ball, centres):
     """An opponent (centre) in the way between us and the ball: our body would hit it on the straight way to the
     ball, and it's nearer the ball than we are - or None."""
-    best = None
+    best = None                                    # (how far along our way, robot)
     for c in centres:
         d, t = seg_dist(c, me, ball)
-        if d < 2 * R + BLOCKER_WIDTH and 0.05 < t and dist(c, ball) < dist(me, ball) and (best is None or t < best[0]):
+        in_the_way = d < 2 * R + BLOCKER_WIDTH and 0.05 < t and dist(c, ball) < dist(me, ball)
+        if in_the_way and (best is None or t < best[0]):
             best = (t, c)
-    return None if best is None else best[1]
+    if best is None:
+        return None
+    return best[1]
 
 
 def contested(ball, centres):
     """An opponent is right at the ball."""
     return any(dist(c, ball) < CONTEST_DIST + R for c in centres)
 
+
+# ------------------------------------------------ ball out ---------------------------------------------------------
 
 def ball_out(ball):
     """Ball clearly outside the white line (the goal notches count as in)."""
@@ -524,28 +604,36 @@ def going_out(ball, vel):
     if ball_out(ball):
         return True
     if field.inside_play_area(ball[0], ball[1], OUT_SOON_DIST):
-        return False
-    n = (math.copysign(1.0, ball[0]), 0.0) if abs(ball[0]) > field.PLAY_W / 2 - OUT_SOON_DIST else \
-        (0.0, math.copysign(1.0, ball[1]))
-    return vel[0] * n[0] + vel[1] * n[1] > OUT_SOON_SPEED
+        return False                               # not near the line
+    # which line it's near: a side line (left / right) or an end line - n = arrow pointing out over that line
+    if abs(ball[0]) > field.PLAY_W / 2 - OUT_SOON_DIST:
+        n = (math.copysign(1.0, ball[0]), 0.0)
+    else:
+        n = (0.0, math.copysign(1.0, ball[1]))
+    speed_outwards = vel[0] * n[0] + vel[1] * n[1]
+    return speed_outwards > OUT_SOON_SPEED
 
 
 def restart_spot(ball):
-    """Neutral spot the referee will put an out ball on: the one nearest to where it is."""
-    return min(field.NEUTRAL_SPOTS, key=lambda p: dist(p, ball))
+    """The neutral spot the referee will put an out ball on: the one nearest to it."""
+    return min(field.NEUTRAL_SPOTS, key=lambda spot: dist(spot, ball))
 
+
+# ----------------------------------------- shoving, possession, kicks ----------------------------------------------
 
 def shover(me, ball, centres):
     """The opponent shoving against us over the ball (touching, ball in between, not pushing it towards our own
     goal), or None."""
     if dist(me, ball) > R + cfg.BALL_RADIUS + 6:
-        return None
+        return None                                # the ball isn't at our front
     to_ball = math.atan2(ball[1] - me[1], ball[0] - me[0])
     for c in centres:
         if dist(c, me) > 2 * R + PUSHBACK_GAP:
-            continue
-        a = math.atan2(c[1] - me[1], c[0] - me[0])
-        if abs(math.atan2(math.sin(a - to_ball), math.cos(a - to_ball))) < PUSHBACK_ANGLE and c[1] - me[1] > -0.3 * dist(c, me):
+            continue                               # not touching us
+        to_it = math.atan2(c[1] - me[1], c[0] - me[0])
+        same_side_as_ball = abs(angle_diff(to_it, to_ball)) < PUSHBACK_ANGLE
+        not_behind_us = c[1] - me[1] > -0.3 * dist(c, me)
+        if same_side_as_ball and not_behind_us:
             return c
     return None
 
@@ -563,60 +651,75 @@ def possession(world, mate):
 def knock_out_aim(ball, me):
     """Goalie challenging an opponent that has the ball: knock it out over the nearer side line (the side away from
     the goalie when the ball is in the middle), a bit up-field so the goalie comes at it from our goal's side."""
-    side = math.copysign(1.0, (ball[0] - me[0]) if abs(ball[0]) < 10 else ball[0])
+    if abs(ball[0]) < 10:
+        side = math.copysign(1.0, ball[0] - me[0])
+    else:
+        side = math.copysign(1.0, ball[0])
     return (side * (field.PLAY_W / 2 + 30.0), ball[1] + CHALLENGE_UP)
 
 
 def kick_out_side(me, ball, centres, current=None):
-    """Goalie kicking the ball out: which side line (+1 / -1). The side with no robot in the way of the kick (path
-    clear for GOALIE_OUT_CLEAR cm), the nearer one if both or neither are clear. Keeps `current` while it's clear
-    (re-deciding every loop as the robots move would turn it back and forth)."""
+    """Goalie kicking the ball out: over which side line (+1 = right / -1 = left). The side with no robot in the
+    way of the kick (path clear for GOALIE_OUT_CLEAR cm), the nearer one if both or neither are clear. Keeps
+    `current` while it's clear (re-deciding every loop as the robots move would turn it back and forth)."""
     def clear(side):
         u = unit((side, GOALIE_OUT_UP))
-        return clearance(me, (me[0] + u[0] * GOALIE_OUT_CLEAR, me[1] + u[1] * GOALIE_OUT_CLEAR), centres) > 0
+        kick_end = (me[0] + u[0] * GOALIE_OUT_CLEAR, me[1] + u[1] * GOALIE_OUT_CLEAR)
+        return clearance(me, kick_end, centres) > 0
     if current is not None and clear(current):
         return current
     near = math.copysign(1.0, ball[0] or me[0] or 1.0)
-    return near if clear(near) or not clear(-near) else -near
+    if clear(near) or not clear(-near):
+        return near
+    return -near
 
 
 def pass_aim(me, striker, centres):
     """Goalie clearing to the striker: a point beside the striker (PASS_SIDE to one side, PASS_AHEAD up-field), so
     the ball rolls past it up-field and it can take it facing the way it's going (instead of turning round). The side
-    with the clear path; both clear (or both blocked): the one nearer the middle of the field (both blocked: the one
-    with more room)."""
-    cands = []
+    with the clear path; both clear: the one nearer the middle; both blocked: the one with more room."""
+    others = [c for c in centres if dist(c, striker) > R]      # every robot except our striker
+    cands = []                                                 # (clearance, point) for each side
     for side in (1.0, -1.0):
         p = clamp_in_field([striker[0] + side * PASS_SIDE, striker[1] + PASS_AHEAD])
-        cands.append((clearance(me, p, [c for c in centres if dist(c, striker) > R]), p))
+        cands.append((clearance(me, p, others), p))
     open_ = [c for c in cands if c[0] > KICK_CLEARANCE]
     if len(open_) == 1:
         return open_[0][1]
     if open_:
-        return min(open_, key=lambda c: abs(c[1][0]))[1]
-    return max(cands, key=lambda c: c[0])[1]
+        return min(open_, key=lambda c: abs(c[1][0]))[1]       # both open: nearer the middle
+    return max(cands, key=lambda c: c[0])[1]                   # neither: more room
 
+
+# ------------------------------------------------- misc ------------------------------------------------------------
 
 def rel(p, pose):
+    """Field point p -> the arrow from the robot to it (what update() has to return)."""
     return [p[0] - pose.x, p[1] - pose.y]
 
 
 def mate_active(mate):
+    """The teammate is on (it sends "bot active": 1)."""
     return bool(mate) and mate.get("bot active") == 1
 
 
-# ==================================== GOALIE ====================================
+# =====================================================================================================================
+#                                                   GOALIE
+# =====================================================================================================================
 class GoalieStrategy:
-    """botstate 0 = no ball known  -> guard the middle of the goal
+    """botstate 0 = no ball known    -> guard the middle of the goal
        botstate 1 = ball in dribbler -> turn up-field and kick it clear (only with a dribbler)
-       botstate 2 = clearing       -> go for the ball
-       botstate 3 = guarding       -> on the arc between the ball and the goal centre, facing the ball
-       botstate 4 = ball out       -> guard as if the ball were already on the neutral spot it'll come back to
-       (fallback = strategy_fallback.GoalieFallback while not localised: its botstates are shown + 10)"""
+       botstate 2 = clearing         -> go for the ball
+       botstate 3 = guarding         -> on the arc between the ball and the goal centre
+       botstate 4 = ball out         -> guard as if the ball were already on the neutral spot it'll come back to
+       (fallback = strategy_fallback.GoalieFallback while not localised: its botstates are shown + 10)
+       Striker off: plays StrikerStrategy's logic instead (GOALIE_ALONE_ATTACKS)."""
 
     def __init__(self, has_dribbler=True):
         self.has_dribbler = has_dribbler     # without one, a ball at the front is pushed (botstate 2), not carried
         self.fallback = GoalieFallback()
+        # your Hysteresis (utils.py): a new botstate must hold 0.11 s before it's used - except 1 (ball in the
+        # dribbler), which switches at once
         self.botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
         self.botstate = 0
         self.speed = {}
@@ -627,6 +730,7 @@ class GoalieStrategy:
         self.out_side = None     # kicking the ball out: over which side line (kick_out_side())
         self.kicked_at = -1e9    # when it last kicked (KICK_RETURN_T)
         self.out_ball = None     # (ball position, time) it was last seen going out
+        self.alone = None        # striker off: the StrikerStrategy the goalie plays (GOALIE_ALONE_ATTACKS)
         self.avoid = Avoider()
 
     def reset(self):
@@ -637,23 +741,46 @@ class GoalieStrategy:
         pose = world.pose
         self.kick = False
         self.possession = possession(world, mate)
+
+        # ---- not sure where we are on the field: the fallback (relative) logic decides
         if pose is None or not pose.confident:
-            out = self.fallback.update(world, compass, mate.get("command") if mate else None,
-                                       mate.get("bot active") if mate else None, line_touches)
-            self.botstate, self.speed, self.chasing, self.phase = 10 + self.fallback.botstate, self.fallback.speed, self.fallback.chasing, "fallback"
+            command = mate.get("command") if mate else None
+            mate_on = mate.get("bot active") if mate else None
+            out = self.fallback.update(world, compass, command, mate_on, line_touches)
+            self.botstate = 10 + self.fallback.botstate
+            self.speed = self.fallback.speed
+            self.chasing = self.fallback.chasing
+            self.phase = "fallback"
             return out
 
         me = (pose.x, pose.y)
-        ball = world.ball_field
-        goal = (0.0, field.OWN_GOAL_Y)
+        ball = world.ball_field                  # None = no ball seen
+        goal = (0.0, field.OWN_GOAL_Y)           # centre of our goal
         striker_on = mate_active(mate)
 
-        if ball is not None:          # remember a ball going out (it comes back on a neutral spot)
+        # ---- striker off: play the striker's logic (it holds its own against two opponents; guarding the goal on
+        # our own just got overrun)
+        if not striker_on and GOALIE_ALONE_ATTACKS:
+            if self.alone is None:
+                self.alone = StrikerStrategy()
+            out = self.alone.update(world, compass, mate, line_touches)
+            self.kick = self.alone.kick
+            self.speed = self.alone.speed
+            self.chasing = self.alone.chasing
+            self.botstate = self.alone.botstate
+            self.command = self.alone.command
+            self.phase = "alone: " + self.alone.phase
+            return out
+        self.alone = None
+
+        # ---- remember a ball going out (it comes back on a neutral spot: "look at spot" below)
+        if ball is not None:
             if going_out(ball, world.ball_vel):
                 self.out_ball = (list(ball), time.monotonic())
             elif not ball_out(ball):
                 self.out_ball = None
-        # ---- decide
+
+        # ---- DECIDE the botstate (raw = what it would be this loop, before the Hysteresis smoothing)
         if ball is None:
             raw = 0
         elif ball_out(ball):
@@ -662,26 +789,33 @@ class GoalieStrategy:
             raw = 1     # (an opponent pushing the ball into our front isn't "ours": keep guarding, see below)
         else:
             in_box = abs(ball[0]) < field.PENALTY_W / 2 and ball[1] < field.OWN_GOAL_Y + field.PENALTY_D
-            told = striker_on and mate.get("command") == 1
-            clearing = self.botstate in (1, 2)
+            told = striker_on and mate.get("command") == 1         # the striker told us to take it
+            clearing = self.botstate in (1, 2)                      # we were already going for it
             opp_on_ball = self.possession == "them"
-            if not striker_on:          # alone: clear what's in our half or clearly ours, otherwise mind the goal
+            pushed_at_goal = dist(ball, goal) < PUSHER_DIST and world.ball_vel[1] < -PUSHER_SPEED
+            striker_chasing_it = striker_on and mate.get("command") == 0 and mate.get("chasing")
+            just_kicked = time.monotonic() - self.kicked_at <= KICK_RETURN_T
+            if not striker_on:
+                # alone: clear what's in our half or clearly ours, otherwise mind the goal
                 closest_opp = min((dist(c, ball) for c in world.opponents), default=1e9)
-                raw = 2 if ball[1] < SOLO_CHASE_Y or dist(me, ball) + SOLO_CLOSER < closest_opp else 3
+                if ball[1] < SOLO_CHASE_Y or dist(me, ball) + SOLO_CLOSER < closest_opp:
+                    raw = 2
+                else:
+                    raw = 3
             elif opp_on_ball and dist(ball, goal) < CHALLENGE_DIST:
-                raw = 2     # ...unless it's bringing it at our goal: go and knock it out over the side line
-            elif opp_on_ball and not (dist(ball, goal) < PUSHER_DIST and world.ball_vel[1] < -PUSHER_SPEED):
+                raw = 2     # an opponent is bringing it at our goal: go and knock it out over the side line
+            elif opp_on_ball and not pushed_at_goal:
                 raw = 3     # an opponent has it: cover the goal, don't challenge (in the simulator most goals against
                             # came from an opponent shooting past a goalie that had come out for the ball)
             elif told or (in_box and dist(me, ball) < DANGER_DIST):
                 raw = 2
-            elif (clearing and ball[1] < CLEAR_RETURN_Y and not (mate.get("command") == 0 and mate.get("chasing"))
-                  and time.monotonic() - self.kicked_at > KICK_RETURN_T):
-                raw = 2                                           # keep clearing until it's up-field
+            elif clearing and ball[1] < CLEAR_RETURN_Y and not striker_chasing_it and not just_kicked:
+                raw = 2     # keep clearing until it's up-field
             else:
                 raw = 3
-        if raw == 2 and striker_on and me[1] > field.OWN_GOAL_Y + field.PENALTY_D + GOALIE_MAX_OUT and not told:
-            raw = 3     # too far out (it chased a cleared ball and left the goal empty): back to guarding
+        too_far_out = me[1] > field.OWN_GOAL_Y + field.PENALTY_D + GOALIE_MAX_OUT
+        if raw == 2 and striker_on and too_far_out and not told:
+            raw = 3     # it chased a cleared ball and left the goal empty: back to guarding
         self.botstate = self.botstate_hyst.update(raw)
         if ball is None and self.botstate != 0:
             self.botstate = 0
@@ -690,112 +824,149 @@ class GoalieStrategy:
         # ---- an opponent shoving the ball against the goalie: shove straight back (guarding = crawling = getting
         # pushed into our goal), or with the ball in the dribbler, kick it out over the side line
         centres = obstacle_centres(me, world.obstacles_field)
-        sh = shover(me, ball, centres) if ball is not None else None
+        if ball is not None:
+            sh = shover(me, ball, centres)
+        else:
+            sh = None
         if sh is None:
             self.out_side = None
         else:
             if GOALIE_KICK_OUT and world.ball_in_capture and self.has_dribbler:
-                self.out_side = kick_out_side(me, ball, [c for c in centres if c is not sh], self.out_side)
+                other_robots = [c for c in centres if c is not sh]
+                self.out_side = kick_out_side(me, ball, other_robots, self.out_side)
                 heading = heading_for((self.out_side, GOALIE_OUT_UP))
-                err = abs(math.atan2(math.sin(heading - compass), math.cos(heading - compass)))
-                self.kick, self.speed, self.phase = err < GOALIE_KICK_OUT_TOL, {}, "kick out"
+                err = abs(angle_diff(heading, compass))
+                self.kick = err < GOALIE_KICK_OUT_TOL
+                self.speed = {}
+                self.phase = "kick out"
                 return rel(list(me), pose), heading, True
             d = unit((sh[0] - me[0], sh[1] - me[1]))     # (pushing off sideways towards the line opened the goal)
             target = clamp_in_field([me[0] + d[0] * PUSHBACK_REACH, me[1] + d[1] * PUSHBACK_REACH], OUT_MARGIN)
-            self.speed, self.phase = {"spd_multi": 1.0}, "push back"
+            self.speed = {"spd_multi": 1.0}
+            self.phase = "push back"
             return rel(target, pose), 0.0, False
 
-        # ---- act
+        # ---- ACT
         dribbler = False
         self.speed = {}
+
+        # a free ball (a shot, or rolling) heading into our goal: get in its way (an opponent dribbling it: guard)
         block = None
         if ball is not None and self.botstate != 1 and not contested(ball, obstacle_centres(me, world.obstacles_field)):
-            block = self.block_point(ball, world.ball_vel)    # only a free ball (an opponent dribbling it: guard)
-        if block is not None:          # ball (a shot, or rolling) heading into our goal: get in its way
+            block = self.block_point(ball, world.ball_vel)
+        if block is not None:
             target = block
             heading = 0.0                  # no turning: all the motors go into getting there
             self.phase = "block"
             self.speed = guard_speed(me, target)
             return rel(target, pose), heading, False
-        if self.out_ball is not None and striker_on and (ball is None or ball_out(ball))                 and time.monotonic() - self.out_ball[1] < RESTART_WAIT:
-            # ball out: come up just far enough to see the neutral spot the striker isn't waiting at (from right behind
-            # one side spot its camera can't see the other one), facing it - it tells the striker where the ball is
-            p = restart_spot(self.out_ball[0])
+
+        # ball out: come up just far enough to see the neutral spot the striker isn't waiting at (from right behind
+        # one side spot its camera can't see the other one), facing it - it tells the striker where the ball is
+        ball_is_out = ball is None or ball_out(ball)
+        if (self.out_ball is not None and striker_on and ball_is_out
+                and time.monotonic() - self.out_ball[1] < RESTART_WAIT):
+            p = restart_spot(self.out_ball[0])                     # where the striker waits
             others = [q for q in field.NEUTRAL_SPOTS if dist(q, p) > 1]
-            q = max(others, key=lambda q: dist(q, p)) if abs(p[0]) > 1 else min(others, key=lambda q: abs(q[0] - me[0]))
-            u = unit((0.0 - q[0], field.OWN_GOAL_Y - q[1]))
+            if abs(p[0]) > 1:
+                q = max(others, key=lambda q: dist(q, p))          # side spot: look at the far side spot
+            else:
+                q = min(others, key=lambda q: abs(q[0] - me[0]))   # centre spot: look at the side spot on our side
+            u = unit((0.0 - q[0], field.OWN_GOAL_Y - q[1]))        # direction from that spot to our goal
             target = [q[0] + u[0] * LOOK_DIST, q[1] + u[1] * LOOK_DIST]
             heading = heading_for((q[0] - target[0], q[1] - target[1]))
-            self.speed, self.phase = {"spd_multi": 1.0}, "look at spot"
+            self.speed = {"spd_multi": 1.0}
+            self.phase = "look at spot"
             return rel(target, pose), heading, False
+
+        nobody_back_here = all(o[1] > STEP_UP_CLEAR_Y for o in world.opponents)
         if self.botstate == 0:
             target, heading = (0.0, goal[1] + GUARD_RADIUS), 0.0
             self.phase = "guard middle"
             self.speed = guard_speed(me, target)
-        elif (self.botstate == 3 and striker_on and ball[1] > STEP_UP_BALL_Y
-              and all(o[1] > STEP_UP_CLEAR_Y for o in world.opponents)):
+        elif self.botstate == 3 and striker_on and ball[1] > STEP_UP_BALL_Y and nobody_back_here:
             # ball deep in their half and no opponent back here: step up behind the striker for rebounds / clearances
             target, heading = [ball[0] * STEP_UP_X_SHARE, STEP_UP_Y], 0.0
-            self.speed, self.phase = {"spd_multi": 1.0}, "step up"
+            self.speed = {"spd_multi": 1.0}
+            self.phase = "step up"
         elif self.botstate in (3, 4):
-            b = ball if self.botstate == 3 else restart_spot(ball)   # ball out: guard against where it'll come back
-            if self.botstate == 3:          # guard where the ball will be in a moment, not where it was
-                b = (b[0] + world.ball_vel[0] * GUARD_LEAD, b[1] + world.ball_vel[1] * GUARD_LEAD)
+            # guard: on the arc round our goal, between it and the ball
+            if self.botstate == 3:
+                # guard where the ball will be in a moment, not where it was
+                b = (ball[0] + world.ball_vel[0] * GUARD_LEAD, ball[1] + world.ball_vel[1] * GUARD_LEAD)
+            else:
+                b = restart_spot(ball)        # ball out: guard against where it'll come back
             target, heading = self.guard(me, b)
-            carrier = self.carrier(ball, world.opponents) if self.botstate == 3 and CARRIER_WEIGHT else None
+            carrier = None
+            if self.botstate == 3 and CARRIER_WEIGHT:      # (CARRIER_WEIGHT = 0: switched off)
+                carrier = self.carrier(ball, world.opponents)
             if carrier is not None:         # an opponent has it: lean towards the line it would shoot along
                 target = self.shot_line_guard(target, b, carrier)
             self.speed = guard_speed(me, target)
             if self.botstate == 3:
                 target = around_ball(me, target, ball)
-            self.phase = ("guard carrier" if carrier is not None else "guard") if self.botstate == 3 else "ball out"
+                self.phase = "guard carrier" if carrier is not None else "guard"
+            else:
+                self.phase = "ball out"
         else:
+            # botstate 1 / 2: the ball is ours to take
             centres = obstacle_centres(me, world.obstacles_field)
             aim, clear = best_aim(ball, centres)
             if self.botstate == 1:
-                # ball in the dribbler: stay put, turn up-field (towards the open part of their goal, at most
-                # GOALIE_KICK_TURN off straight up-field) and kick it clear as soon as we face up-field with room
+                target, heading = self.clear_ball(world, compass, mate, me, aim, centres, striker_on)
                 dribbler = True
-                target = list(me)
-                striker = mate.get("pos") if striker_on else None
-                pressed = any(dist(o, me) < 2 * R + 20 for o in world.opponents)
-                if pressed:
-                    # an opponent closing in: no lining up a pass - clear it the first moment we face up-field / out
-                    side = math.copysign(1.0, me[0] or 1.0)
-                    heading = heading_for((side * 0.6, 1.0))
-                    fwd = (-math.sin(compass), math.cos(compass))
-                    self.kick = fwd[1] > 0.3 and clearance(me, (me[0] + fwd[0] * 40, me[1] + fwd[1] * 40),
-                                                          [c for c in centres if dist(c, me) > 2 * R + 2]) > -R
-                    self.phase = "clear now"
-                elif striker is not None and striker[1] > me[1] + R:
-                    # pass it past the striker (up-field of us): to its more open side, kick when facing it
-                    p = pass_aim(me, striker, centres)
-                    heading = heading_for((p[0] - me[0], p[1] - me[1]))
-                    err = abs(math.atan2(math.sin(heading - compass), math.cos(heading - compass)))
-                    self.kick = err < PASS_TOL
-                    self.phase = "clear pass"
-                else:
-                    want = heading_for((aim[0] - me[0], aim[1] - me[1]))
-                    heading = max(-GOALIE_KICK_TURN, min(GOALIE_KICK_TURN, want))
-                    fwd = (-math.sin(compass), math.cos(compass))
-                    ahead = (me[0] + fwd[0] * GOALIE_KICK_CLEAR, me[1] + fwd[1] * GOALIE_KICK_CLEAR)
-                    self.kick = abs(compass) < GOALIE_KICK_TURN + 0.1 and clearance(me, ahead, centres) > 0
-                    self.phase = "clear kick"
             else:
-                defending = ball[1] < CLEAR_AWAY_Y
-                if self.possession == "them":     # challenging the opponent that has it: knock it out of play
-                    aim, defending = knock_out_aim(ball, me), True
-                elif defending:                   # deep in our half: away from our goal, never round the ball
-                    aim = clear_aim(ball)
-                target, heading, dribbler = self.go_for_ball(me, ball, world.ball_vel, aim, centres, defending)
-                # never go round the ball: that leaves the goal open (nearly every goal against us in the simulator) -
-                # unless it's already behind the goalie's line, then getting it out sideways is all that's left
-                if self.phase == "orbit" and ball[1] > field.OWN_GOAL_Y + R + 3:
-                    target, heading = self.guard(me, ball)   # guard until lined up
-                    self.speed = guard_speed(me, target)
-                    target = around_ball(me, target, ball)
-                    self.phase, dribbler = "guard (ball behind)", False
+                target, heading, dribbler = self.take_ball(world, me, ball, aim, centres)
         return rel(target, pose), heading, dribbler
+
+    def clear_ball(self, world, compass, mate, me, aim, centres, striker_on):
+        """Ball in the dribbler: stay put, turn up-field and kick it clear. Returns (target, heading); sets .kick."""
+        target = list(me)
+        striker = mate.get("pos") if striker_on else None
+        fwd = (-math.sin(compass), math.cos(compass))                 # the way we face now
+        pressed = any(dist(o, me) < 2 * R + 20 for o in world.opponents)
+        if pressed:
+            # an opponent closing in: no lining up a pass - clear it the first moment we face up-field / out
+            side = math.copysign(1.0, me[0] or 1.0)
+            heading = heading_for((side * 0.6, 1.0))
+            not_touching = [c for c in centres if dist(c, me) > 2 * R + 2]
+            ahead = (me[0] + fwd[0] * 40, me[1] + fwd[1] * 40)
+            self.kick = fwd[1] > 0.3 and clearance(me, ahead, not_touching) > -R
+            self.phase = "clear now"
+        elif striker is not None and striker[1] > me[1] + R:
+            # pass it past the striker (up-field of us): to its more open side, kick when facing it
+            p = pass_aim(me, striker, centres)
+            heading = heading_for((p[0] - me[0], p[1] - me[1]))
+            err = abs(angle_diff(heading, compass))
+            self.kick = err < PASS_TOL
+            self.phase = "clear pass"
+        else:
+            # turn towards the open part of their goal (at most GOALIE_KICK_TURN off straight up-field), kick as
+            # soon as we face up-field with room
+            want = heading_for((aim[0] - me[0], aim[1] - me[1]))
+            heading = max(-GOALIE_KICK_TURN, min(GOALIE_KICK_TURN, want))
+            ahead = (me[0] + fwd[0] * GOALIE_KICK_CLEAR, me[1] + fwd[1] * GOALIE_KICK_CLEAR)
+            self.kick = abs(compass) < GOALIE_KICK_TURN + 0.1 and clearance(me, ahead, centres) > 0
+            self.phase = "clear kick"
+        return target, heading
+
+    def take_ball(self, world, me, ball, aim, centres):
+        """Botstate 2: go for the ball. Returns (target, heading, dribbler)."""
+        defending = ball[1] < CLEAR_AWAY_Y
+        if self.possession == "them":     # challenging the opponent that has it: knock it out of play
+            aim, defending = knock_out_aim(ball, me), True
+        elif defending:                   # deep in our half: away from our goal, never round the ball
+            aim = clear_aim(ball)
+        target, heading, dribbler = self.go_for_ball(me, ball, world.ball_vel, aim, centres, defending)
+        # never go round the ball: that leaves the goal open (nearly every goal against us in the simulator) -
+        # unless it's already behind the goalie's line, then getting it out sideways is all that's left
+        if self.phase == "orbit" and ball[1] > field.OWN_GOAL_Y + R + 3:
+            target, heading = self.guard(me, ball)   # guard until lined up
+            self.speed = guard_speed(me, target)
+            target = around_ball(me, target, ball)
+            self.phase = "guard (ball behind)"
+            dribbler = False
+        return target, heading, dribbler
 
     def note_kick(self):
         """Called after each loop (main.py): remember when we kicked (KICK_RETURN_T)."""
@@ -804,15 +975,17 @@ class GoalieStrategy:
 
     @staticmethod
     def carrier(ball, opponents):
-        """The opponent (centre, field frame) that has the ball - its centre right behind the ball - or None.
+        """The opponent (centre) that has the ball - the closest one, if its centre is right behind the ball - or None.
         Uses both robots' cameras (world.opponents merges the teammate's "opps")."""
-        c = min(opponents, key=lambda o: dist(o, ball), default=None)
-        return c if c is not None and dist(c, ball) < R + OPP_ON_BALL else None
+        closest = min(opponents, key=lambda o: dist(o, ball), default=None)
+        if closest is not None and dist(closest, ball) < R + OPP_ON_BALL:
+            return closest
+        return None
 
     @staticmethod
     def shot_line_guard(target, ball, carrier):
-        """Shift the guard spot towards the line carrier -> ball (the ball sits in front of the robot holding it, so
-        that's where a kick would go), if that line ends up in our goal."""
+        """(Off: CARRIER_WEIGHT = 0.) Shift the guard spot towards the line carrier -> ball (the ball sits in front of
+        the robot holding it, so that's where a kick would go), if that line ends up in our goal."""
         d = unit((ball[0] - carrier[0], ball[1] - carrier[1]))
         if d[1] > -0.2:
             return target                                    # not facing our goal
@@ -829,61 +1002,70 @@ class GoalieStrategy:
         """Where a ball rolling towards our goal will cross the goalie's line (just in front of the goal), if it will
         cross between the posts soon - else None."""
         if vel[1] > -BLOCK_SPEED:
-            return None
-        y_line = field.OWN_GOAL_Y + R + 3
+            return None                                       # not rolling towards our goal (fast enough)
+        y_line = field.OWN_GOAL_Y + R + 3                     # the goalie's line
         if ball[1] < y_line:
-            return None
-        t_goal = (field.OWN_GOAL_Y - ball[1]) / vel[1]            # where it crosses the goal line
-        if t_goal > BLOCK_TIME or abs(ball[0] + vel[0] * t_goal) > field.GOAL_W / 2 + BLOCK_WIDEN:
-            return None
-        t = (y_line - ball[1]) / vel[1]                         # stand where it crosses the goalie's line
+            return None                                       # already past it
+        t_goal = (field.OWN_GOAL_Y - ball[1]) / vel[1]        # seconds until it crosses the goal line...
+        x_goal = ball[0] + vel[0] * t_goal                    # ...and where
+        if t_goal > BLOCK_TIME or abs(x_goal) > field.GOAL_W / 2 + BLOCK_WIDEN:
+            return None                                       # too late / it'll miss the goal
+        t = (y_line - ball[1]) / vel[1]                       # stand where it crosses the goalie's line
         x = ball[0] + vel[0] * t
         lim = field.GOAL_W / 2 + R
         return [max(-lim, min(lim, x)), y_line]
 
     @staticmethod
     def guard(me, b):
-        """Guard position for a ball at b: on the arc round our goal centre, between ball and goal, facing the ball.
-        (Tried instead: the furthest-back spot on the bisector that still covers the whole goal - the striker drill
-        scored more against that, the goalie is never quite on such a deep spot.)"""
+        """Guard position for a ball at b: on the arc round our goal centre, between ball and goal. Returns
+        (target, heading). (Tried instead: the furthest-back spot on the bisector that still covers the whole goal -
+        the striker drill scored more against that, the goalie is never quite on such a deep spot.)"""
         goal = (0.0, field.OWN_GOAL_Y)
-        v = unit((b[0] - goal[0], b[1] - goal[1]))
-        target = [goal[0] + v[0] * GUARD_RADIUS, max(goal[1] + v[1] * GUARD_RADIUS, goal[1] + R + 3)]
-        target[0] = max(-(field.PENALTY_W / 2 - R), min(field.PENALTY_W / 2 - R, target[0]))
-        return target, 0.0     # facing up-field: turning towards the ball would starve the sideways moves (in
-                               # motion.VelocityToMotor turning and moving share the motors), and the camera sees
-                               # all round anyway
+        v = unit((b[0] - goal[0], b[1] - goal[1]))                     # direction goal -> ball
+        x = goal[0] + v[0] * GUARD_RADIUS
+        y = max(goal[1] + v[1] * GUARD_RADIUS, goal[1] + R + 3)        # not behind the goal line
+        lim = field.PENALTY_W / 2 - R
+        x = max(-lim, min(lim, x))                                     # inside the penalty area
+        # heading 0 = facing up-field: turning towards the ball would starve the sideways moves (in
+        # motion.VelocityToMotor turning and moving share the motors), and the camera sees all round anyway
+        return [x, y], 0.0
 
     def go_for_ball(self, me, ball, vel, aim, centres, defending=False):
-        """Get behind the ball and push it towards aim (both robots). Returns (target, heading, dribbler on)."""
-        b = lead_ball(me, ball, vel)
+        """Get behind the ball and push it towards aim (the goalie, and CarefulStriker). Returns (target, heading,
+        dribbler on); sets .phase and .speed."""
+        b = lead_ball(me, ball, vel)                       # where the ball will be
         target, heading, self.phase = approach(me, b, choose_push_aim(b, aim, defending))
         if self.phase != "push":
-            target = around_ball(me, target, b)
+            target = around_ball(me, target, b)            # not pushing yet: don't bump it on the way
         if self.phase in ("orbit", "line up"):
-            self.speed = {"spd_min": GOALIE_ORBIT_SPD_MIN if isinstance(self, GoalieStrategy) else ORBIT_SPD_MIN}
+            if isinstance(self, GoalieStrategy):
+                self.speed = {"spd_min": GOALIE_ORBIT_SPD_MIN}
+            else:
+                self.speed = {"spd_min": ORBIT_SPD_MIN}
         if self.phase == "push":
             race = any(dist(c, ball) < dist(me, ball) + RACE_MARGIN for c in centres)   # an opponent could get there first
             self.speed = {"spd_multi": PUSH_MULTI if race else catch_speed(me, ball)}
-        # when pushing, the target is a point past the ball: only the way to the ball itself must be clear
+        # go round robots in the way - when pushing, the target is a point past the ball: only the way to the ball
+        # itself must be clear
         nav = b if self.phase == "push" else target
         wp = self.avoid(me, nav, centres, ignore_near=b)
-        target = target if wp is nav else wp
+        if wp is not nav:
+            target = wp                                    # the Avoider gave a waypoint
         return target, heading, dist(me, ball) < DRIBBLER_RANGE
 
     @staticmethod
     def can_shoot(compass, me, centres):
-        """Would kicking now score? The robot's actual heading must cross the goal line between the posts (with
-        room for the ball), within KICK_RANGE (PRESSURE_RANGE with an opponent within PRESSURE_DIST), and the ball's
-        path must miss every robot - no extra margin (waiting / moving for more room wasted chances). Further, up to
-        LONG_RANGE, only at an open goal."""
-        fx, fy = -math.sin(compass), math.cos(compass)
+        """(CarefulStriker.) Would kicking now score? The robot's actual heading must cross the goal line between the
+        posts (with room for the ball), within KICK_RANGE (PRESSURE_RANGE with an opponent within PRESSURE_DIST), and
+        the ball's path must miss every robot. Further, up to LONG_RANGE, only at an open goal."""
+        fx, fy = -math.sin(compass), math.cos(compass)         # the way we face
         if fy < 0.2:
-            return False
-        t = (field.ATTACK_GOAL_Y - me[1]) / fy
-        cross = (me[0] + fx * t, field.ATTACK_GOAL_Y)
+            return False                                       # not facing up-field
+        t = (field.ATTACK_GOAL_Y - me[1]) / fy                 # how far until our facing line meets their goal line
+        cross = (me[0] + fx * t, field.ATTACK_GOAL_Y)          # ...and where
         pressed = any(dist(c, me) < PRESSURE_DIST for c in centres)
-        if not (0 < t < LONG_RANGE and abs(cross[0]) <= field.GOAL_W / 2 - cfg.BALL_RADIUS - POST_MARGIN):
+        between_posts = abs(cross[0]) <= field.GOAL_W / 2 - cfg.BALL_RADIUS - POST_MARGIN
+        if not (0 < t < LONG_RANGE and between_posts):
             return False
         clear = clearance(me, cross, centres)
         if t >= (PRESSURE_RANGE if pressed else KICK_RANGE):          # a long shot: only at an open goal
@@ -892,24 +1074,20 @@ class GoalieStrategy:
             return clear > 0.0 and (goal_empty or wide)
         return clear > 0.0
 
-    @staticmethod
-    def can_kick(compass, heading, me, aim, clear, kick_range=KICK_RANGE):
-        err = abs(math.atan2(math.sin(heading - compass), math.cos(heading - compass)))
-        return err < KICK_ANGLE and dist(me, aim) < kick_range and clear > KICK_CLEARANCE
 
-
-# ==================================== CAREFUL STRIKER ====================================
+# =====================================================================================================================
+#                                               CAREFUL STRIKER
+# =====================================================================================================================
 class CarefulStriker:
-    """Our original striker - now only played while the ball is out of play / not seen (restart play, search, wait),
+    """Our original striker - now only used while the ball is out of play / not seen (restart play, search, wait),
     inside StrikerStrategy (below), which plays the ball. (Its own ball play: careful lining up, a shot planner,
     sidesteps - lost the ball to every team that went for it fast.)
-       botstate 0 = no ball known, goalie on  -> wait in the middle
+       botstate 0 = no ball known, goalie on  -> wait in the middle (or at the restart spot, or search)
        botstate 1 = ball in dribbler            -> carry it to the best aim point, kick when lined up
        botstate 2 = ball known                  -> get behind it (orbit / line up / push)
        botstate 3 = no ball known, goalie off   -> stand in front of our goal
        botstate 4 = goalie is taking the ball   -> wait up-field of the ball for a pass
-       botstate 5 = ball out                    -> wait just behind the neutral spot it'll come back to, facing
-                                                   the attack goal
+       botstate 5 = ball out                    -> wait just behind the neutral spot it'll come back to
        (fallback = strategy_fallback.StrikerFallback while not localised: its botstates are shown + 10)"""
 
     def __init__(self):
@@ -922,11 +1100,12 @@ class CarefulStriker:
         self.kick = False
         self.chasing = False
         self.phase = ""
-        self.last_ball = None        # (field position, time) of the last ball we (or the goalie) saw
+        self.last_ball = None        # (field position, time, went out?) of the last ball we (or the goalie) saw
         self.avoid = Avoider()
         self.shot = ShotPlanner()
         self.group_side = None          # side picked to go round an opponent in front of the ball
-        self.carry_phase, self.carry_since = "", 0.0   # with the ball: "dodge" / "to spot" and since when (DODGE_HOLD)
+        self.carry_phase = ""           # with the ball: "dodge" / "to spot" / ...
+        self.carry_since = 0.0          # ...since when (DODGE_HOLD)
         self.last_dodge = None          # the last sidestep target
 
     def reset(self):
@@ -939,9 +1118,15 @@ class CarefulStriker:
         pose = world.pose
         self.kick = False
         self.possession = possession(world, mate)
+
+        # ---- not sure where we are on the field: the fallback (relative) logic decides
         if pose is None or not pose.confident:
-            out = self.fallback.update(world, compass, mate.get("bot active") if mate else None, line_touches)
-            self.botstate, self.speed, self.command, self.phase = 10 + self.fallback.botstate, self.fallback.speed, self.fallback.command, "fallback"
+            mate_on = mate.get("bot active") if mate else None
+            out = self.fallback.update(world, compass, mate_on, line_touches)
+            self.botstate = 10 + self.fallback.botstate
+            self.speed = self.fallback.speed
+            self.command = self.fallback.command
+            self.phase = "fallback"
             self.chasing = self.fallback.botstate in (1, 2)
             return out
 
@@ -950,7 +1135,7 @@ class CarefulStriker:
         goalie_on = mate_active(mate)
         goalie_pos = mate.get("pos") if goalie_on else None
 
-        # ---- decide (and tell the goalie)
+        # ---- DECIDE the botstate (and tell the goalie whether to take the ball: self.command)
         if ball is None:
             raw = 0 if goalie_on else 3
             self.command = 1 if not goalie_on else 0
@@ -959,12 +1144,17 @@ class CarefulStriker:
         elif world.ball_in_capture:
             raw, self.command = 1, 0
         else:
-            handover = (goalie_on and not contested(ball, obstacle_centres(me, world.obstacles_field)) and ball[1] < HANDOVER_Y and
-                        ball_cost(goalie_pos, ball) + HANDOVER_MARGIN < ball_cost(me, ball))
+            # hand the ball to the goalie if it's near our goal, free, and the goalie is clearly better placed
+            handover = (goalie_on and not contested(ball, obstacle_centres(me, world.obstacles_field))
+                        and ball[1] < HANDOVER_Y
+                        and ball_cost(goalie_pos, ball) + HANDOVER_MARGIN < ball_cost(me, ball))
             if (self.botstate == 4 and goalie_on and mate.get("chasing") and ball[1] < CLEAR_RETURN_Y
                     and not contested(ball, obstacle_centres(me, world.obstacles_field))):
                 handover = True                                   # let the goalie finish the clearance
-            raw, self.command = (4, 1) if handover else (2, 0)
+            if handover:
+                raw, self.command = 4, 1
+            else:
+                raw, self.command = 2, 0
         self.botstate = self.botstate_hyst.update(raw)
         if ball is None and self.botstate in (2, 4, 5):
             self.botstate = 0 if goalie_on else 3
@@ -973,41 +1163,32 @@ class CarefulStriker:
             ball = (me[0] + fwd[0] * (R + cfg.BALL_RADIUS), me[1] + fwd[1] * (R + cfg.BALL_RADIUS))
         self.chasing = self.botstate in (1, 2)
 
-        # ---- act
+        # ---- ACT
         dribbler = False
         self.speed = {}
         heading = 0.0
-        if ball is not None:   # remember it (an out ball: remember the spot it'll come back to, to look there)
+        if ball is not None:
+            # remember it (an out ball: remember the spot it'll come back to, to wait there)
             out = going_out(ball, world.ball_vel)
-            self.last_ball = (restart_spot(ball) if out else ball, time.monotonic(), out)
+            remembered = restart_spot(ball) if out else ball
+            self.last_ball = (remembered, time.monotonic(), out)
         centres = obstacle_centres(me, world.obstacles_field)
         if self.botstate != 1:
             self.shot.reset()
+
         if self.botstate == 5:
+            # ball out: wait on our goal's side of the spot it'll come back to
             spot = restart_spot(ball)
-            target = clamp_in_field([spot[0] * RESTART_X_SHARE, spot[1] - NEUTRAL_WAIT], R)   # own-goal side of the spot
+            target = clamp_in_field([spot[0] * RESTART_X_SHARE, spot[1] - NEUTRAL_WAIT], R)
             target = self.avoid(me, target, centres)
             self.phase = "ball out"
         elif self.botstate == 0:
-            lb = self.last_ball
-            if lb is not None and lb[2] and time.monotonic() - lb[1] < RESTART_WAIT:
-                # restart play: the ball went out and comes back on that neutral spot - wait just behind it,
-                # facing their goal, to take it the moment it's there
-                target = [lb[0][0] * RESTART_X_SHARE - math.copysign(RESTART_SIDE, lb[0][0] or 1.0), lb[0][1] - NEUTRAL_WAIT]
-                target, self.phase = self.avoid(me, target, centres), "restart"
-                far = (-math.copysign(field.GOAL_W / 2 - 8.0, lb[0][0] or 1.0), field.ATTACK_GOAL_Y)
-                if any(dist(o, (0.0, field.ATTACK_GOAL_Y)) < 30 for o in world.opponents):   # their keeper is home
-                    heading = heading_for((far[0] - lb[0][0], far[1] - lb[0][1]))   # face the far corner from the spot
-            elif lb is not None and time.monotonic() - lb[1] < SEARCH_TIME:
-                target, self.phase = clamp_in_field(lb[0]), "search"    # go and look where it was
-                target = self.avoid(me, target, centres)
-            else:
-                target, self.phase = self.avoid(me, list(WAIT_POS), centres), "wait"   # (round robots in the way)
-                if dist(me, WAIT_POS) > 30:
-                    self.speed = {"spd_min": 0.6}      # far to go: not slow just because a waypoint is close
+            target, heading = self.no_ball(world, me, centres)
         elif self.botstate == 3:
-            target, self.phase = [0.0, field.OWN_GOAL_Y + GUARD_RADIUS + 10], "defend"
+            target = [0.0, field.OWN_GOAL_Y + GUARD_RADIUS + 10]
+            self.phase = "defend"
         elif self.botstate == 4:
+            # the goalie is clearing: wait up-field of the ball for its pass
             target = clamp_in_field([-ball[0] * 0.5, ball[1] + SUPPORT_OFFSET])
             target = self.avoid(me, target, centres)
             heading = 0.0       # face up-field (facing the goalie's ball meant turning round to take a clearance)
@@ -1015,75 +1196,11 @@ class CarefulStriker:
         else:
             aim, clear = best_aim(ball, centres)
             if self.botstate == 1:
+                target, heading = self.carry(world, compass, me, aim, centres)
                 dribbler = True
-                self.speed = {"spd_multi": CARRY_MULTI}
-                heading = heading_for((aim[0] - me[0], aim[1] - me[1]))
-                threat = self.dodge_threat(me, world)
-                now = time.monotonic()
-                want_dodge = threat is not None and dist(threat, me) < DODGE_DIST
-                if (self.carry_phase in ("dodge", "to spot") and now - self.carry_since < DODGE_HOLD
-                        and want_dodge != (self.carry_phase == "dodge")):
-                    want_dodge = self.carry_phase == "dodge" and self.last_dodge is not None   # don't flick back yet
-                if GoalieStrategy.can_shoot(compass, me, centres):
-                    target, self.kick, self.phase = list(me), True, "shoot"   # clear shot from here: take it
-                elif want_dodge:                                              # about to be tackled: sidestep
-                    if threat is not None and dist(threat, me) < DODGE_DIST:
-                        self.last_dodge = self.dodge(me, threat, centres)
-                    target, self.phase = list(self.last_dodge), "dodge"
-                else:
-                    spot, spot_aim = self.shot.plan(me, centres)
-                    if spot is None:                       # no good spot anywhere: push towards the goal
-                        target, self.phase = self.avoid(me, list(aim), centres, back_cost=CARRY_BACK_COST), "carry"
-                    else:
-                        # always face the aim point (robot -> ball -> aim in a line) and strafe to the spot,
-                        # so the shot is already lined up when we get there
-                        heading = heading_for((spot_aim[0] - me[0], spot_aim[1] - me[1]))
-                        if dist(me, spot) > SHOT_ARRIVED:
-                            target, self.phase = self.avoid(me, list(spot), centres, back_cost=CARRY_BACK_COST), "to spot"
-                        else:
-                            target, self.phase = list(spot), "line up shot"
-                            self.kick = GoalieStrategy.can_shoot(compass, me, centres)
-                if self.phase != self.carry_phase:
-                    self.carry_phase, self.carry_since = self.phase, now
-                if target[1] < me[1] - CARRY_BACK_ALLOW:     # never back off with the ball: go sideways instead
-                    target = [target[0], me[1]]
-                # the ball is in front of us: keep it in the field (sidestepping a bit closer to the line)
-                # (going round a robot: the waypoint may be wider - clamped back into the carrying lane it pulled the
-                # robot back in front of the robot it was going round, and it swung to and fro there)
-                wide = self.phase == "dodge" or (self.phase in ("to spot", "carry") and self.avoid.wp is not None)
-                target = clamp_in_field(target, DODGE_MARGIN if wide else CARRY_MARGIN)
             else:
-                # ball in our half and we're between it and our goal: clear it from here (like the goalie) instead
-                # of going round it, which would leave the opponent a free push at our goal
-                defending = ball[1] < STRIKER_CLEAR_Y and me[1] < ball[1] - R
-                if defending:
-                    aim = clear_aim(ball)
-                target, heading, dribbler = GoalieStrategy.go_for_ball(self, me, ball, world.ball_vel, aim, centres,
-                                                                       defending)
-                if (self.phase in ("orbit", "line up") and ball[1] > CATCH_FRONT_Y and dist(me, ball) < CATCH_FRONT_DIST
-                        and path_blocked(me, ball, centres, ignore_near=ball) is None
-                        and catch_is_faster(me, compass, ball, aim, target)):
-                    # wrong side of the ball: catch it from here and turn with it instead of going round it
-                    target, heading, dribbler = list(ball), heading_for((ball[0] - me[0], ball[1] - me[1])), True
-                    self.speed = {"spd_multi": catch_speed(me, ball)}
-                    self.phase = "catch"
-                blocker = blocker_between(me, ball, centres)
-                if blocker is not None and unit((ball[0] - me[0], ball[1] - me[1]))[1] > BLOCKER_UPFIELD:
-                    blocker = None      # shoving it up-field (towards their goal) is fine: just go
-                if blocker is not None:
-                    # an opponent between us and the ball: going straight at the ball would shove it onto the ball
-                    # (and maybe into our goal) - go round the opponent and the ball together instead
-                    target = self.around_group(me, ball, blocker)
-                    heading, dribbler = heading_for((ball[0] - me[0], ball[1] - me[1])), False
-                    self.speed, self.phase = {"spd_min": ORBIT_SPD_MIN}, "round blocker"
-                else:
-                    self.group_side = None
-                if not goalie_on and self.solo_defend(me, ball, world.opponents):
-                    # on our own and an opponent will get to the ball first in our half: mind the goal instead
-                    target, heading = GoalieStrategy.guard(me, ball)
-                    block = GoalieStrategy.block_point(ball, world.ball_vel)
-                    target = around_ball(me, block or target, ball)
-                    self.speed, dribbler, self.phase = guard_speed(me, target), False, "solo guard"
+                target, heading, dribbler = self.get_ball(world, compass, me, ball, aim, centres, goalie_on)
+
         if self.botstate == 2 and ball is not None:
             # going for the ball and an opponent shoves against us over it (kickoffs): shove back at full speed
             # (with the ball already ours, dodging round it scored more)
@@ -1092,14 +1209,126 @@ class CarefulStriker:
                 d = unit((sh[0] - me[0], sh[1] - me[1]))
                 target = clamp_in_field([me[0] + d[0] * PUSHBACK_REACH, me[1] + d[1] * PUSHBACK_REACH], OUT_MARGIN)
                 heading = heading_for(d)
-                self.speed, self.phase = {"spd_multi": 1.0}, "push back"
+                self.speed = {"spd_multi": 1.0}
+                self.phase = "push back"
         return rel(target, pose), heading, dribbler
+
+    def no_ball(self, world, me, centres):
+        """Botstate 0 (no ball seen, goalie on): returns (target, heading)."""
+        heading = 0.0
+        lb = self.last_ball
+        now = time.monotonic()
+        if lb is not None and lb[2] and now - lb[1] < RESTART_WAIT:
+            # restart play: the ball went out and comes back on that neutral spot - wait just behind it,
+            # facing their goal, to take it the moment it's there
+            spot = lb[0]
+            x = spot[0] * RESTART_X_SHARE - math.copysign(RESTART_SIDE, spot[0] or 1.0)
+            target = [x, spot[1] - NEUTRAL_WAIT]
+            target = self.avoid(me, target, centres)
+            self.phase = "restart"
+            their_keeper_home = any(dist(o, (0.0, field.ATTACK_GOAL_Y)) < 30 for o in world.opponents)
+            if their_keeper_home:
+                # face the far corner of their goal from the spot
+                far = (-math.copysign(field.GOAL_W / 2 - 8.0, spot[0] or 1.0), field.ATTACK_GOAL_Y)
+                heading = heading_for((far[0] - spot[0], far[1] - spot[1]))
+        elif lb is not None and now - lb[1] < SEARCH_TIME:
+            # seen a moment ago: go and look where it was
+            target = clamp_in_field(lb[0])
+            self.phase = "search"
+            target = self.avoid(me, target, centres)
+        else:
+            # wait behind the centre spot (going round robots in the way)
+            target = self.avoid(me, list(WAIT_POS), centres)
+            self.phase = "wait"
+            if dist(me, WAIT_POS) > 30:
+                self.speed = {"spd_min": 0.6}      # far to go: not slow just because a waypoint is close
+        return target, heading
+
+    def carry(self, world, compass, me, aim, centres):
+        """Botstate 1 (ball in the dribbler): shoot, sidestep, or carry it to a shooting spot. Returns (target,
+        heading); sets .kick / .phase / .speed."""
+        self.speed = {"spd_multi": CARRY_MULTI}
+        heading = heading_for((aim[0] - me[0], aim[1] - me[1]))
+        threat = self.dodge_threat(me, world)
+        now = time.monotonic()
+        want_dodge = threat is not None and dist(threat, me) < DODGE_DIST
+        # just switched between dodging and going to the shooting spot: don't flick back yet
+        if (self.carry_phase in ("dodge", "to spot") and now - self.carry_since < DODGE_HOLD
+                and want_dodge != (self.carry_phase == "dodge")):
+            want_dodge = self.carry_phase == "dodge" and self.last_dodge is not None
+
+        if GoalieStrategy.can_shoot(compass, me, centres):
+            target, self.kick, self.phase = list(me), True, "shoot"   # clear shot from here: take it
+        elif want_dodge:                                              # about to be tackled: sidestep
+            if threat is not None and dist(threat, me) < DODGE_DIST:
+                self.last_dodge = self.dodge(me, threat, centres)
+            target, self.phase = list(self.last_dodge), "dodge"
+        else:
+            spot, spot_aim = self.shot.plan(me, centres)
+            if spot is None:                       # no good spot anywhere: push towards the goal
+                target = self.avoid(me, list(aim), centres, back_cost=CARRY_BACK_COST)
+                self.phase = "carry"
+            else:
+                # always face the aim point (robot -> ball -> aim in a line) and strafe to the spot,
+                # so the shot is already lined up when we get there
+                heading = heading_for((spot_aim[0] - me[0], spot_aim[1] - me[1]))
+                if dist(me, spot) > SHOT_ARRIVED:
+                    target = self.avoid(me, list(spot), centres, back_cost=CARRY_BACK_COST)
+                    self.phase = "to spot"
+                else:
+                    target, self.phase = list(spot), "line up shot"
+                    self.kick = GoalieStrategy.can_shoot(compass, me, centres)
+        if self.phase != self.carry_phase:
+            self.carry_phase, self.carry_since = self.phase, now
+        if target[1] < me[1] - CARRY_BACK_ALLOW:     # never back off with the ball: go sideways instead
+            target = [target[0], me[1]]
+        # the ball is in front of us: keep it in the field (sidestepping a bit closer to the line)
+        # (going round a robot: the waypoint may be wider - clamped back into the carrying lane it pulled the
+        # robot back in front of the robot it was going round, and it swung to and fro there)
+        wide = self.phase == "dodge" or (self.phase in ("to spot", "carry") and self.avoid.wp is not None)
+        target = clamp_in_field(target, DODGE_MARGIN if wide else CARRY_MARGIN)
+        return target, heading
+
+    def get_ball(self, world, compass, me, ball, aim, centres, goalie_on):
+        """Botstate 2: get the ball. Returns (target, heading, dribbler); sets .phase / .speed."""
+        # ball in our half and we're between it and our goal: clear it from here (like the goalie) instead
+        # of going round it, which would leave the opponent a free push at our goal
+        defending = ball[1] < STRIKER_CLEAR_Y and me[1] < ball[1] - R
+        if defending:
+            aim = clear_aim(ball)
+        target, heading, dribbler = GoalieStrategy.go_for_ball(self, me, ball, world.ball_vel, aim, centres,
+                                                               defending)
+        if (self.phase in ("orbit", "line up") and ball[1] > CATCH_FRONT_Y and dist(me, ball) < CATCH_FRONT_DIST
+                and path_blocked(me, ball, centres, ignore_near=ball) is None
+                and catch_is_faster(me, compass, ball, aim, target)):
+            # wrong side of the ball: catch it from here and turn with it instead of going round it
+            target, heading, dribbler = list(ball), heading_for((ball[0] - me[0], ball[1] - me[1])), True
+            self.speed = {"spd_multi": catch_speed(me, ball)}
+            self.phase = "catch"
+        blocker = blocker_between(me, ball, centres)
+        if blocker is not None and unit((ball[0] - me[0], ball[1] - me[1]))[1] > BLOCKER_UPFIELD:
+            blocker = None      # shoving it up-field (towards their goal) is fine: just go
+        if blocker is not None:
+            # an opponent between us and the ball: going straight at the ball would shove it onto the ball
+            # (and maybe into our goal) - go round the opponent and the ball together instead
+            target = self.around_group(me, ball, blocker)
+            heading, dribbler = heading_for((ball[0] - me[0], ball[1] - me[1])), False
+            self.speed, self.phase = {"spd_min": ORBIT_SPD_MIN}, "round blocker"
+        else:
+            self.group_side = None
+        if not goalie_on and self.solo_defend(me, ball, world.opponents):
+            # on our own and an opponent will get to the ball first in our half: mind the goal instead
+            target, heading = GoalieStrategy.guard(me, ball)
+            block = GoalieStrategy.block_point(ball, world.ball_vel)
+            target = around_ball(me, block or target, ball)
+            self.speed, dribbler, self.phase = guard_speed(me, target), False, "solo guard"
+        return target, heading, dribbler
 
     def around_group(self, me, ball, blocker):
         """Waypoint beside the opponent + ball as one group, far enough out to clear both. Keeps the side it picked
         (re-deciding every loop shuffles); prefers the side that stays in the field, then the side the ball is on
         (shorter way round to it)."""
-        g = ((ball[0] + blocker[0]) / 2, (ball[1] + blocker[1]) / 2)
+        g = ((ball[0] + blocker[0]) / 2, (ball[1] + blocker[1]) / 2)      # middle of the group
         reach = dist(ball, blocker) / 2 + R + BLOCKER_CLEAR
         u = unit((g[0] - me[0], g[1] - me[1]))
         n = (-u[1], u[0])
@@ -1122,22 +1351,21 @@ class CarefulStriker:
     @staticmethod
     def dodge(me, threat, centres=()):
         """Sidestep away from an opponent about to tackle (keeping the heading, so the shot stays lined up): to the
-        side of the line between us that is the least effort to get past it going up-field (the sidestep spot
-        furthest across and up-field from it, not into another robot or out of the field), then the one nearer the
-        middle.
-        It goes DODGE_FORWARD up-field at the same time - past the opponent, shouldering it aside - instead of
-        backing away from it (backing away it went left-right in front of a chasing opponent and lost ground).
-        Their goalie (at its penalty area): sidestep towards the more open part of the goal (away from the side it
-        stands on). (Straight across there, without the step forwards, was worse.)
-        (Tried: keeping the chosen side for a while, only dodging opponents moving towards us - both worse.)"""
+        side that is the least effort to get past it going up-field (not into another robot or out of the field),
+        then the one nearer the middle. It goes DODGE_FORWARD up-field at the same time - past the opponent,
+        shouldering it aside, not backing away. Their goalie: sidestep towards the more open part of the goal."""
         d = unit((threat[0] - me[0], threat[1] - me[1]))
         keeper = threat[1] > field.ATTACK_GOAL_Y - field.PENALTY_D - R      # their goalie (in / at its area)
-        best = None
+        best = None                                                         # (cost, sidestep point)
         for side in (1.0, -1.0):
             p = [me[0] - d[1] * side * DODGE_STEP, me[1] + d[0] * side * DODGE_STEP + DODGE_FORWARD]
             if keeper:                    # their goalie: sidestep to the more open part of the goal
-                open_side = -math.copysign(1.0, threat[0]) if abs(threat[0]) > 2 else math.copysign(1.0, me[0] or 1.0)
-                cost = 3.0 * dist(p, clamp_in_field(p, DODGE_MARGIN)) + (0.0 if (p[0] - me[0]) * open_side > 0 else 100.0)
+                if abs(threat[0]) > 2:
+                    open_side = -math.copysign(1.0, threat[0])
+                else:
+                    open_side = math.copysign(1.0, me[0] or 1.0)
+                outside = dist(p, clamp_in_field(p, DODGE_MARGIN))
+                cost = 3.0 * outside + (0.0 if (p[0] - me[0]) * open_side > 0 else 100.0)
                 if best is None or cost < best[0]:
                     best = (cost, p)
                 continue
@@ -1151,27 +1379,31 @@ class CarefulStriker:
 
     @staticmethod
     def dodge_threat(me, world):
-        """Opponent to dodge: the nearest one that's either coming at us (DODGE_CLOSING) or already right next to us
-        (DODGE_NEAR, e.g. a scrum). One standing still further away is just gone round (dodging it only lost the
-        ball sideways: with the opponents standing still the striker shuffled left and right in front of them)."""
-        best = None
+        """Opponent to sidestep: the nearest one that's either coming at us (DODGE_CLOSING) or already right next to
+        us (DODGE_NEAR, e.g. a scrum)."""
+        best = None                                   # (distance, opponent)
         for o, v in zip(world.opponents, world.opponent_vel):
             d = dist(o, me)
             to_me = unit((me[0] - o[0], me[1] - o[1]))
-            if (d < DODGE_NEAR or v[0] * to_me[0] + v[1] * to_me[1] > DODGE_CLOSING) and (best is None or d < best[0]):
+            closing_speed = v[0] * to_me[0] + v[1] * to_me[1]
+            if (d < DODGE_NEAR or closing_speed > DODGE_CLOSING) and (best is None or d < best[0]):
                 best = (d, o)
-        return None if best is None else best[1]
+        if best is None:
+            return None
+        return best[1]
 
 
-# ==================================== STRIKER (attacker) ====================================
+# =====================================================================================================================
+#                                            STRIKER (attacker)
 # Built by playing ports of other teams' strategies in the simulator (past_versions/ts, ba, lx, tn): going for the
 # ball the way team TS did (fast, straight at it - careful lining up lost every race), carrying it the way Bodensee
 # Adler did (straight at the goal, kick once facing it), and our own CarefulStriker for everything while the ball is
 # out of play / not seen (restarts decide many games: the ball goes out ~20 times a game).
+# =====================================================================================================================
 
 CHASE_EXAGGERATE = 1.7      # chase: aim this much further round the ball than its angle, at the closest (90..20 cm)
 CHASE_FACE_DIST = 55.0      # chase: turn to face the ball when it's this close...
-CHASE_FACE_ANGLE = 60.0     # ...and within this angle of up-field
+CHASE_FACE_ANGLE = 60.0     # ...and within this angle (degrees) of up-field
 CARRY_FACING = math.radians(10)   # carrying: facing the goal within this...
 CARRY_KICK_HOLD = 0.2       # ...for this long (s) -> kick...
 CARRY_KICK_RANGE = 70.0     # ...if this close to it (from further the goalie saved it)
@@ -1186,99 +1418,136 @@ SLIP_SIDE = 25.0                   # SLIP_FORWARD forwards) - driving into it go
 SLIP_FORWARD = 15.0
 BOX_KEEP = R + 2.0          # the striker keeps this far out of our penalty area while our goalie is on (both of us in it
                             # with the ball = multiple defence: the goalie gets moved out and the goal is empty)
+CARRY_FRONT_CONE = math.radians(60)   # carrying: no opponent within CARRY_CONTACT_RANGE (allowing for
+CARRY_CONTACT_RANGE = 60.0            # CARRY_LEAD s of its movement) inside this angle either side of our front
+CARRY_LEAD = 0.3                      # (the capture zone): a bump there knocks the ball off us, on the side or
+CARRY_TURN_MAX = math.radians(120)    # back it doesn't. Turn up to CARRY_TURN_MAX off the goal for that,
+CARRY_TURN_STEP = math.radians(10)    # trying every CARRY_TURN_STEP.
+CARRY_CLOSING = 20.0                  # only opponents coming at us faster than this (cm/s)
+
+
+def share(value, start, end):
+    """How far value has got from start to end, as 0..1 (0 at start or before, 1 at end or past it).
+    e.g. share(d, 90, 20) = 0 when d >= 90 cm, 1 when d <= 20 cm, 0.5 at 55 cm."""
+    return min(1.0, max(0.0, (start - value) / (start - end)))
 
 
 def chase(me, ball):
-    """Go for a loose ball like team TS: straight along the ball's angle, aiming further round it the closer it is (so
-    the robot curls in behind it), turning to face it once it's close and in front. Returns (target field point,
-    heading, dribbler on, speed multiplier)."""
+    """Go for a loose ball (team TS's way): along the ball's direction, aiming further round it the closer it is (so
+    the robot curls in behind it), turning to face it once it's close and in front.
+    Returns (target field point, heading, dribbler on, speed multiplier)."""
     d = dist(me, ball)
-    a = math.degrees(math.atan2(ball[0] - me[0], ball[1] - me[1]))     # 0 = up-field, + = right
+    # the ball's direction from us in DEGREES: 0 = straight up-field, +90 = to our right, -90 = left, 180 = behind
+    a = math.degrees(math.atan2(ball[0] - me[0], ball[1] - me[1]))
 
-    def f(x, B=76.0):
+    def soften(x, B=76.0):
+        # about 0 for small angles, about x for big ones (the change happens around B degrees)
         return x * (1 - 1 / (1 + abs(x / B) ** 3))
-    t1 = min(1.0, max(0.0, (90.0 - d) / 70.0))
-    ang = a + (max(-180.0, min(180.0, a * CHASE_EXAGGERATE)) - a) * t1
-    t2 = min(1.0, max(0.0, (50.0 - d) / 30.0))
-    ang = ang + (180.0 * f(ang) / f(180.0) - ang) * t2
+
+    # 1) the closer we get (90 -> 20 cm), the further round the ball we aim: from a towards a * 1.7, so the robot
+    #    curls round to come in behind it
+    t1 = share(d, 90.0, 20.0)
+    further_round = max(-180.0, min(180.0, a * CHASE_EXAGGERATE))
+    ang = a + (further_round - a) * t1
+    # 2) close up (50 -> 20 cm): ball nearly in front -> straight at it; ball beside / behind -> keep going round
+    t2 = share(d, 50.0, 20.0)
+    ang = ang + (180.0 * soften(ang) / soften(180.0) - ang) * t2
+    # drive towards a point 40 cm away in that direction
     target = [me[0] + math.sin(math.radians(ang)) * 40, me[1] + math.cos(math.radians(ang)) * 40]
+
+    # 3) facing: up-field, but within CHASE_FACE_DIST and with the ball within CHASE_FACE_ANGLE of up-field, turn
+    #    to face it - fully by 22 cm, sooner the more it's to the side. (-a: headings count anticlockwise, a clockwise)
     heading = 0.0
     if d <= CHASE_FACE_DIST and abs(a) <= CHASE_FACE_ANGLE:
-        t = min(1.0, max(0.0, (d - 22) / 28)) * max(0.0, 1 - 1.5 * abs(a) / 90)
-        heading = math.radians(-a) * (1 - t)
-    spd = 0.8 + 0.2 * min(1.0, max(0.0, (d - 30) / 15))
+        far_away = share(d, 22, 50)                       # 0 at 22 cm, 1 at 50 cm
+        straight_ahead = max(0.0, 1 - 1.5 * abs(a) / 90)  # 1 straight ahead, 0 from 60 degrees off
+        t = far_away * straight_ahead
+        heading = math.radians(-a) * (1 - t)               # t = 0: face the ball fully, t = 1: face up-field
+
+    # 4) speed: full from 45 cm, easing to 80% at 30 cm, and x0.6 under 25 cm (gentle at the ball, to catch it)
+    spd = 0.8 + 0.2 * share(d, 30, 45)
     if d < 25:
         spd *= 0.6
-    return clamp_in_field(target, FIELD_MARGIN), heading, d <= 33 and abs(a) <= 45, spd
+
+    # 5) dribbler on when it's close and in front
+    dribbler = d <= 33 and abs(a) <= 45
+    return clamp_in_field(target, FIELD_MARGIN), heading, dribbler, spd
 
 
 def shot_open(compass, me, centres, max_range):
-    """Our actual heading crosses their goal mouth within max_range and the ball's path misses every robot."""
-    fx, fy = -math.sin(compass), math.cos(compass)
+    """Kicking right now would score: our actual heading crosses their goal mouth within max_range (with room for
+    the ball inside the posts) and the ball's path misses every robot."""
+    fx, fy = -math.sin(compass), math.cos(compass)     # the way we face
     if fy < 0.2:
-        return False
-    t = (field.ATTACK_GOAL_Y - me[1]) / fy
-    cross = (me[0] + fx * t, field.ATTACK_GOAL_Y)
-    if not (0 < t < max_range and abs(cross[0]) <= field.GOAL_W / 2 - cfg.BALL_RADIUS - POST_MARGIN):
+        return False                                   # not facing up-field
+    t = (field.ATTACK_GOAL_Y - me[1]) / fy             # how far along our facing line their goal line is
+    cross = (me[0] + fx * t, field.ATTACK_GOAL_Y)      # where we'd cross it
+    in_range = 0 < t < max_range
+    between_posts = abs(cross[0]) <= field.GOAL_W / 2 - cfg.BALL_RADIUS - POST_MARGIN
+    if not (in_range and between_posts):
         return False
     return clearance(me, cross, centres) > 0.0
 
 
 def head_on(me, compass, opponents):
-    """An opponent pressed against our front (see HEAD_ON_*), or None."""
-    fwd = (-math.sin(compass), math.cos(compass))
+    """An opponent pressed against our front (centre within 2R + HEAD_ON_GAP, within HEAD_ON_ANGLE of straight
+    ahead), or None."""
+    fwd = (-math.sin(compass), math.cos(compass))      # the way we face
     for o in opponents:
         d = dist(o, me)
-        if d < 2 * R + HEAD_ON_GAP and ((o[0] - me[0]) * fwd[0] + (o[1] - me[1]) * fwd[1]) / max(d, 1e-6) > math.cos(HEAD_ON_ANGLE):
+        touching = d < 2 * R + HEAD_ON_GAP
+        # dot product of "our front" and "the way to it" = cos(the angle between them)
+        cos_angle = ((o[0] - me[0]) * fwd[0] + (o[1] - me[1]) * fwd[1]) / max(d, 1e-6)
+        if touching and cos_angle > math.cos(HEAD_ON_ANGLE):
             return o
     return None
 
 
 def charged(me, opponents, velocities):
     """An opponent within CHARGED_DIST coming at us faster than CHARGED_SPEED?"""
-    return any(dist(o, me) < CHARGED_DIST and v[0] * unit((me[0] - o[0], me[1] - o[1]))[0]
-               + v[1] * unit((me[0] - o[0], me[1] - o[1]))[1] > CHARGED_SPEED
-               for o, v in zip(opponents, velocities))
-
-
-CARRY_FRONT_CONE = math.radians(60)   # carrying: no opponent within CARRY_CONTACT_RANGE (allowing for
-CARRY_CONTACT_RANGE = 60.0                # CARRY_LEAD s of its movement) inside this angle either side of our front
-CARRY_LEAD = 0.3                           # (the capture zone): a bump there knocks the ball off us, on the side or
-CARRY_TURN_MAX = math.radians(120)         # back it doesn't. Turn up to CARRY_TURN_MAX off the goal for that.
-CARRY_TURN_STEP = math.radians(10)
-CARRY_CLOSING = 20.0                       # only opponents coming at us faster than this (cm/s)
+    for o, v in zip(opponents, velocities):
+        to_me = unit((me[0] - o[0], me[1] - o[1]))
+        closing_speed = v[0] * to_me[0] + v[1] * to_me[1]      # how fast it's coming at us
+        if dist(o, me) < CHARGED_DIST and closing_speed > CHARGED_SPEED:
+            return True
+    return False
 
 
 def carry_dir(me, goal, opponents, velocities):
-    """Carrying the ball: the direction (unit vector) to carry it in, facing it - the one nearest straight at their
-    goal that keeps every nearby opponent out of our front cone, so if we bump into one it's with the side / back of
-    the robot, not the capture zone with the ball (carrying straight at the goal ran the ball into an opponent coming
-    the other way). None possible: the one keeping them furthest round to the side."""
-    g = math.atan2(goal[1] - me[1], goal[0] - me[0])
+    """Carrying the ball: the direction (unit arrow) to carry it in, facing it - the one nearest straight at their
+    goal that keeps every nearby opponent coming at us out of our front cone, so if we bump into one it's with the
+    side / back of the robot, not the capture zone with the ball (carrying straight at the goal ran the ball into
+    an opponent coming the other way). None possible: the one keeping them furthest round to the side."""
+    to_goal = math.atan2(goal[1] - me[1], goal[0] - me[0])    # (maths angle, not a compass heading)
+
+    # the angles to the opponents that matter: coming at us, and near us (now or CARRY_LEAD s from now)
     near = []
     for o, v in zip(opponents, velocities):
-        f = (o[0] + v[0] * CARRY_LEAD, o[1] + v[1] * CARRY_LEAD)
+        soon = (o[0] + v[0] * CARRY_LEAD, o[1] + v[1] * CARRY_LEAD)     # where it'll be in CARRY_LEAD s
         to_me = unit((me[0] - o[0], me[1] - o[1]))
-        if v[0] * to_me[0] + v[1] * to_me[1] < CARRY_CLOSING:
+        closing_speed = v[0] * to_me[0] + v[1] * to_me[1]
+        if closing_speed < CARRY_CLOSING:
             continue                                  # (one standing still / moving away: carry on past it)
-        if dist(f, me) < CARRY_CONTACT_RANGE or dist(o, me) < CARRY_CONTACT_RANGE:
-            near.append(math.atan2(f[1] - me[1], f[0] - me[0]))
+        if dist(soon, me) < CARRY_CONTACT_RANGE or dist(o, me) < CARRY_CONTACT_RANGE:
+            near.append(math.atan2(soon[1] - me[1], soon[0] - me[0]))
     if not near:
-        return (math.cos(g), math.sin(g))
-    best = None
-    n = int(CARRY_TURN_MAX / CARRY_TURN_STEP + 0.5)
+        return (math.cos(to_goal), math.sin(to_goal))  # nobody coming: straight at the goal
+
+    # try turning 0, -10, +10, -20, +20 ... degrees off the goal (smallest turn first)
+    best = None                                       # (how far the nearest opponent is off our front, angle)
+    n = int(CARRY_TURN_MAX / CARRY_TURN_STEP + 0.5)   # 12 steps each way
     for k in sorted(range(-n, n + 1), key=abs):
-        a = g + k * CARRY_TURN_STEP
-        worst = min(abs(math.atan2(math.sin(b - a), math.cos(b - a))) for b in near)   # nearest opponent bearing
+        a = to_goal + k * CARRY_TURN_STEP
+        worst = min(abs(angle_diff(b, a)) for b in near)    # the opponent nearest our front (angle)
         if worst >= CARRY_FRONT_CONE:
-            return (math.cos(a), math.sin(a))
+            return (math.cos(a), math.sin(a))         # all of them outside our front cone: carry this way
         if best is None or worst > best[0]:
             best = (worst, a)
     return (math.cos(best[1]), math.sin(best[1]))
 
 
 def keep_out_of_box(target):
-    """Move a target point out of our penalty area (BOX_KEEP)."""
+    """Move a target point out of our penalty area (+ BOX_KEEP): to its front edge."""
     front = field.OWN_GOAL_Y + field.PENALTY_D + BOX_KEEP
     if abs(target[0]) < field.PENALTY_W / 2 + BOX_KEEP and target[1] < front:
         return [target[0], front]
@@ -1288,9 +1557,8 @@ def keep_out_of_box(target):
 class StrikerStrategy:
     """Ball in play (seen, not out):
          ball in the dribbler, an opponent pressed against it head-on -> "slip past": step forwards past it
-         ball in the dribbler                                          -> "carry": straight at their goal, facing it;
-                kick when facing it (CARRY_*), just after winning it (QUICK_SHOT_*) or when charged (CHARGED_*) - if
-                the shot is open
+         ball in the dribbler                                          -> "carry": at their goal (carry_dir()), kick
+                when facing it (CARRY_*), just after winning it (QUICK_SHOT_*) or when charged (CHARGED_*) - if open
          otherwise                                                     -> "chase" (chase())
        Ball out / not seen: CarefulStriker (restart play, search, wait, ...) - its phases are shown as "restart: ...".
        Never goes into our penalty area while the goalie is on (keep_out_of_box()).
@@ -1306,77 +1574,113 @@ class StrikerStrategy:
         self.phase = ""
         self.command = 0
         self.possession = None   # "us" / "them" / None: who has the ball (possession())
-        self.facing_since = None
+        self.facing_since = None # carrying: since when we've faced their goal (CARRY_KICK_HOLD)
         self.won_at = None       # when we got the ball (QUICK_SHOT_TIME)
 
     def reset(self):
         self.fallback.reset()
         self.careful.reset()
-        self.facing_since = self.won_at = None
+        self.facing_since = None
+        self.won_at = None
 
     def update(self, world, compass, mate, line_touches):
+        # CarefulStriker runs every loop, so it keeps remembering where the ball went - we use its answer below
+        # only while the ball is out / not seen
         careful_out = self.careful.update(world, compass, mate, line_touches)
         pose = world.pose
         self.kick = False
         self.command = 0
         self.possession = possession(world, mate)
+
+        # ---- not sure where we are on the field: the fallback (relative) logic decides
         if pose is None or not pose.confident:
-            out = self.fallback.update(world, compass, mate.get("bot active") if mate else None, line_touches)
-            self.botstate, self.speed, self.phase = 10 + self.fallback.botstate, self.fallback.speed, "fallback"
+            mate_on = mate.get("bot active") if mate else None
+            out = self.fallback.update(world, compass, mate_on, line_touches)
+            self.botstate = 10 + self.fallback.botstate
+            self.speed = self.fallback.speed
+            self.phase = "fallback"
             self.chasing = self.fallback.botstate in (1, 2)
             return out
+
         me = (pose.x, pose.y)
         ball = world.ball_field
         if not world.ball_in_capture:
             self.won_at = None
+
         if ball is None or ball_out(ball):
-            for k in ("kick", "speed", "chasing", "botstate", "command"):
-                setattr(self, k, getattr(self.careful, k))
+            # ---- ball out / not seen: CarefulStriker's answer (restart, search, wait...)
+            self.kick = self.careful.kick
+            self.speed = self.careful.speed
+            self.chasing = self.careful.chasing
+            self.botstate = self.careful.botstate
+            self.command = self.careful.command
             self.phase = "restart: " + self.careful.phase
             out = careful_out
         else:
+            # ---- ball in play: chase / carry / shoot
             target, heading, dribbler = self.attack(world, compass, me, ball)
             self.chasing = True
             self.botstate = 1 if world.ball_in_capture else 2
-            out = (rel(clamp_in_field(target, FIELD_MARGIN), pose), heading, dribbler)
+            target = clamp_in_field(target, FIELD_MARGIN)
+            out = (rel(target, pose), heading, dribbler)
+
+        # ---- goalie on: never into our penalty area
         if mate_active(mate):
-            t = [pose.x + out[0][0], pose.y + out[0][1]]
+            t = [pose.x + out[0][0], pose.y + out[0][1]]        # the target as a field point again
             kept = keep_out_of_box(t)
-            if kept is not t:
+            if kept is not t:                                   # keep_out_of_box moved it
                 return rel(kept, pose), out[1], out[2]
         return out
 
     def attack(self, world, compass, me, ball):
-        goal = (0.0, field.ATTACK_GOAL_Y)
-        heading = heading_for((goal[0] - me[0], goal[1] - me[1]))          # face their goal
+        """Ball in play. Returns (target field point, heading, dribbler); sets .kick / .speed / .phase."""
+        goal = (0.0, field.ATTACK_GOAL_Y)                                  # centre of their goal
+        heading = heading_for((goal[0] - me[0], goal[1] - me[1]))          # facing their goal
+
+        # ---- no ball in the dribbler: chase it
         if not world.ball_in_capture:
             self.facing_since = None
             target, heading, dribbler, spd = chase(me, ball)
-            self.speed, self.phase = {"spd_multi": spd}, "chase"
+            self.speed = {"spd_multi": spd}
+            self.phase = "chase"
             return target, heading, dribbler
+
+        # ---- ball in the dribbler, an opponent pressed against our front: step past it (SLIP_SIDE across, away
+        # from the side it's on, and SLIP_FORWARD forwards)
         ho = head_on(me, compass, world.opponents)
         if ho is not None:
             fwd = (-math.sin(compass), math.cos(compass))
-            side = 1.0 if (ho[0] - me[0]) * fwd[1] - (ho[1] - me[1]) * fwd[0] < 0 else -1.0
-            perp = (fwd[1] * side, -fwd[0] * side)
-            self.speed, self.phase = {"spd_multi": 1.0}, "slip past"
-            return [me[0] + perp[0] * SLIP_SIDE + fwd[0] * SLIP_FORWARD,
-                    me[1] + perp[1] * SLIP_SIDE + fwd[1] * SLIP_FORWARD], heading, True
+            cross = (ho[0] - me[0]) * fwd[1] - (ho[1] - me[1]) * fwd[0]    # which side of our front it's on
+            side = 1.0 if cross < 0 else -1.0
+            sideways = (fwd[1] * side, -fwd[0] * side)
+            self.speed = {"spd_multi": 1.0}
+            self.phase = "slip past"
+            target = [me[0] + sideways[0] * SLIP_SIDE + fwd[0] * SLIP_FORWARD,
+                      me[1] + sideways[1] * SLIP_SIDE + fwd[1] * SLIP_FORWARD]
+            return target, heading, True
+
+        # ---- ball in the dribbler: carry it, kick when there's a chance
         now = time.monotonic()
         centres = obstacle_centres(me, world.obstacles_field)
         if self.won_at is None:
             self.won_at = now
-        if now - self.won_at < QUICK_SHOT_TIME and shot_open(compass, me, centres, QUICK_SHOT_RANGE):
-            self.kick = True                                                # just won it: shoot before they close in
+        just_won_it = now - self.won_at < QUICK_SHOT_TIME
+        if just_won_it and shot_open(compass, me, centres, QUICK_SHOT_RANGE):
+            self.kick = True                                   # quick shot: before they close us down
         u = carry_dir(me, goal, world.opponents, world.opponent_vel)   # towards the goal, front away from them
         carry_heading = heading_for(u)
-        self.speed, self.phase = {"spd_multi": 1.0}, "carry"
+        self.speed = {"spd_multi": 1.0}
+        self.phase = "carry"
         if charged(me, world.opponents, world.opponent_vel) and shot_open(compass, me, centres, OPEN_SHOT_RANGE):
-            self.kick = True                                                # about to be shoved off it: shoot
-        err = abs(math.atan2(math.sin(heading - compass), math.cos(heading - compass)))
-        if err < CARRY_FACING:
-            self.facing_since = self.facing_since or now
-            self.kick = self.kick or (now - self.facing_since > CARRY_KICK_HOLD and dist(me, goal) < CARRY_KICK_RANGE)
+            self.kick = True                                   # about to be shoved off it: shoot
+        # facing their goal (within CARRY_FACING) for CARRY_KICK_HOLD s, within CARRY_KICK_RANGE: kick
+        facing_err = abs(angle_diff(heading, compass))
+        if facing_err < CARRY_FACING:
+            if not self.facing_since:
+                self.facing_since = now
+            if now - self.facing_since > CARRY_KICK_HOLD and dist(me, goal) < CARRY_KICK_RANGE:
+                self.kick = True
         else:
             self.facing_since = None
-        return [me[0] + u[0] * 40, me[1] + u[1] * 40], carry_heading, True
+        target = [me[0] + u[0] * 40, me[1] + u[1] * 40]        # 40 cm along the carry direction
+        return target, carry_heading, True

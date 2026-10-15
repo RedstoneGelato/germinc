@@ -1,260 +1,225 @@
 """
-strategy_fallback.py - the comp state machines (relative coordinates), used by strategy.py only while the robot
-doesn't know where it is on the field (localisation not confident). GoalieFallback / StrikerFallback.
-Both have update(...) -> (desired_pos, desired_heading, dribbler_on) and a `speed` dict for motion.Mover.step().
+strategy_fallback.py - what the robots do while they DON'T know where they are on the field (localisation not
+confident). strategy.py hands over to GoalieFallback / StrikerFallback then.
 
-Same states as before; the inputs are now camera based and in cm (relative = field axes, robot at the origin):
-    world.ball            ball (was the IR ballpos)
-    world.ball_in_capture ball in the dribbler (was "front IR sensors distance == 3")
-    world.attack_goal / own_goal   Goal(near, centre) (was goalpos / own_goalpos in camera pixels)
+Everything here is RELATIVE: the robot is at (0, 0), x / y are field directions (the compass keeps them pointing the
+same way as the field: +y = towards the goal we attack), in cm. What the camera gives us:
+    world.ball            the ball (None = not seen)
+    world.ball_in_capture the ball is in our capture zone (dribbler)
+    world.attack_goal / world.own_goal   Goal(near, centre) or None (not seen)
+Both classes: update(...) -> (desired_pos, desired_heading, dribbler_on), and .speed / .kick / .botstate / .chasing.
 
-All the distances below were converted from the old units by eye - TUNE them on the field.
+They use the same ideas as the main strategy (strategy.py), just without knowing where the field's lines are:
+    striker: TS-style chase, carry at their goal, kick when facing it close enough (or right after winning the ball)
+    goalie:  guard on an arc between our goal and the ball, block a ball rolling at our goal, clear a ball that's
+             close to our goal (kick it up-field)
 """
 import math
+import time
 
 import field
 import robot_config as cfg
-from utils import Hysteresis, rotate, wrap_pi
+
+R = cfg.ROBOT_RADIUS
 
 # ---- TUNE (cm)
-GOALIE_DIST = 20.0           # botstate 0: stand so the own goal's near point is this far behind the robot centre
-GOALIE_DIST_BALL = 15.0      # botstate 3: same, while tracking the ball sideways
-GOALIE_MAX_X = field.PENALTY_W / 2 - 5.0   # botstate 3: don't follow the ball further sideways than this (needs a confident pose)
-BACKUP_Y = -60.0             # own goal not known at all: back up this way
-BALL_CLOSE = 30.0            # botstate 2 trigger: ball this close...
-BALL_CLOSE_ANGLE = math.radians(75)   # ...and within this angle of the robot's front
-BEHIND_Y = 12.0              # ball further back than this (relative y) = need to get behind it (was 50)
-BEHIND_Y_HYST = 20.0         # (was 80)
-FAR_BEHIND_Y = -35.0         # (was -150)
-WRAP_X = 25.0                # (was 110)
-WRAP_OFFSET = 40.0           # (was 200)
-BALL_AHEAD = 5.0             # (was 20)
-APPROACH_SIDE_X = 20.0       # (was 80)
-APPROACH_BEHIND = 15.0       # (was 60)
-DRIBBLER_RANGE = 35.0        # (was 150)
-DEFAULT_GOAL = [0.0, 200.0]  # aim here if the attack goal is unknown
+DEFAULT_GOAL = [0.0, 200.0]   # their goal not seen: carry the ball this way (straight up-field)
+GOALIE_DIST = 20.0            # goalie: guard this far out from our goal's centre (like strategy.GUARD_RADIUS)
+BACKUP_Y = -60.0              # goalie: our goal not seen - back up this way
+GOALIE_CLEAR_DIST = 35.0      # goalie: ball this close to our goal's centre and this close to the goalie -> clear it
+GOALIE_KICK_TOL = math.radians(35)   # goalie with the ball: kick when facing within this of straight up-field
+BLOCK_SPEED = 20.0            # goalie: ball rolling at our goal faster than this (cm/s) -> get in its way
+KICK_FACING = math.radians(10)       # striker: kick when facing their goal's centre within this...
+KICK_RANGE = 75.0             # ...and the goal centre is closer than this
+QUICK_SHOT_TIME = 1.0         # ...or within this long (s) of winning the ball...
+QUICK_SHOT_FACING = math.radians(6)  # ...facing it this closely...
+QUICK_SHOT_RANGE = 130.0      # ...from up to this far
+MIDFIELD_FROM_GOAL = 90.0     # striker, no ball: wait this far in front of their goal (if seen)
+ADVANCE_Y = 60.0              # striker, no ball, their goal not seen: drive this way
+HOME_DIST = 25.0              # striker on its own, no ball: stand this far in front of our goal
+CHASE_MARGIN = R + 4.0        # striker: keep its target this far inside the white line (when a goal tells us roughly
+CARRY_MARGIN = R + 16.0       # where we are), and this far while carrying the ball (it sits in front of the robot)
+GOAL_CENTRE_Y = field.PLAY_L / 2 + field.GOAL_DEPTH / 2   # where a seen goal's "centre" roughly is (field y)
 
 
-def heading_to(goal):
-    return wrap_pi(math.atan2(goal[1], goal[0] * 1.6) - math.pi / 2)
+def rough_position(world):
+    """Where we roughly are on the field, worked out from a goal the camera sees (its field position is known), or
+    None if neither goal is seen."""
+    att, own = world.attack_goal, world.own_goal
+    if att is not None:
+        return (-att.centre[0], GOAL_CENTRE_Y - att.centre[1])
+    if own is not None:
+        return (-own.centre[0], -GOAL_CENTRE_Y - own.centre[1])
+    return None
+
+
+def keep_in_field(target, world, margin):
+    """A relative target moved back inside the field (margin cm inside the line), if we know roughly where we are."""
+    me = rough_position(world)
+    if me is None:
+        return target
+    hx, hy = field.PLAY_W / 2 - margin, field.PLAY_L / 2 - margin
+    fx = min(max(me[0] + target[0], -hx), hx)
+    fy = min(max(me[1] + target[1], -hy), hy)
+    return [fx - me[0], fy - me[1]]
+
+
+def angdiff(a, b):
+    return math.atan2(math.sin(a - b), math.cos(a - b))
+
+
+def heading_for(d):
+    """Arrow d (field directions) -> compass heading that faces along it."""
+    return math.atan2(-d[0], d[1])
+
+
+def unit(v):
+    n = math.hypot(v[0], v[1])
+    return (0.0, 0.0) if n < 1e-9 else (v[0] / n, v[1] / n)
+
+
+def share(value, start, end):
+    return min(1.0, max(0.0, (start - value) / (start - end)))
+
+
+def chase_rel(ball):
+    """strategy.chase() with the robot at (0, 0): (target, heading, dribbler on, speed multiplier). Ball right behind
+    us: orbit to a point beside it instead of backing into it (like strategy.BEHIND_ORBIT)."""
+    d = math.hypot(ball[0], ball[1])
+    a = math.degrees(math.atan2(ball[0], ball[1]))          # 0 = up-field, + = right
+
+    def soften(x, B=76.0):
+        return x * (1 - 1 / (1 + abs(x / B) ** 3))
+    if abs(a) > 150.0 and d < 70.0:                         # right behind us: go round beside it, facing up-field
+        side = math.copysign(1.0, -ball[0] or 1.0)
+        return [ball[0] + side * (R + cfg.BALL_RADIUS + 10.0), ball[1]], 0.0, False, 1.0
+    t1 = share(d, 90.0, 20.0)
+    ang = a + (max(-180.0, min(180.0, a * 1.7)) - a) * t1
+    t2 = share(d, 50.0, 20.0)
+    ang = ang + (180.0 * soften(ang) / soften(180.0) - ang) * t2
+    target = [math.sin(math.radians(ang)) * 40, math.cos(math.radians(ang)) * 40]
+    heading = 0.0
+    if d <= 55.0 and abs(a) <= 60.0:
+        t = share(d, 22, 50) * max(0.0, 1 - 1.5 * abs(a) / 90)
+        heading = math.radians(-a) * (1 - t)
+    spd = 0.8 + 0.2 * share(d, 30, 45)
+    if d < 25:
+        spd *= 0.6
+    return target, heading, d <= 33 and abs(a) <= 45, spd
 
 
 class GoalieFallback:
+    """botstate 0 = no ball -> stand in front of our goal
+       botstate 1 = ball in the dribbler -> turn up-field and kick it clear
+       botstate 2 = ball close to our goal (and to us) -> go for it
+       botstate 3 = otherwise -> guard on the arc between our goal and the ball (block it if it's rolling at us)"""
+
     def __init__(self):
-        self.botstate_hyst = Hysteresis(hold_time=0.11)
-        self.substate1_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
-        self.substate2_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
         self.botstate = 3
-        self.substate1 = 4
-        self.substate2 = 4
-        self.speed = {}   # default speed profile (see motion.Mover.step)
+        self.speed = {}
+        self.kick = False
         self.chasing = False
 
     def reset(self):
-        self.botstate_hyst.reset()
-        self.substate1_hyst.reset()
-        self.substate2_hyst.reset()
-
-    @staticmethod
-    def ball_close_in_front(world, compass):
-        if world.ball is None:
-            return False
-        b = rotate(world.ball, -compass)   # robot frame
-        return math.hypot(*b) < BALL_CLOSE and abs(math.atan2(b[0], b[1])) < BALL_CLOSE_ANGLE
-
-    def stay_in_goal(self, world, x_target, dist):
-        """Position in front of our own goal. Returns desired_pos."""
-        own, att = world.own_goal, world.attack_goal
-        if own is not None:
-            x = x_target if x_target is not None else own.centre[0]
-            pose = world.pose
-            if pose is not None and pose.confident:   # don't wander out of the penalty area sideways
-                x = min(max(x, -GOALIE_MAX_X - pose.x), GOALIE_MAX_X - pose.x)
-            return [x, own.near[1] + dist]
-        return [att.centre[0] if att is not None else 0.0, BACKUP_Y]
-
-    def chase(self, world, sub, line_touches, shoot):
-        """Go for the ball. shoot=True: score (botstate 1), False: pass/clear (botstate 2).
-        Returns (desired_pos, desired_heading, dribbler_on)."""
-        ball = world.ball
-        goal = world.attack_goal.centre if world.attack_goal is not None else DEFAULT_GOAL
-        if sub == 1:
-            if shoot:
-                return [goal[0] * 1.5, goal[1]], heading_to(goal), True
-            return list(goal), heading_to(goal), True
-        if sub == 2:
-            return (list(ball) if shoot else [0, -WRAP_OFFSET]), 0, False
-        if sub == 3:
-            if abs(ball[0]) < WRAP_X and ball[1] < 0: #wrap around ball
-                if line_touches > 1: #touched line
-                    pos = [-WRAP_OFFSET, 0] if ball[0] < 0 else [WRAP_OFFSET, 0] #go other way
-                else:
-                    pos = [-WRAP_OFFSET, 0] if ball[0] > 0 else [WRAP_OFFSET, 0] #wrap around base on ball position
-            elif shoot:
-                pos = [0, -WRAP_OFFSET] if ball[1] > BALL_AHEAD else [ball[0], -WRAP_OFFSET]
-            else:
-                pos = [0, -WRAP_OFFSET]
-            return pos, 0, False
-        # sub == 4: pathfind to ball
-        heading = heading_to(goal) if shoot else 0
-        if ball[1] < BEHIND_Y_HYST and abs(ball[0]) > APPROACH_SIDE_X:
-            pos = [ball[0], -3]
-        else:
-            pos = [ball[0], ball[1] - APPROACH_BEHIND]
-        return pos, heading, abs(pos[0]) + abs(pos[1]) < DRIBBLER_RANGE
-
-    def substate(self, world, current):
-        ball = world.ball
-        if world.ball_in_capture:
-            return 1  #ball in bcz
-        if ball[1] < (BEHIND_Y if current in (1, 4) else BEHIND_Y_HYST): #2 far backup, 3 close backup
-            return 2 if ball[1] < FAR_BEHIND_Y else 3
-        return 4  #pathfind to ball
+        pass
 
     def update(self, world, compass, comms_command, attack_bot_state, line_touches):
-        """Returns (desired_pos, desired_heading, dribbler_on)."""
-        # ---- determine states
-        if comms_command == 0: #signal from attack to chill
-            raw_botstate = 3
-        elif world.ball is None: #doesnt see ball
-            raw_botstate = 0
-        elif attack_bot_state == 0 or attack_bot_state is None: #attack bot is off
-            raw_botstate = 1
-        elif comms_command == 1 or self.ball_close_in_front(world, compass): #signal from other bot to go get ball
-            raw_botstate = 2
-        else: #chill in goals
-            raw_botstate = 3
-        self.botstate = self.botstate_hyst.update(raw_botstate) #smoothing
-        self.chasing = self.botstate in (1, 2)
-
-        # hysteresis can hold a ball state for a moment after the ball is gone
-        if world.ball is None and self.botstate in (1, 2):
-            self.botstate = 0
-
-        # ---- state machine
-        if self.botstate == 0: #do not see ball
-            return self.stay_in_goal(world, None, GOALIE_DIST), 0, False
-        if self.botstate == 1: #go for ball then score
-            self.substate1 = self.substate1_hyst.update(self.substate(world, self.substate1))
-            return self.chase(world, self.substate1, line_touches, shoot=True)
-        if self.botstate == 2: # go for ball then pass
-            self.substate2 = self.substate2_hyst.update(self.substate(world, self.substate2))
-            return self.chase(world, self.substate2, line_touches, shoot=False)
-        # botstate 3: chill in goals, follow the ball sideways
-        return self.stay_in_goal(world, world.ball[0] if world.ball else None, GOALIE_DIST_BALL), 0, False
-
-
-# ==================================== STRIKER ====================================
-# Ported from the comp 1attack.py. Old values in brackets - TUNE (cm).
-S_BEHIND_Y = 12.0            # ball further back than this = need to get behind it (50)
-S_BEHIND_Y_HYST = 20.0       # (80)
-S_FAR_BEHIND_Y = -40.0       # (-160)
-S_WRAP_X = 25.0              # (110)
-S_WRAP_OFFSET = 40.0         # (200)
-S_APPROACH_SIDE_X = 20.0     # (80)
-S_APPROACH_BEHIND = 15.0     # (60)
-S_DRIBBLER_RANGE = 35.0      # (150)
-S_MIDFIELD_FROM_GOAL = 90.0  # botstate 0: wait this far in front of the attack goal (180)
-S_ADVANCE_Y = 60.0           # botstate 0, attack goal unknown: drive this way (250)
-S_HOME_DIST = 25.0           # botstate 3: stand this far in front of our own goal (100)
-S_HOME_CLOSE = -8.0          # botstate 3: own goal nearer than this behind us = already home (-20)
-S_BACKUP_Y = -50.0           # botstate 3, own goal unknown: back up this way (-200)
-S_SHOOT_MULTI = 1.5          # speed multiplier while carrying the ball to the goal
+        self.kick = False
+        self.speed = {}
+        ball, own = world.ball, world.own_goal
+        if own is None:                                       # don't know where our goal is: back up towards it
+            self.botstate, self.chasing = 0, False
+            return [0.0, BACKUP_Y], 0.0, False
+        g = own.centre
+        if ball is None:
+            self.botstate, self.chasing = 0, False
+            return [g[0], g[1] + GOALIE_DIST + 6.0], 0.0, False
+        if world.ball_in_capture:
+            # ball in the dribbler: turn up-field, kick it clear as soon as we face up-field
+            self.botstate, self.chasing = 1, True
+            self.kick = abs(angdiff(compass, 0.0)) < GOALIE_KICK_TOL
+            return [0.0, 0.0], 0.0, True
+        to_ball = (ball[0] - g[0], ball[1] - g[1])
+        if math.hypot(*to_ball) < GOALIE_CLEAR_DIST and math.hypot(*ball) < GOALIE_CLEAR_DIST:
+            # close to our goal and to us: go for it from the goal's side (push it away from the goal)
+            self.botstate, self.chasing = 2, True
+            u = unit(to_ball)
+            self.speed = {"spd_multi": 0.7}
+            return [ball[0] + u[0] * 10.0, ball[1] + u[1] * 10.0], 0.0, math.hypot(*ball) < 25.0
+        self.botstate, self.chasing = 3, False
+        vel = getattr(world, "ball_vel", (0.0, 0.0))
+        if vel[1] < -BLOCK_SPEED and ball[1] > g[1]:
+            # rolling at our goal: stand where it crosses our guard line
+            line_y = g[1] + R + 3.0
+            t = (line_y - ball[1]) / vel[1]
+            x = ball[0] + vel[0] * t
+            if abs(x - g[0]) < 35.0 and t < 1.5:
+                target = [x, line_y]
+                self.speed = {"spd_multi": min(1.0, max(0.1, math.hypot(*target) / 25.0)), "smooth": 0.3}
+                return target, 0.0, False
+        u = unit(to_ball)
+        target = [g[0] + u[0] * GOALIE_DIST, max(g[1] + u[1] * GOALIE_DIST, g[1] + R + 3.0)]
+        self.speed = {"spd_multi": min(1.0, max(0.1, math.hypot(*target) / 15.0)), "smooth": 0.3}
+        return target, 0.0, False
 
 
 class StrikerFallback:
-    """botstate 0 = no ball, goalie on    -> wait at midfield
-       botstate 1 = ball in capture zone  -> drive at the goal
-       botstate 2 = ball seen             -> get behind it and take it (substates 2/3/4 like the goalie)
-       botstate 3 = no ball, goalie off   -> go home and defend
-    command (sent to the goalie): 1 = go get the ball, 0 = stay in goal."""
+    """botstate 0 = no ball, goalie on    -> wait in front of their goal (or drive up-field)
+       botstate 1 = ball in the dribbler  -> carry it at their goal, kick when facing it close enough
+       botstate 2 = ball seen             -> chase it (TS-style, like strategy.chase())
+       botstate 3 = no ball, goalie off   -> stand in front of our goal
+    command (sent to the goalie): always 0 (the goalie decides by itself)."""
 
     def __init__(self):
-        self.botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
-        self.substate_hyst = Hysteresis(hold_time=0.11)
         self.botstate = 2
-        self.substate = 4
-        self.command = 1
-        self.ingoalspd = cfg.BASE_SPEED // 3
+        self.command = 0
         self.speed = {}
+        self.kick = False
         self.chasing = False
+        self.won_at = None
 
     def reset(self):
-        self.botstate_hyst.reset()
-        self.substate_hyst.reset()
+        self.won_at = None
 
     def update(self, world, compass, goalie_bot_state, line_touches):
-        """Returns (desired_pos, desired_heading, dribbler_on). Also sets self.command and self.speed."""
+        self.kick = False
+        self.command = 0
         ball = world.ball
         att, own = world.attack_goal, world.own_goal
-        goal = att.centre if att is not None else DEFAULT_GOAL
-
-        # ---- determine states
-        if ball is None: #doesnt see ball
-            raw_botstate = 0 if goalie_bot_state == 1 else 3
-        elif world.ball_in_capture: # ball in ball capture zone
-            raw_botstate = 1 #try to shoot
-        else:
-            raw_botstate = 2 #try to get possession of ball
-        self.botstate = self.botstate_hyst.update(raw_botstate)
-        if ball is None and self.botstate == 2:   # hysteresis holding a ball state with no ball
-            self.botstate = 0 if goalie_bot_state == 1 else 3
-
-        # ---- state machine
-        dribbler_on = False
-        desired_heading = 0
-        if self.botstate == 0: # do not see ball
-            self.command = 1
-            if att is not None:
-                desired_pos = [att.centre[0], att.centre[1] - S_MIDFIELD_FROM_GOAL] # go midfield
-                self.ingoalspd = int(cfg.BASE_SPEED / 5)
-            else:
-                desired_pos = [own.centre[0] if own is not None else 0.0, S_ADVANCE_Y]
-                self.ingoalspd = cfg.BASE_SPEED
-
-        elif self.botstate == 1: # shoot
-            self.command = 0
-            desired_pos = [goal[0] * 1.5, goal[1]]
-            desired_heading = heading_to(goal)
-            dribbler_on = True
-
-        elif self.botstate == 2: # go for ball
-            if ball[1] < (S_BEHIND_Y if self.substate in (1, 4) else S_BEHIND_Y_HYST):
-                raw_substate = 2 if ball[1] < S_FAR_BEHIND_Y else 3  # far vs near backup
-            else:
-                raw_substate = 4 # just go for ball
-            self.substate = self.substate_hyst.update(raw_substate)
-
-            if self.substate == 2:
-                desired_pos = list(ball)
-                self.command = 1 #send goalie to get ball
-            elif self.substate == 3:
-                if abs(ball[0]) < S_WRAP_X and ball[1] < 0:
-                    if line_touches > 1:
-                        desired_pos = [-S_WRAP_OFFSET, 0] if ball[0] < 0 else [S_WRAP_OFFSET, 0]
-                    else:
-                        desired_pos = [-S_WRAP_OFFSET, 0] if ball[0] > 0 else [S_WRAP_OFFSET, 0]
-                else:
-                    desired_pos = [0, -S_WRAP_OFFSET]
-            else: # just go for ball
-                self.command = 0
-                desired_heading = heading_to(goal)
-                if ball[1] < S_BEHIND_Y_HYST and abs(ball[0]) > S_APPROACH_SIDE_X:
-                    desired_pos = [ball[0], -3]
-                else:
-                    desired_pos = [ball[0], ball[1] - S_APPROACH_BEHIND]
-                dribbler_on = abs(desired_pos[0]) + abs(desired_pos[1]) < S_DRIBBLER_RANGE
-
-        else: # botstate 3: goalie is off, go home
-            self.command = 1
-            if own is not None: #align middle and go backwards
-                desired_pos = [own.centre[0], own.near[1] + S_HOME_DIST] if own.near[1] < S_HOME_CLOSE else [own.centre[0], 0]
-            else:
-                desired_pos = [att.centre[0] if att is not None else 0.0, S_BACKUP_Y]
-                self.ingoalspd = cfg.BASE_SPEED
-
-        # speed profile (same rules as the comp code)
-        self.speed = {"spd_min": 0.4,
-                      "base_speed": cfg.BASE_SPEED if self.botstate in (1, 2) else self.ingoalspd,
-                      "spd_multi": S_SHOOT_MULTI if self.botstate == 1 else None}
-        return desired_pos, desired_heading, dribbler_on
+        if not world.ball_in_capture:
+            self.won_at = None
+        if ball is None:
+            self.chasing = False
+            self.speed = {}
+            if goalie_bot_state == 1:
+                self.botstate = 0
+                if att is not None:
+                    return [att.centre[0], att.centre[1] - MIDFIELD_FROM_GOAL], 0.0, False
+                return [0.0, ADVANCE_Y], 0.0, False
+            self.botstate = 3
+            if own is not None:
+                return [own.centre[0], own.centre[1] + HOME_DIST + R], 0.0, False
+            return [0.0, -50.0], 0.0, False
+        self.chasing = True
+        if world.ball_in_capture:
+            # carry at their goal, facing it; kick when facing it close enough, or right after winning the ball
+            self.botstate = 1
+            now = time.monotonic()
+            if self.won_at is None:
+                self.won_at = now
+            goal = att.centre if att is not None else DEFAULT_GOAL
+            heading = heading_for(goal)
+            err = abs(angdiff(heading, compass))
+            dist = math.hypot(goal[0], goal[1])
+            if att is not None and err < KICK_FACING and dist < KICK_RANGE:
+                self.kick = True
+            if att is not None and now - self.won_at < QUICK_SHOT_TIME and err < QUICK_SHOT_FACING \
+                    and dist < QUICK_SHOT_RANGE:
+                self.kick = True
+            u = unit(goal)
+            self.speed = {"spd_multi": 1.0}
+            return keep_in_field([u[0] * 40, u[1] * 40], world, CARRY_MARGIN), heading, True
+        self.botstate = 2
+        target, heading, dribbler, spd = chase_rel(ball)
+        self.speed = {"spd_multi": spd}
+        return keep_in_field(target, world, CHASE_MARGIN), heading, dribbler

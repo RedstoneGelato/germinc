@@ -180,9 +180,16 @@ class World:
         self.mate_pos = mate.get("pos") if mate else None
         if confident:
             self.ball_own_field = None if self.ball_own is None else [self.ball_own[0] + pose.x, self.ball_own[1] + pose.y]
-            if self.mate_pos is not None:   # the teammate shows up as an obstacle: drop it
-                self.obstacles = [(p, s) for p, s in self.obstacles
-                                  if math.hypot(p[0] + pose.x - self.mate_pos[0], p[1] + pose.y - self.mate_pos[1]) > MATE_MATCH]
+            if self.mate_pos is not None:   # the teammate shows up as an obstacle: drop it (only the one nearest
+                # to where it says it is - an opponent tackling it is right next to it and must stay)
+                best = None
+                for i, (p, s) in enumerate(self.obstacles):
+                    c = centre_of(pose, [p[0] + pose.x, p[1] + pose.y])
+                    d = math.hypot(c[0] - self.mate_pos[0], c[1] - self.mate_pos[1])
+                    if d < MATE_MATCH and (best is None or d < best[0]):
+                        best = (d, i)
+                if best is not None:
+                    self.obstacles = [o for i, o in enumerate(self.obstacles) if i != best[1]]
             self.obstacles_field = self.remember_obstacles(
                 [([p[0] + pose.x, p[1] + pose.y], s) for p, s in self.obstacles], pose, now)
             self.opponents_own = [centre_of(pose, [p[0] + pose.x, p[1] + pose.y]) for p, _ in self.obstacles]
