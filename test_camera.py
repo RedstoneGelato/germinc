@@ -703,13 +703,18 @@ def find_board(gray, cols, rows, fast=False):
     found, corners = cv2.findChessboardCorners(gray, (cols, rows), flags)
     if found:
         return True, corners
+    if hasattr(cv2, "findChessboardCornersSB"):
+        found, corners = cv2.findChessboardCornersSB(gray, (cols, rows), cv2.CALIB_CB_NORMALIZE_IMAGE)
+        if found:
+            return True, corners.astype(np.float32)
+    if fast:
+        return False, None          # (live preview: the slower searches below only when Capture is pressed)
     big = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     if hasattr(cv2, "findChessboardCornersSB"):
-        sb_flags = cv2.CALIB_CB_NORMALIZE_IMAGE + (0 if fast else cv2.CALIB_CB_EXHAUSTIVE)
-        for img, scale in ((gray, 1.0), (big, 2.0)):
-            found, corners = cv2.findChessboardCornersSB(img, (cols, rows), sb_flags)
-            if found:
-                return True, (corners / scale).astype(np.float32)
+        found, corners = cv2.findChessboardCornersSB(big, (cols, rows), cv2.CALIB_CB_NORMALIZE_IMAGE
+                                                     + cv2.CALIB_CB_EXHAUSTIVE)
+        if found:
+            return True, (corners / 2.0).astype(np.float32)
     found, corners = cv2.findChessboardCorners(big, (cols, rows), flags)
     if found:
         return True, (corners / 2.0).astype(np.float32)
@@ -742,33 +747,70 @@ def cal_add(cols, rows):
     return {"ok": True, "msg": f"Saved frame {n}."}
 
 
+CAL_CRIT = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
+CAL_FLAGS = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW + cv2.fisheye.CALIB_USE_INTRINSIC_GUESS
+
+
+def _cal_guess_K():
+    """Starting guess for the lens: the image circle about as wide as the short side, ~180 degrees across (without it
+    OpenCV's own guess often failed on this wide lens - "InitExtrinsics ... norm_u1 > 0")."""
+    f = min(CAPTURE_SIZE) / np.pi
+    return np.array([[f, 0, CAPTURE_SIZE[0] / 2], [0, f, CAPTURE_SIZE[1] / 2], [0, 0, 1]], np.float64)
+
+
+def _cal(obj, img):
+    return cv2.fisheye.calibrate(obj, img, CAPTURE_SIZE, _cal_guess_K(), np.zeros((4, 1)), None, None,
+                                 CAL_FLAGS, CAL_CRIT)
+
+
+def _robust_calibrate(obj, img, min_frames=8):
+    """Calibrate, dropping frames OpenCV can't use (alone first, then the one whose removal makes it work) and frames
+    whose reprojection error is far above the rest. Returns (rms, K, D, kept indices) or None."""
+    keep = list(range(len(obj)))
+    for i in list(keep):                                  # frames unusable even on their own
+        try:
+            _cal([obj[i]], [img[i]])
+        except cv2.error:
+            keep.remove(i)
+    while len(keep) >= min_frames:
+        try:
+            rms, K, D, rv, tv = _cal([obj[i] for i in keep], [img[i] for i in keep])
+        except cv2.error:
+            for i in list(keep):                          # leave-one-out: the first removal that makes it work
+                trial = [j for j in keep if j != i]
+                try:
+                    _cal([obj[j] for j in trial], [img[j] for j in trial])
+                    keep = trial
+                    break
+                except cv2.error:
+                    continue
+            else:
+                return None
+            continue
+        errs = []                                         # one frame far worse than the rest: drop it
+        for n, i in enumerate(keep):
+            p, _ = cv2.fisheye.projectPoints(obj[i].astype(np.float64), rv[n], tv[n], K, D)
+            errs.append(float(np.sqrt(np.mean(np.sum((p - img[i]) ** 2, axis=2)))))
+        worst = int(np.argmax(errs))
+        if errs[worst] > 3 * max(float(np.median(errs)), 0.3) and len(keep) > min_frames:
+            del keep[worst]
+            continue
+        return rms, K, D, keep
+    return None
+
+
 def cal_run():
     with S.lock:
         obj, img = list(S.obj), list(S.img)
     if len(obj) < 10:
         return {"ok": False, "msg": f"Need at least 10 frames (have {len(obj)}); 15-25 is better."}
-
-    flags = (cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND
-             + cv2.fisheye.CALIB_FIX_SKEW)
-    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
-    dropped = 0
-    while True:
-        if len(obj) < 10:
-            return {"ok": False, "msg": "Too many bad frames were dropped. Reset and retake with more variety."}
-        K = np.zeros((3, 3))
-        D = np.zeros((4, 1))
-        try:
-            rms, K, D, _, _ = cv2.fisheye.calibrate(obj, img, CAPTURE_SIZE, K, D, None, None, flags, crit)
-            break
-        except cv2.error as e:
-            m = re.search(r"input array (\d+)", str(e))
-            if m and int(m.group(1)) < len(obj):  # OpenCV tells us which frame is ill-conditioned
-                idx = int(m.group(1))
-                del obj[idx]
-                del img[idx]
-                dropped += 1
-                continue
-            return {"ok": False, "msg": f"Calibration failed: {str(e).strip().splitlines()[-1]}"}
+    res = _robust_calibrate(obj, img)
+    if res is None:
+        return {"ok": False, "msg": "Calibration failed even after dropping bad frames. Reset and retake: board flat, "
+                                    "big in the image, not edge-on, many positions."}
+    rms, K, D, keep = res
+    dropped = len(obj) - len(keep)
+    obj, img = [obj[i] for i in keep], [img[i] for i in keep]
 
     np.savez(CALIB_FILE, K=K, D=D, size=np.array(CAPTURE_SIZE))
     P.set_calibration(K, D)
