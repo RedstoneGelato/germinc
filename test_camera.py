@@ -55,7 +55,7 @@ import picamera2
 
 # =============================== CONFIG ====================================
 
-CAPTURE_SIZE = (320, 240)
+CAPTURE_SIZE = (640, 480)
 ROTATION = cv2.ROTATE_90_CLOCKWISE  # camera mounting; applied after undistort/top-down
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -695,6 +695,27 @@ def label(img, text):
     return out
 
 
+def find_board(gray, cols, rows, fast=False):
+    """Find the checkerboard's inner corners. Tries the classic detector, then the more robust sector-based one
+    (findChessboardCornersSB), each also on a 2x upscaled image: at low resolution the squares are only a few pixels across,
+    especially near the edge of the fisheye. Returns (found, corners in this image's pixels)."""
+    flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE + (cv2.CALIB_CB_FAST_CHECK if fast else 0)
+    found, corners = cv2.findChessboardCorners(gray, (cols, rows), flags)
+    if found:
+        return True, corners
+    big = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    if hasattr(cv2, "findChessboardCornersSB"):
+        sb_flags = cv2.CALIB_CB_NORMALIZE_IMAGE + (0 if fast else cv2.CALIB_CB_EXHAUSTIVE)
+        for img, scale in ((gray, 1.0), (big, 2.0)):
+            found, corners = cv2.findChessboardCornersSB(img, (cols, rows), sb_flags)
+            if found:
+                return True, (corners / scale).astype(np.float32)
+    found, corners = cv2.findChessboardCorners(big, (cols, rows), flags)
+    if found:
+        return True, (corners / 2.0).astype(np.float32)
+    return False, None
+
+
 def cal_add(cols, rows):
     with S.lock:
         raw = S.raw
@@ -706,8 +727,7 @@ def cal_add(cols, rows):
         return {"ok": False, "msg": f"Board size changed (was {board[0]}x{board[1]}). Press Reset first."}
 
     gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
-    flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE
-    found, corners = cv2.findChessboardCorners(gray, (cols, rows), flags)
+    found, corners = find_board(gray, cols, rows)
     if not found:
         return {"ok": False, "msg": "Checkerboard not detected - not saved."}
     corners = cv2.cornerSubPix(gray, corners, (3, 3), (-1, -1), SUBPIX)
@@ -1282,8 +1302,7 @@ def get_view(mode, cols, rows, show_bg):
     elif mode == "calib":
         img = raw.copy()
         gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
-        flags = (cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_FAST_CHECK)
-        found, corners = cv2.findChessboardCorners(gray, (cols, rows), flags)
+        found, corners = find_board(gray, cols, rows, fast=True)
         if found:
             cv2.drawChessboardCorners(img, (cols, rows), corners, found)
         cv2.putText(img, f"saved: {saved}  {'BOARD OK' if found else 'no board'}", (6, 16),
