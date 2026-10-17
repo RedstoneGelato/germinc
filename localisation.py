@@ -16,6 +16,7 @@ Field frame: origin = centre, +y = goal we attack. "relative" = robot -> thing v
 """
 import math
 import threading
+import time
 
 import numpy as np
 
@@ -229,10 +230,18 @@ class LocalisationThread(threading.Thread):
 
     def run(self):
         last_id = -1
+        errors = 0
         while self.running:
-            last_id, det = self.vision.wait_new(last_id, timeout=0.5)
-            if det is not None:
-                self.process(det)
+            try:
+                last_id, det = self.vision.wait_new(last_id, timeout=0.5)  # (self.vision changes if the camera restarts)
+                if det is not None:
+                    self.process(det)
+                errors = 0
+            except Exception as e:     # a bad frame must not end localisation for the rest of the game
+                errors += 1
+                if errors == 1:
+                    print(f"[localisation] frame failed: {e!r}")
+                time.sleep(0.01)
 
     def process(self, det):
         """One camera frame. The thread above and simulator.py both use exactly this."""

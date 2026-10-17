@@ -27,19 +27,22 @@ class TeammateLinkThread(threading.Thread): #comms between bots
 
         self.teammate_state = {} #most recent info from teammate
         self.teammate_last_seen = 0
+        self.last_loop_t = time.monotonic() #watchdog (common.Robot): restarted if this stops moving
         self.my_state = {"bot active": 0} #what robot wants to tell its teammate
 
     def run(self):
         last_send = 0
+        recv_errors = 0
         while self.running:
             now = time.monotonic()
+            self.last_loop_t = now
 
             if self.enabled and now - last_send >= self.send_interval:
                 try:
                     msg = {"team": cfg.TEAM_ID, "robot": self.robot_id, **self.my_state}
                     self.sock.sendto(json.dumps(msg).encode("utf-8"), ("255.255.255.255", cfg.COMMS_PORT)) #send message
-                except OSError as e:
-                    print(f"Comms send error: {e}")
+                except (OSError, TypeError, ValueError) as e: #network down, or something in my_state json can't send
+                    print(f"Comms send error: {e!r}")
                 last_send = now
 
             try:
@@ -50,10 +53,19 @@ class TeammateLinkThread(threading.Thread): #comms between bots
                         and msg.get("robot") != self.robot_id): #ignore a possible echo of own broadcast
                     self.teammate_state = msg #receive message
                     self.teammate_last_seen = now
+                recv_errors = 0
             except socket.timeout:
+                recv_errors = 0
+            except ValueError: #bad json / utf-8 from someone else on the network
                 pass
-            except (OSError, json.JSONDecodeError):
-                pass
+            except OSError as e:
+                if not self.running:
+                    break
+                recv_errors += 1
+                if recv_errors >= 50: #socket broken: end the thread, the watchdog (common.Robot) starts a new one
+                    print(f"Comms receive keeps failing ({e!r}) - stopping the comms thread")
+                    break
+                time.sleep(0.02)
 
     def teammate(self, max_age=0.5):
         """Teammate's last message if it's fresh, else None."""

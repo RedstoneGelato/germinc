@@ -7,6 +7,8 @@ arena.py - play many simulated games in parallel and add up the results (to chec
     python arena.py --games 20 --seconds 90 --jobs 8
     python arena.py --games 44 --fast --opp old  # fast mode (no camera simulation): screen ideas, then confirm without --fast
     python arena.py --games 22 --opp v35 --watch # also show every running game live in one window (q closes it)
+    python arena.py --games 20 --faults 1        # our robots get camera freezes, comms drops, IMU jumps, crashes and
+                                                 # restarts (faults.py): compare with the same games without --faults
 
 Self-play isn't perfectly symmetric (the two teams are processed in a fixed order in places), so to compare two
 versions fairly play both ways round - each one as "us" once - and add the results up.
@@ -36,7 +38,7 @@ def _init_worker(q):
 
 
 def play(args):
-    seed, seconds, opp, fast = args
+    seed, seconds, opp, fast, faults = args
     import cv2
     cv2.setNumThreads(1)          # one game per core already: OpenCV's own threads would only fight over the cores
     import simulator as S
@@ -44,6 +46,9 @@ def play(args):
     code = S.load_code(opp) if opp not in ("ai", "press") else None
     sim = S.Sim(noise=True, seed=seed, opp_code=code, fast=fast)
     sim.opp_ai = True
+    if faults:
+        from faults import FaultInjector
+        sim.faults = FaultInjector(sim, faults, seed)
     if opp == "press":
         sim.opp_style = "press"
     held = {"us": 0, "them": 0}
@@ -163,6 +168,8 @@ def main():
                                                         " screen with it, confirm in the full simulator")
     ap.add_argument("--phases", action="store_true", help="also print how long our robots spent in each botstate/phase")
     ap.add_argument("--watch", action="store_true", help="show all the running games live in one window")
+    ap.add_argument("--faults", type=float, default=0, metavar="RATE",
+                    help="break our robots on purpose (faults.py): 1 = default rates, 2 = twice as often")
     ap.add_argument("--dump", help="also save every game's results (incl. each kick) to this JSON file")
     args = ap.parse_args()
 
@@ -170,7 +177,7 @@ def main():
         from simulator import code_folder
         args.opp = code_folder(args.opp)
     t0 = time.perf_counter()
-    jobs = [(args.first_seed + i, args.seconds, args.opp, args.fast) for i in range(args.games)]
+    jobs = [(args.first_seed + i, args.seconds, args.opp, args.fast, args.faults) for i in range(args.games)]
     q = mp.Queue(maxsize=2000) if args.watch else None
     with mp.Pool(min(args.jobs, len(jobs)), maxtasksperchild=1, initializer=_init_worker, initargs=(q,)) as pool:
         if args.watch:

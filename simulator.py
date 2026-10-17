@@ -583,6 +583,7 @@ class Sim:
         self.goal_timer = None
         self.loc_err = {r.name: [] for r in self.robots}
         self.rng = np.random.default_rng(seed)
+        self.faults = None        # faults.FaultInjector: break our robots on purpose (--faults)
         self.kickoff()
 
     @property
@@ -698,6 +699,8 @@ class Sim:
     def step(self):
         _SIM_T[0] += DT
         self.ticks += 1
+        if self.faults is not None:
+            self.faults.step()
         if self.start_at is not None and self.t >= self.start_at:
             for r in self.players:
                 if r.removed_until is None and r.return_at is None:
@@ -725,7 +728,10 @@ class Sim:
                 r.bot.imu.drift += self.rng.normal(0, 0.0005)
 
         for r in self.players:
-            r.brain.tick(r.paused)       # <- the real robot code
+            if self.faults is not None:
+                self.faults.tick(r)      # (the real robot code, through common.TickGuard, with faults)
+            else:
+                r.brain.tick(r.paused)       # <- the real robot code
             r.drive(DT)
         self.move_opponents()
         self.physics()
@@ -1451,6 +1457,8 @@ def headless(sim, seconds):
         share = ", ".join(f"b{k} {100 * v / tot:.0f}%" for k, v in sorted(states[r.name].items()))
         print(f"{r.name:8s} outs {r.outs}  localisation error mean {np.mean(e) if e else float('nan'):.1f} cm "
               f"max {max(e) if e else float('nan'):.1f} cm  states: {share}")
+    if sim.faults is not None:
+        print(sim.faults.summary(), f" tick errors {sim.faults.tick_errors}")
     print("log:", *sim.logs, sep="\n  ")
 
 
@@ -1464,9 +1472,14 @@ def main():
     ap.add_argument("--opp", metavar="VERSION", help="opponents run this version of our code (a name from "
                                                      "past_versions/, e.g. v26 or comp, or a folder) instead of the "
                                                      "simple AI; 'press' = the simple AI pressing our ball carrier")
+    ap.add_argument("--faults", type=float, default=0, metavar="RATE", help="break our robots on purpose (camera "
+                    "freezes, comms drops, IMU jumps, crashes, restarts - see faults.py): 1 = default rates, 2 = twice as often")
     args = ap.parse_args()
     simple = args.opp in (None, "ai", "press")
     sim = Sim(noise=args.noise, seed=args.seed, fast=args.fast, opp_code=None if simple else load_code(args.opp))
+    if args.faults:
+        from faults import FaultInjector
+        sim.faults = FaultInjector(sim, args.faults, args.seed)
     if args.opp == "press":
         sim.opp_style, sim.opp_ai = "press", True
     sim.opp_name = args.opp or "simple AI"

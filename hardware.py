@@ -21,7 +21,7 @@ from smbus2 import SMBus, i2c_msg
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 
 import robot_config as cfg
-from utils import wrap_pi
+from utils import HeadingFilter, wrap_pi
 
 
 class IMUThread(threading.Thread):
@@ -31,27 +31,51 @@ class IMUThread(threading.Thread):
         self.running = True
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
-        self.imu = BNO08X_I2C(self.i2c)
-        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
+        self._open()
 
         self.heading = 0
         self.heading_offset = 0
+        self.filter = HeadingFilter() # the BNO08x restarts its heading at 0 when it resets: carry on from where we were
         self.ready = False
 
+    def _open(self):
+        self.imu = BNO08X_I2C(self.i2c)
+        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_GAME_ROTATION_VECTOR)
+
     def run(self):
+        errors = 0
         while self.running:
-            quat = self.imu.game_quaternion  # (x, y, z, w)
+            try:
+                quat = self.imu.game_quaternion  # (x, y, z, w)
+                errors = 0
+            except Exception as e: # I2C glitch / sensor reset: the BNO08x library raises, try again, then re-open it
+                quat = None
+                errors += 1
+                if errors == 1:
+                    print(f"IMU read error: {e!r}")
+                if errors % 20 == 0:
+                    try:
+                        self._open()
+                        self.filter.reanchor() # its heading starts again at 0: carry on from the last one
+                        print("IMU re-opened")
+                    except Exception as e2:
+                        print(f"IMU re-open failed: {e2!r}")
             if quat is not None:
                 self.ready = True
 
                 x, y, z, w = quat
 
                 # convert quaternion -> yaw (heading)
-                self.heading = math.atan2(
+                self.heading = self.filter.update(math.atan2(
                     2*(w*z + x*y),
                     1 - 2*(y*y + z*z)
-                )
+                ), time.monotonic())
             time.sleep(0.01)
+
+    def continue_from(self, compass):
+        """The program restarted (the IMU reset with it): make compass() carry on from this heading."""
+        self.heading_offset = 0
+        self.filter.continue_from(compass)
 
     def zero(self):
         """Current heading = facing the goal we attack."""
@@ -148,8 +172,8 @@ class PCBThread(threading.Thread):
                 with self.lock:
                     self.colours = new_colours
                 self.ready = True
-            except IOError as e:
-                print(f"PCB I2C error: {e}")
+            except Exception as e: # IOError mostly; anything else mustn't end the thread either
+                print(f"PCB I2C error: {e!r}")
                 self.ready = False
             time.sleep(0.02)  # only one packet per loop now that IR is gone, so poll a bit faster
 
@@ -208,13 +232,20 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         return m
 
     def run(self):
+        errors = 0
         while self.running:
-            self.motor1.set_speed(int(-self.motorspeed1))
-            self.motor2.set_speed(int(-self.motorspeed2))
-            self.motor3.set_speed(int(-self.motorspeed3))
-            self.motor4.set_speed(int(-self.motorspeed4))
-            if self.dribbler is not None:
-                self.dribbler.set_speed(int(-self.dribblerspeed))
+            try:
+                self.motor1.set_speed(int(-self.motorspeed1))
+                self.motor2.set_speed(int(-self.motorspeed2))
+                self.motor3.set_speed(int(-self.motorspeed3))
+                self.motor4.set_speed(int(-self.motorspeed4))
+                if self.dribbler is not None:
+                    self.dribbler.set_speed(int(-self.dribblerspeed))
+                errors = 0
+            except Exception as e: # an I2C error must not end this thread (the motors would keep their last speed)
+                errors += 1
+                if errors == 1 or errors % 1000 == 0:
+                    print(f"Motor I2C error ({errors} in a row): {e!r}")
             time.sleep(0.005)
 
     def set(self, speeds):

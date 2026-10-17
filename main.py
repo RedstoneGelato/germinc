@@ -14,11 +14,7 @@ The work lives in:
 Before running: tune the camera in test_camera.py ON THIS ROBOT and press "Generate config file"
 (robot_vision_config.json is per robot), then check detections + localisation in test_localisation.py.
 """
-import time
-import traceback
-
-import robot_config as cfg
-from common import keep_rate
+from common import CameraWatch
 from strategy import GoalieStrategy
 
 
@@ -29,12 +25,14 @@ class GoalieBrain:
         self.strategy = GoalieStrategy(has_dribbler=bot.motors.has_dribbler)
         self.robot_active = None
         self.status = ""
+        self.camera = CameraWatch()
 
     def tick(self, paused):
         bot = self.bot
         strategy = self.strategy
         colours = bot.pcb.snapshot() #pull variables from sensors
         frame_id, det = bot.vision.frame_id, bot.vision.latest()
+        blind = self.camera.blind(frame_id)
 
 #----------------------------------------------------------------------
 #            pause and unpause bot (switch on = paused)
@@ -51,6 +49,11 @@ class GoalieBrain:
         if not self.robot_active:
             self.log(f"running, attacking {bot.attack}")
             self.robot_active = True #running bot
+        if blind: # camera frozen / restarting: everything we know is from the last frame, so stand still
+            bot.actuate((0, 0, 0, 0), getattr(self, "dribbler_on", False), False) # (keep holding a ball we have)
+            bot.comms.my_state.update({"bot active": 0}) # to the teammate we're as good as paused
+            self.status = "camera blind - standing still"
+            return
 
 #----------------------------------------------------------------------
 #            sensors -> world
@@ -96,35 +99,9 @@ class GoalieBrain:
 #==========================================================================================#
 
 def main():
-    from gpiozero import DigitalInputDevice
     import hardware_defense as hw
-    from common import Robot
-
-    script_activate_pin = DigitalInputDevice(cfg.SWITCH_PIN, pull_up = True) #gpio pin for on/off switch
-    bot = Robot(hw)
-    brain = GoalieBrain(bot)
-    bot.wait_ready()
-
-    print("Waiting for signal")
-    try:
-        next_loop = time.monotonic()
-        while True:
-            paused = script_activate_pin.is_active
-            brain.tick(paused)
-            if paused:
-                time.sleep(0.02)
-                next_loop = time.monotonic()
-                continue
-            print(brain.status)
-            next_loop = keep_rate(next_loop) # Maintain a fixed 100 Hz loop
-
-    except KeyboardInterrupt:
-        print("User stopped.")
-    except Exception as e:
-        print(f"Unexpected error: {e!r}")
-        traceback.print_exc()
-    finally:
-        bot.shutdown()
+    from common import run_robot
+    run_robot(hw, GoalieBrain) # keeps going if tick() crashes, restarts a dead camera / comms thread (see common.py)
 
 
 if __name__ == "__main__":
