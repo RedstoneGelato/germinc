@@ -111,7 +111,9 @@ class Debug:
         for o in det.obstacles:
             cv2.circle(img, px(o.near), 3, (0, 0, 255), -1)
             if getattr(o, "centre", None) is not None:   # the whole robot it belongs to
-                cv2.circle(img, px(o.centre), int(round(cfg.ROBOT_RADIUS * rv.px_per_cm)), (0, 0, 255), 2)
+                cx_, cy_ = px(o.centre)
+                ex_, ey_ = px((o.centre[0] + cfg.ROBOT_RADIUS, o.centre[1]))   # (raw fisheye: size depends on distance)
+                cv2.circle(img, (cx_, cy_), max(2, int(round(math.hypot(ex_ - cx_, ey_ - cy_)))), (0, 0, 255), 2)
         if det.ball is not None:
             cv2.circle(img, px(det.ball), 6, (0, 140, 255), 2)
         c = px((0, 0))

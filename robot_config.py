@@ -16,13 +16,21 @@ COMMS_PORT = 5555
 SWITCH_PIN = 25            # on/off switch, GPIO to ground
 
 VISION_CONFIG = "robot_vision_config.json"   # made by test_camera.py -> "Generate config file"
+VISION_MAX_FPS = 50        # TUNE: camera frame rate cap. Without one picamera2 runs the camera as fast as the sensor
+                           # mode goes (up to 120 fps on the HQ camera) and the vision thread never rests = heat.
+                           # The main loop is 100 Hz; the simulator assumes 33 fps. None = no cap.
+VISION_CV_THREADS = 1      # OpenCV worker threads (whole program). The vision pipeline is about as fast on 1 thread
+                           # as on 4 at 640x480, and 1 leaves the other cores (and less heat) for everything else.
 
 CONTROL_PERIOD = 0.01      # main loop runs at 100 Hz
 
 # ---- robot body (cm)
 ROBOT_RADIUS = 11.0                         # TUNE: centre to bumper
-# where the ball sits when it's in the dribbler, robot frame (x_min, x_max, y_min, y_max) - TUNE in test_localisation.py
-CAPTURE_ZONE = (-4.0, 4.0, ROBOT_RADIUS - 3.0, ROBOT_RADIUS + 3.0)
+# where the camera SEES the ball when it's in the dribbler, robot frame (x_min, x_max, y_min, y_max) - TUNE in
+# test_localisation.py. The ball is reported as its nearest VISIBLE point, and our own top deck hides the floor
+# just past the bumper (the near half of a held ball), so a held ball shows up ~3 cm past the bumper, not at it
+# (sim, deck 4 cm: a ball in the dribbler is seen at y 13.9-14.2, |x| < 2; one 3 cm out of the dribbler at 15.3)
+CAPTURE_ZONE = (-5.0, 5.0, ROBOT_RADIUS - 3.0, ROBOT_RADIUS + 4.0)
 BALL_RADIUS = 2.1                          # cm - CHECK the ball you use
 
 # ---- out of bounds: a robot is only out once NO part of it touches the white line

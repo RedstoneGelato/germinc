@@ -50,6 +50,22 @@ During competitions, both pi's are setup to automatically run the code on startu
 
 Note: It is recommended to startup in standby as to calibrate the robot's bottom LED, compass, and goal colour
 
+## Surviving crashes
+Set up the autostart with `./deploy/install_service.sh attack` (striker Pi) or `./deploy/install_service.sh defense` (goalie Pi).
+It installs `deploy/germinc.service` as `/etc/systemd/system/germinc.service` with `Restart=always`: whenever the program stops
+it runs the STOP script (motors off) and starts the program again a second later. Stop it with `sudo systemctl stop germinc`
+before running anything by hand (only one program can use the camera), and watch it with `journalctl -u germinc -f`.
+
+Inside the program (`common.py`):
+- an exception in `tick()` stops the motors for that loop, is printed once, and the next loop carries on (`TickGuard`)
+- a camera or comms thread that dies or stops producing is restarted by a watchdog (once a second)
+- no new camera frame for 0.3 s: the robot stands still until the camera is back (`CameraWatch`)
+- the IMU heading ignores jumps (the BNO08x resetting), and the heading / attack goal are saved to `/dev/shm` every second,
+  so a restarted program carries on facing the right way without pausing the robot
+
+Test it in the simulator: `python arena.py --games 20 --faults 1` breaks our robots on purpose (camera freezes, comms drops,
+IMU jumps, crashes, restarts: see `faults.py`); compare with the same games without `--faults`.
+
 # CODE LAYOUT
 See [GUIDE.md](GUIDE.md) for how it all works and which file to edit for what.
 
@@ -72,6 +88,7 @@ See [GUIDE.md](GUIDE.md) for how it all works and which file to edit for what.
 | `motion.py` | Desired movement -> motor speeds |
 | `comms.py` | Link to the other robot |
 | `simulator.py` | Runs both robots' real logic on a simulated field (laptop, no Pi needed) |
+| `faults.py` | Breaks our robots on purpose in the simulator (`--faults`) to check they survive crashes |
 | `STOP_attack.py` / `STOP_defense.py` | systemd ExecStopPost: stop all motors + LEDs (addresses must match the hardware files) |
 
 Camera workflow (on each robot, the config is per robot):

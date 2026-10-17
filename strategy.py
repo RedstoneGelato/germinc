@@ -74,6 +74,15 @@ CARRIER_WEIGHT = 0.0              # goalie, an opponent has the ball: how far to
 CARRIER_WIDEN = 10.0              # line it's facing along (if that line hits the goal +- this): 1 = all the way.
                                   # 0 = off: 0.6 did slightly worse in the simulator (a striker turns before it kicks,
                                   # so the goalie moving onto its current line just opens the other side)
+POST_SEAL = True                  # goalie: ball beside our goal (past a post sideways, close to the goal line - the
+SEAL_X = field.GOAL_W / 2 + 2.0   # shots "from a large angle") with an opponent at it -> stand on the goal line at
+SEAL_Y = 25.0                     # the near post and stay there. Going for it / shoving back took the goalie up-field
+SEAL_OPP = 45.0                   # round the ball and it was rolled in along the line behind it: most wide goals
+SEAL_KEEP_X = field.GOAL_W / 2 - 6.0   # against v88. Ball |x| past SEAL_X (once sealing: past SEAL_KEEP_X), less than
+SEAL_POST_X = field.GOAL_W / 2 - 2.0   # SEAL_Y above the goal line, an opponent's centre within SEAL_OPP of it; the
+SEAL_GAP = 0.0                         # goalie stands at |x| SEAL_POST_X, its edge SEAL_GAP above the goal line.
+                                       # Simulator, 80 fast games vs v88: 69-152 before, 102-44 with it (wide goals
+                                       # against 56 -> 4). SEAL_GAP 3 (the guard line) let most of them back in: 91-95
 GOALIE_FACE_MAX = math.radians(70)    # goalie guarding: face the ball, at most this far off up-field
 GOALIE_CLEAR_PATH = 60.0          # goalie kicks: the ball's path must miss every robot for this far (cm) - it kicked
                                   # straight into their striker (clearance up to a robot radius into it was accepted)
@@ -443,7 +452,7 @@ def contested(ball, centres):
 # ------------------------------------------------ ball out ---------------------------------------------------------
 
 def ball_out(ball):
-    """Ball clearly outside the white line (the goal notches count as in)."""
+    """Ball clearly outside the white line (inside a goal counts as in)."""
     return not field.inside_play_area(ball[0], ball[1], -BALL_OUT_MARGIN)
 
 
@@ -582,6 +591,7 @@ class GoalieStrategy:
         self.out_side = None     # kicking the ball out: over which side line (kick_out_side())
         self.kicked_at = -1e9    # when it last kicked (KICK_RETURN_T)
         self.out_ball = None     # (ball position, time) it was last seen going out
+        self.sealing = False     # sealing the near post (POST_SEAL)
         self.alone = None        # striker off: the StrikerStrategy the goalie plays (GOALIE_ALONE_ATTACKS)
         self.avoid = Avoider()
 
@@ -674,9 +684,21 @@ class GoalieStrategy:
             self.botstate = 0
         self.chasing = self.botstate in (1, 2)
 
+        # ---- ball beside our goal with an opponent at it: seal the near post (POST_SEAL)
+        centres = obstacle_centres(me, world.obstacles_field)
+        self.sealing = (ball is not None and not world.ball_in_capture
+                        and self.wide_threat(ball, centres, SEAL_KEEP_X if self.sealing else SEAL_X))
+        if self.sealing:
+            target = self.seal_spot(ball)
+            face = heading_for((ball[0] - me[0], ball[1] - me[1]))
+            heading = max(-GOALIE_FACE_MAX, min(GOALIE_FACE_MAX, face))
+            target = around_ball(me, target, ball)
+            self.speed = {"spd_multi": 1.0, "smooth": GUARD_SMOOTH}   # full speed: it gets shoved off the spot otherwise
+            self.phase = "seal post"
+            return rel(target, pose), heading, False
+
         # ---- an opponent shoving the ball against the goalie: shove straight back (guarding = crawling = getting
         # pushed into our goal), or with the ball in the dribbler, kick it out over the side line
-        centres = obstacle_centres(me, world.obstacles_field)
         if ball is not None:
             sh = shover(me, ball, centres)
         else:
@@ -866,6 +888,18 @@ class GoalieStrategy:
         return [max(-lim, min(lim, x)), target[1]]
 
     @staticmethod
+    def wide_threat(ball, centres, min_x=SEAL_X):
+        """Ball beside our goal (past a post sideways, close to the goal line) with an opponent at it (POST_SEAL)."""
+        if not POST_SEAL or abs(ball[0]) < min_x or ball[1] > field.OWN_GOAL_Y + SEAL_Y:
+            return False
+        return any(dist(c, ball) < SEAL_OPP for c in centres)
+
+    @staticmethod
+    def seal_spot(ball):
+        """On the goal line at the near post: blocks a ball rolled in along the line and a shot across the goal."""
+        return [math.copysign(SEAL_POST_X, ball[0]), field.OWN_GOAL_Y + R + SEAL_GAP]
+
+    @staticmethod
     def block_point(ball, vel):
         """Where a ball rolling towards our goal will cross the goalie's line (just in front of the goal), if it will
         cross between the posts soon - else None."""
@@ -938,6 +972,11 @@ QUICK_SHOT_RANGE = 130.0    # ...from up to this far (before they close us down)
 CHARGED_DIST = 50.0         # an opponent this close coming at us faster than CHARGED_SPEED (cm/s) = about to lose
 CHARGED_SPEED = 30.0        # the ball: shoot now if the shot is open (OPEN_SHOT_RANGE)
 OPEN_SHOT_RANGE = 120.0
+LONG_SHOT_FROM = 70.0       # quick / charged shots from further than this from their goal's centre: only with a real
+LONG_SHOT_ROOM = cfg.BALL_RADIUS + 4.0   # opening - the ball's path this far (cm) past every robot (only just
+                            # crossing the mouth / brushing their goalie, they hardly ever scored: 16 goals from 184
+                            # in 80 games). Simulator, 80 games with CARRY_AIM_CORNER: v88 109-4, TS 43-4, Bodensee
+                            # 94-2, lnxrobots 108-1, Technulgy 143-0 (were 70-4, 10-4, 52-6, 49-2, 105-0)
 HEAD_ON_GAP = 8.0           # an opponent's centre within 2R + this, within HEAD_ON_ANGLE of straight ahead = pressed
 HEAD_ON_ANGLE = math.radians(40)   # against the ball head-on (kickoffs): step past it (SLIP_SIDE across,
 SLIP_SIDE = 25.0                   # SLIP_FORWARD forwards) - driving into it got us shoved back to our goal
@@ -950,6 +989,27 @@ CARRY_LEAD = 0.3                      # (the capture zone): a bump there knocks 
 CARRY_TURN_MAX = math.radians(120)    # back it doesn't. Turn up to CARRY_TURN_MAX off the goal for that,
 CARRY_TURN_STEP = math.radians(10)    # trying every CARRY_TURN_STEP.
 CARRY_CLOSING = 20.0                  # only opponents coming at us faster than this (cm/s)
+SHIELD = True               # in their penalty area with the ball, their goalie in there too: shield the ball. Starts
+SHIELD_IN = R               # when our robot and their goalie are both fully inside it (centre this far inside its
+                            # lines; their goalie = the opponent nearest their goal), and stops when either leaves.
+SHIELD_FACE_BACK = 0.0      # shielding: face the nearer side line (90 deg off facing their goal), turned this much more away from their
+                            # goal (ball on the far side of us from the goalie), and drive our body into the goalie:
+SHIELD_PUSH = 15.0          # aim this far past its centre, SHIELD_PUSH_ACROSS of that towards the far post - shoving
+SHIELD_PUSH_ACROSS = 0.6    # it off the near half of the goal to open a shot for us
+SHIELD_SHOT_CLEAR = 4.0     # a path from the ball into the goal with this much room past every robot (in again at
+SHIELD_SHOT_KEEP = 0.0      # SHIELD_SHOT_CLEAR, out below SHIELD_SHOT_KEEP: the gap flickers with the camera noise):
+SHIELD_SHOT_SPD = 0.3       # turn to it (this slowly forwards) and kick once facing it with
+SHIELD_KICK_CLEAR = 3.0     # this much room. While shoving it, the dribbler limits keep the ball (sideways / backwards)
+SHIELD_MAX_TIME = 3.0       # s: then give up shielding until we lose the ball and kick / carry as usual
+CARRY_TO_CORNER = True      # carrying, their goalie in their penalty area and their striker behind us: carry to the
+CORNER_INSET = 5.0          # nearer front corner of the area (SHIELD_IN + CORNER_INSET inside it) facing the nearer
+CORNER_REACHED = 8.0        # side line, from CORNER_RANGE cm away from it (further: the normal carry - carrying
+CORNER_RANGE = 50.0         # sideways the whole way was slow and lost the ball) till within CORNER_REACHED of it
+CORNER_SPD = 0.35           # carrying to the corner: speed multiplier (x this share while still turning to face the
+CORNER_TURN_SHARE = 0.3     # side line: down to CORNER_TURN_SHARE facing 90 degrees off it)
+CARRY_AIM_CORNER = True     # the normal carry (carry_dir()) heads for that same front corner of their penalty area
+                            # instead of their goal's centre, till level with it (within CORNER_REACHED), then the goal
+SHIELD_STAY = 6.0           # shielding: carries on while both robots are within SHIELD_IN - this inside the area
 RESTART_SCREEN = True       # restart ball behind us (we're up-field of it) and their nearest robot within SCREEN_OPP
 SCREEN_TIME = 3.0           # cm of it, within SCREEN_TIME s of the ball going out: face up-field and go round the ball
 SCREEN_OPP = 60.0           # on that robot's side (bodying it) to get behind the ball - until it's further than
@@ -1038,9 +1098,9 @@ def chase(me, ball):
     return clamp_in_field(target, FIELD_MARGIN), heading, dribbler, spd
 
 
-def shot_open(compass, me, centres, max_range):
+def shot_open(compass, me, centres, max_range, room=0.0):
     """Kicking right now would score: our actual heading crosses their goal mouth within max_range (with room for
-    the ball inside the posts) and the ball's path misses every robot."""
+    the ball inside the posts) and the ball's path misses every robot (by more than `room` cm)."""
     fx, fy = -math.sin(compass), math.cos(compass)     # the way we face
     if fy < 0.2:
         return False                                   # not facing up-field
@@ -1050,7 +1110,13 @@ def shot_open(compass, me, centres, max_range):
     between_posts = abs(cross[0]) <= field.GOAL_W / 2 - cfg.BALL_RADIUS - POST_MARGIN
     if not (in_range and between_posts):
         return False
-    return clearance(me, cross, centres) > 0.0
+    return clearance(me, cross, centres) > room
+
+
+def clear_shot(compass, me, centres, max_range):
+    """shot_open(), from further than LONG_SHOT_FROM only with a real opening (LONG_SHOT_ROOM past every robot)."""
+    far = dist(me, (0.0, field.ATTACK_GOAL_Y)) > LONG_SHOT_FROM
+    return shot_open(compass, me, centres, max_range, LONG_SHOT_ROOM if far else 0.0)
 
 
 def head_on(me, compass, opponents):
@@ -1149,6 +1215,9 @@ class StrikerStrategy:
         self.won_at = None       # when we got the ball (QUICK_SHOT_TIME)
         self.out_at = None       # last time the ball was out of play (screen / restart orbit / rush)
         self.rushed_at = None    # last time we rushed a restart ball (RUSH_TURN_TIME)
+        self.shield_side = None  # shielding: +1 facing the right side line, -1 the left, 0 = gave up (till
+        self.shield_since = None # we lose the ball), None = not shielding; and since when
+        self.shield_shot = False # shielding: turning to an open shot
         self.last_ball = None    # (position, time, went out?) of the last ball seen - for an out ball, the position
                                  # is the neutral spot it'll come back to
 
@@ -1264,6 +1333,104 @@ class StrikerStrategy:
         on_a_spot = min(dist(ball, spot) for spot in field.NEUTRAL_SPOTS) < RUSH_SPOT
         return recently_out and on_a_spot
 
+    @staticmethod
+    def in_their_box(p, margin=0.0):
+        """Point p at least `margin` cm inside their penalty area's front and side lines. (The goal line end doesn't
+        count: their goalie standing with its back over the goal line is still in the area - requiring it fully
+        inside there meant the shield never started with their goalie at home.)"""
+        return abs(p[0]) <= field.PENALTY_W / 2 - margin and p[1] >= field.ATTACK_GOAL_Y - field.PENALTY_D + margin
+
+    @classmethod
+    def box_opponents(cls, world, me):
+        """The opponents that matter: with us in their penalty area, only the ones in it too (the others can't get in
+        to interfere); otherwise all of them."""
+        if not cls.in_their_box(me):
+            return list(world.opponents)
+        return [o for o in world.opponents if cls.in_their_box(o)]
+
+    @classmethod
+    def box_centres(cls, world, me):
+        """obstacle_centres(), with the same rule as box_opponents()."""
+        centres = obstacle_centres(me, world.obstacles_field)
+        if not cls.in_their_box(me):
+            return centres
+        return [c for c in centres if cls.in_their_box(c)]
+
+    @staticmethod
+    def box_corner(me):
+        """The nearer front corner of their penalty area, SHIELD_IN + CORNER_INSET inside it."""
+        side = math.copysign(1.0, me[0] or 1.0)
+        inset = SHIELD_IN + CORNER_INSET
+        return [side * (field.PENALTY_W / 2 - inset), field.ATTACK_GOAL_Y - field.PENALTY_D + inset]
+
+    def carry_target(self, me, goal):
+        """Where the normal carry heads: the nearer front corner of their penalty area till we're level with it
+        (CARRY_AIM_CORNER), then their goal."""
+        corner = self.box_corner(me)
+        if CARRY_AIM_CORNER and me[1] < corner[1] - CORNER_REACHED:
+            return corner
+        return goal
+
+    def corner_setup(self, world, me, goal):
+        """Their goalie is in their penalty area and their striker is behind us (further from their goal than us, or
+        not seen) - CARRY_TO_CORNER."""
+        if not world.opponents or self.in_their_box(me):
+            return False                        # (already in their area: shield() / bodying, never back to a corner)
+        keeper = min(world.opponents, key=lambda o: dist(o, goal))
+        if not self.in_their_box(keeper):
+            return False
+        others = [o for o in world.opponents if o is not keeper]
+        return all(o[1] < me[1] for o in others)
+
+    def shield(self, world, compass, me, ball, goal):
+        """Ball in our dribbler, our robot and their goalie both fully inside their penalty area: face the nearer
+        side line (the ball away from the goalie and the goal), shove the goalie off the near half of the goal with
+        our body, then turn to the gap and shoot (SHIELD_*).
+        Returns (target, heading, dribbler) like attack(), or None when not shielding."""
+        now = time.monotonic()
+        opponents = self.box_opponents(world, me)
+        if self.shield_side == 0 or not opponents:
+            return None                                        # gave up on this possession (SHIELD_MAX_TIME)
+        keeper = min(opponents, key=lambda o: dist(o, goal))
+        margin = SHIELD_IN if self.shield_side is None else SHIELD_IN - SHIELD_STAY   # (in: fully inside; stays on
+        if not (self.in_their_box(me, margin) and self.in_their_box(keeper, margin)):   # till SHIELD_STAY further out)
+            self.shield_side = None
+            return None
+        if self.shield_side is None:
+            # the nearer side line (in the middle: the side away from their goalie)
+            dx = me[0] if abs(me[0]) > 3.0 else me[0] - keeper[0]
+            self.shield_side = math.copysign(1.0, dx or 1.0)
+            self.shield_since = now
+            self.shield_shot = False
+        elif now - self.shield_since > SHIELD_MAX_TIME:
+            self.shield_side = 0
+            return None
+        self.facing_since = None
+        side = self.shield_side
+        centres = self.box_centres(world, me)
+
+        # a gap into the goal: turn to it and kick once facing it
+        aim, clear = best_aim(ball, centres)
+        self.shield_shot = clear >= (SHIELD_SHOT_KEEP if self.shield_shot else SHIELD_SHOT_CLEAR)
+        if self.shield_shot:
+            if shot_open(compass, me, centres, field.PENALTY_D + 20.0, SHIELD_KICK_CLEAR):
+                self.kick = True
+            to_aim = unit((aim[0] - me[0], aim[1] - me[1]))
+            self.speed = {"spd_multi": SHIELD_SHOT_SPD}
+            self.phase = "shield shot"
+            return [me[0] + to_aim[0] * 20, me[1] + to_aim[1] * 20], heading_for(to_aim), True
+
+        # shield: face the nearer side line, turned a bit away from their goal (heading +90 deg = facing -x)
+        face = (side * math.cos(SHIELD_FACE_BACK), -math.sin(SHIELD_FACE_BACK))
+        heading = heading_for(face)
+        # ...and shove their goalie with our body: drive at a point past it, towards the far post
+        away = unit((keeper[0] - me[0], keeper[1] - me[1]))
+        push = unit((away[0] - side * SHIELD_PUSH_ACROSS, away[1]))
+        target = [keeper[0] + push[0] * SHIELD_PUSH, keeper[1] + push[1] * SHIELD_PUSH]
+        self.speed = {"spd_multi": 1.0}
+        self.phase = "shield"
+        return target, heading, True
+
     def attack(self, world, compass, me, ball):
         """Ball in play. Returns (target field point, heading, dribbler); sets .kick / .speed / .phase."""
         goal = (0.0, field.ATTACK_GOAL_Y)                                  # centre of their goal
@@ -1272,6 +1439,7 @@ class StrikerStrategy:
         # ---- no ball in the dribbler: chase it
         if not world.ball_in_capture:
             self.facing_since = None
+            self.shield_side = None
             target, heading, dribbler, spd = chase(me, ball)
             # restart screen: the ball is just back and behind us, their robot is near it - face up-field and push
             # it away from the ball (not turning round, never touching the ball)
@@ -1316,9 +1484,15 @@ class StrikerStrategy:
             self.speed = {"spd_multi": spd}
             return target, heading, dribbler
 
+        # ---- ball in the dribbler near their goal, their robot in the way: shield it and go round them
+        if SHIELD:
+            out = self.shield(world, compass, me, ball, goal)
+            if out is not None:
+                return out
+
         # ---- ball in the dribbler, an opponent pressed against our front: step past it (SLIP_SIDE across, away
         # from the side it's on, and SLIP_FORWARD forwards)
-        ho = head_on(me, compass, world.opponents)
+        ho = head_on(me, compass, self.box_opponents(world, me))
         if ho is not None:
             fwd = (-math.sin(compass), math.cos(compass))
             cross = (ho[0] - me[0]) * fwd[1] - (ho[1] - me[1]) * fwd[0]    # which side of our front it's on
@@ -1332,7 +1506,7 @@ class StrikerStrategy:
 
         # ---- ball in the dribbler: carry it, kick when there's a chance
         now = time.monotonic()
-        centres = obstacle_centres(me, world.obstacles_field)
+        centres = self.box_centres(world, me)
         if self.won_at is None:
             self.won_at = now
         facing_goal_mouth = shot_open(compass, me, [], RUSH_FLICK_RANGE)   # [] = ignore robots in the way
@@ -1342,9 +1516,14 @@ class StrikerStrategy:
         else:
             flicked = False
         just_won_it = now - self.won_at < QUICK_SHOT_TIME
-        if just_won_it and shot_open(compass, me, centres, QUICK_SHOT_RANGE):
+        if just_won_it and clear_shot(compass, me, centres, QUICK_SHOT_RANGE):
             self.kick = True                                   # quick shot: before they close us down
-        u = carry_dir(me, goal, world.opponents, world.opponent_vel)   # towards the goal, front away from them
+        # (in their penalty area: only the opponents in it count - box_opponents())
+        pairs = [(o, v) for o, v in zip(world.opponents, world.opponent_vel)
+                 if not self.in_their_box(me) or self.in_their_box(o)]
+        opps, vels = [o for o, _ in pairs], [v for _, v in pairs]
+        u = carry_dir(me, self.carry_target(me, goal), opps, vels)   # towards the goal (or the corner of their
+                                                                       # penalty area on the way), front away from them
         carry_heading = heading_for(u)
         # just after a rush: slow down while turning (at rush speed it couldn't turn away from an opponent)
         carry_spd = 1.0
@@ -1354,7 +1533,7 @@ class StrikerStrategy:
             carry_spd = max(RUSH_TURN_MIN_SPD, 1.0 - (turn - RUSH_TURN_FREE) / RUSH_TURN_SLOWEST * 0.6)
         self.speed = {"spd_multi": carry_spd}
         self.phase = "flick" if flicked else "carry"
-        if charged(me, world.opponents, world.opponent_vel) and shot_open(compass, me, centres, OPEN_SHOT_RANGE):
+        if charged(me, opps, vels) and clear_shot(compass, me, centres, OPEN_SHOT_RANGE):
             self.kick = True                                   # about to be shoved off it: shoot
         # facing their goal (within CARRY_FACING) for CARRY_KICK_HOLD s, within CARRY_KICK_RANGE: kick
         facing_err = abs(angle_diff(heading, compass))
@@ -1366,4 +1545,19 @@ class StrikerStrategy:
         else:
             self.facing_since = None
         target = [me[0] + u[0] * 40, me[1] + u[1] * 40]        # 40 cm along the carry direction
+        # set up the shield: their goalie in their penalty area and their striker behind us (or not seen) -> carry
+        # it to the nearer front corner of their penalty area facing the nearer side line, the ball hidden from the
+        # goalie, so we arrive in the area already in the shield (shield())
+        # (once there, shield() takes over - or if it doesn't start, the normal carry)
+        if SHIELD and CARRY_TO_CORNER and self.shield_side != 0 and self.corner_setup(world, me, goal):
+            side = math.copysign(1.0, me[0] or 1.0)
+            corner = self.box_corner(me)
+            if CORNER_REACHED < dist(me, corner) < CORNER_RANGE:
+                # slowly (it's all sideways to the way we face), and slower still while turning: too fast lost the
+                # ball (the dribbler only holds it so fast sideways)
+                corner_heading = heading_for((side, 0.0))
+                off = abs(angle_diff(corner_heading, compass))
+                self.speed = {"spd_multi": CORNER_SPD * max(CORNER_TURN_SHARE, math.cos(min(off, math.pi / 2)))}
+                self.phase = "carry corner"
+                return corner, corner_heading, True
         return target, carry_heading, True

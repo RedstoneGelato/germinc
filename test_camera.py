@@ -60,6 +60,8 @@ ROTATION = cv2.ROTATE_90_CLOCKWISE  # camera mounting; applied after undistort/t
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CALIB_FILE = os.path.join(HERE, "fisheye_calib.npz")
+CALIB_FRAMES_FILE = os.path.join(HERE, "calib_frames.npz")   # every captured board's corners (send it if calibration fails)
+CAL_MAX_RMS = 3.0              # px: a worse fit is not saved or used (it blacked out the undistorted view)
 TOPDOWN_FILE = os.path.join(HERE, "topdown.npz")
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
 EXPORT_FILE = os.path.join(HERE, "robot_vision_config.json")   # made by the "Generate config file" button
@@ -139,6 +141,7 @@ class Config:
         self.yaw = dict(DEFAULT_YAW)
         self.robot = None   # [x, y] in the image that goes into ROTATION; None = image centre
         self.ignore = dict(DEFAULT_IGNORE)
+        self.radial = {"points": [], "coeffs": None, "r_max_px": None, "rms_cm": None}   # distance calibration
         self.arrays = {}
         self.load()
         self._rebuild()
@@ -166,13 +169,18 @@ class Config:
             r = d.get("robot")
             self.robot = [float(r[0]), float(r[1])] if r else None
             self.ignore = self._clamp_ignore({**DEFAULT_IGNORE, **d.get("ignore", {})})
+            rd = d.get("radial")
+            if rd:
+                self.radial = {"points": [[float(a), float(b)] for a, b in rd.get("points", [])],
+                               "coeffs": None, "table_px": rd.get("table_px"), "table_cm": rd.get("table_cm"),
+                               "r_max_px": rd.get("r_max_px"), "rms_cm": rd.get("rms_cm"), "model": rd.get("model")}
         except (OSError, ValueError, KeyError, TypeError, IndexError) as e:
             print(f"[warn] could not read {SETTINGS_FILE}: {e!r} - using defaults for what failed")
 
     def save(self):
         with self.lock:
             data = {"hsv": self.hsv, "camera": self.camera, "undistort": self.undistort,
-                    "yaw": self.yaw, "robot": self.robot, "ignore": self.ignore}
+                    "yaw": self.yaw, "robot": self.robot, "ignore": self.ignore, "radial": self.radial}
         tmp = SETTINGS_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
@@ -373,6 +381,18 @@ def ignore_rect(centre, px_per_cm, ign, shape):
     x2 = int(round(cx + ign["right"] * px_per_cm))
     y1 = int(round(cy - ign["front"] * px_per_cm))
     y2 = int(round(cy + ign["back"] * px_per_cm))
+    return max(x1, 0), max(y1, 0), min(max(x2, 0), w), min(max(y2, 0), h)
+
+
+def ignore_rect_radial(centre, radial, ign, shape):
+    """ignore_rect() for the raw fisheye: each side's cm turned into pixels with the distance calibration curve
+    (the same box robot_vision.py uses in its "radial" mode)."""
+    h, w = shape[:2]
+    cx, cy = centre
+    tp, tc = np.array(radial["table_px"]), np.maximum.accumulate(np.array(radial["table_cm"]))
+    px = {k: float(np.interp(v, tc, tp)) for k, v in ign.items()}
+    x1, x2 = int(round(cx - px["left"])), int(round(cx + px["right"]))
+    y1, y2 = int(round(cy - px["front"])), int(round(cy + px["back"]))
     return max(x1, 0), max(y1, 0), min(max(x2, 0), w), min(max(y2, 0), h)
 
 
@@ -628,7 +648,12 @@ def capture_loop(cam):
 
         und = P.undistort(raw)
         td = P.to_topdown(raw)
-        base = td if td is not None else (und if und is not None else raw)
+        with CFG.lock:
+            radial = CFG.radial if CFG.radial.get("table_px") else None
+        if radial is not None:
+            base = raw          # distance calibration: the raw fisheye frame, like the robot (no lens / top-down)
+        else:
+            base = td if td is not None else (und if und is not None else raw)
         robot_frame = cv2.rotate(base, ROTATION)
 
         # robot centre in the robot-aligned frame
@@ -641,8 +666,11 @@ def capture_loop(cam):
             centre = rotate_point((bx, by), (base.shape[1], base.shape[0]), ROTATION)
 
         tdc = P.topdown
-        ppc = tdc[3] if (td is not None and tdc is not None) else FALLBACK_PX_PER_CM
-        ign = ignore_rect(centre, ppc, CFG.ignore, robot_frame.shape)
+        if radial is not None:
+            ign = ignore_rect_radial(centre, radial, CFG.ignore, robot_frame.shape)
+        else:
+            ppc = tdc[3] if (td is not None and tdc is not None) else FALLBACK_PX_PER_CM
+            ign = ignore_rect(centre, ppc, CFG.ignore, robot_frame.shape)
         masks_r = compute_masks(robot_frame, CFG.arrays, ign)
 
         # field alignment from IMU yaw
@@ -742,6 +770,11 @@ def cal_add(cols, rows):
     with S.lock:
         S.obj.append(objp)
         S.img.append(corners.reshape(1, -1, 2).astype(np.float32))
+        try:   # keep the raw corners on disk too (for checking a failed calibration)
+            np.savez(CALIB_FRAMES_FILE, img=np.array(S.img, dtype=object), cols=cols, rows=rows,
+                     size=np.array(CAPTURE_SIZE), allow_pickle=True)
+        except Exception as e:
+            print(f"[warn] couldn't save {CALIB_FRAMES_FILE}: {e!r}")
         S.board = (cols, rows)
         n = len(S.obj)
     return {"ok": True, "msg": f"Saved frame {n}."}
@@ -751,15 +784,21 @@ CAL_CRIT = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
 CAL_FLAGS = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW + cv2.fisheye.CALIB_USE_INTRINSIC_GUESS
 
 
-def _cal_guess_K():
-    """Starting guess for the lens: the image circle about as wide as the short side, ~180 degrees across (without it
-    OpenCV's own guess often failed on this wide lens - "InitExtrinsics ... norm_u1 > 0")."""
-    f = min(CAPTURE_SIZE) / np.pi
+CAL_F_SCALES = (1.0, 0.7, 1.4, 0.5, 2.0)   # starting focal lengths tried, x (short side / pi)
+
+
+def _cal_guess_K(scale=1.0):
+    """Starting guess for the lens: the image circle about as wide as the short side, ~180 degrees across (without a
+    guess OpenCV's own often failed on this wide lens - "InitExtrinsics ... norm_u1 > 0"), times `scale`."""
+    f = scale * min(CAPTURE_SIZE) / np.pi
     return np.array([[f, 0, CAPTURE_SIZE[0] / 2], [0, f, CAPTURE_SIZE[1] / 2], [0, 0, 1]], np.float64)
 
 
+_CAL_SCALE = [1.0]   # the starting guess currently being tried (_robust_calibrate is run once per guess)
+
+
 def _cal(obj, img):
-    return cv2.fisheye.calibrate(obj, img, CAPTURE_SIZE, _cal_guess_K(), np.zeros((4, 1)), None, None,
+    return cv2.fisheye.calibrate(obj, img, CAPTURE_SIZE, _cal_guess_K(_CAL_SCALE[0]), np.zeros((4, 1)), None, None,
                                  CAL_FLAGS, CAL_CRIT)
 
 
@@ -804,7 +843,18 @@ def cal_run():
         obj, img = list(S.obj), list(S.img)
     if len(obj) < 10:
         return {"ok": False, "msg": f"Need at least 10 frames (have {len(obj)}); 15-25 is better."}
-    res = _robust_calibrate(obj, img)
+    res = None
+    for scale in CAL_F_SCALES:                   # several starting guesses: keep the best fit
+        _CAL_SCALE[0] = scale
+        r = _robust_calibrate(obj, img)
+        if r is not None and (res is None or (r[0], -len(r[3])) < (res[0], -len(res[3]))):
+            res = r
+        if res is not None and res[0] < 1.0:
+            break
+    if res is not None and res[0] > CAL_MAX_RMS:
+        return {"ok": False, "msg": f"Calibration fit is bad (RMS {res[0]:.1f}px, needs < {CAL_MAX_RMS:.0f}) - NOT saved. "
+                                    f"Check cols/rows = INNER corners of your board, then Reset and retake. If it keeps "
+                                    f"failing, send calib_frames.npz."}
     if res is None:
         return {"ok": False, "msg": "Calibration failed even after dropping bad frames. Reset and retake: board flat, "
                                     "big in the image, not edge-on, many positions."}
@@ -976,6 +1026,136 @@ def api_robot(body):
     CFG.save()
     return {"ok": True, "msg": f"Robot centre set to ({x:.0f}, {y:.0f}) in the top-down image."}
 
+RADIAL_DEGREE = 3          # distance calibration: polynomial degree of cm(pixels) (fewer points: n - 1)
+
+
+def _raw_centre(raw):
+    """Robot centre in the RAW frame (no lens / top-down in radial mode, so the picked centre is in raw pixels)."""
+    with CFG.lock:
+        robot = CFG.robot
+    return robot_base_point(raw.shape, robot)
+
+
+BALL_RADIUS_CM = 2.1        # same as robot_config.BALL_RADIUS
+
+
+def api_radial_add(body):
+    """Ball at a measured distance from the robot centre: record how far out (pixels) it is in the raw frame.
+    The curve is for points ON THE FLOOR (lines, where robots and goals touch it): the ball's centre is BALL_RADIUS_CM
+    up, and the camera's ray through it reaches the floor further out - by camera height / (camera height - ball
+    radius) - so the point is stored at that floor distance."""
+    try:
+        cm = float(body["cm"])
+        cam_h = float(body["cam_h"])
+    except (KeyError, ValueError, TypeError):
+        return {"ok": False, "msg": "Type the camera height and the ball's real distance (cm) first."}
+    if cam_h <= BALL_RADIUS_CM + 1:
+        return {"ok": False, "msg": "Camera height = lens to floor in cm (must be well above the ball's centre)."}
+    cm = cm * cam_h / (cam_h - BALL_RADIUS_CM)        # where the ray through the ball's centre meets the floor
+    with S.lock:
+        raw = None if S.raw is None else S.raw.copy()
+    if raw is None:
+        return {"ok": False, "msg": "No frame yet."}
+    with CFG.lock:
+        lo, hi = CFG.arrays["orange"]
+    mask = cv2.inRange(cv2.cvtColor(raw, cv2.COLOR_BGR2HSV), lo, hi)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, KERNEL)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return {"ok": False, "msg": "No orange ball found - check the orange HSV range (Masks tab)."}
+    c = max(contours, key=cv2.contourArea)
+    m = cv2.moments(c)
+    if m["m00"] <= 0:
+        return {"ok": False, "msg": "Ball blob too small."}
+    bx, by = m["m10"] / m["m00"], m["m01"] / m["m00"]
+    cx, cy = _raw_centre(raw)
+    r_px = float(np.hypot(bx - cx, by - cy))
+    with CFG.lock:
+        pts = CFG.radial["points"] + [[r_px, cm]]
+        CFG.radial = {**CFG.radial, "points": pts}
+    CFG.save()
+    return {"ok": True, "msg": f"Point {len(pts)}: {float(body['cm']):.1f} cm ball = {cm:.1f} cm on the floor = "
+                               f"{r_px:.1f} px from the robot centre."}
+
+
+def api_radial_undo():
+    with CFG.lock:
+        pts = CFG.radial["points"][:-1]
+        CFG.radial = {**CFG.radial, "points": pts}
+    CFG.save()
+    return {"ok": True, "msg": f"{len(pts)} point(s) left."}
+
+
+def api_radial_reset():
+    with CFG.lock:
+        CFG.radial = {"points": [], "coeffs": None, "table_px": None, "table_cm": None, "r_max_px": None,
+                      "rms_cm": None, "model": None}
+    CFG.save()
+    return {"ok": True, "msg": "Distance calibration cleared."}
+
+
+def _fit_tan(r, d):
+    """Fisheye-shaped regression: cm = a * tan(b * px) (a camera looking down through a fisheye: the floor distance
+    grows like tan of the angle, and the angle grows ~ in step with the pixel radius). Best (a, b) by least squares:
+    b by a fine search, a exactly for each b. Returns (sse, a, b)."""
+    best = None
+    r_max = float(r.max())
+    for b in np.linspace(0.05, 1.55, 600) / r_max:          # b * r_max stays below pi/2 (where tan blows up)
+        t = np.tan(b * r)
+        a = float(np.dot(t, d) / max(np.dot(t, t), 1e-12))
+        sse = float(np.sum((a * t - d) ** 2))
+        if best is None or sse < best[0]:
+            best = (sse, a, float(b))
+    return best
+
+
+def api_radial_fit():
+    """Fit cm(pixels) through the points (the regression curve) - the fisheye shape cm = a*tan(b*px), or a polynomial
+    if that fits better - and store it as a lookup table."""
+    with CFG.lock:
+        pts = list(CFG.radial["points"])
+    if len(pts) < 4:
+        return {"ok": False, "msg": f"Need at least 4 points (have {len(pts)}); 8-12 spread from close to far is better."}
+    r = np.array([p[0] for p in pts]); d = np.array([p[1] for p in pts])
+    r_max = float(r.max())
+    grid = np.linspace(0.0, r_max, 256)
+    _, a, b = _fit_tan(r, d)
+    curves = {"fisheye a*tan(b*px)": (a * np.tan(b * grid), a * np.tan(b * r))}
+    deg = min(RADIAL_DEGREE, len(pts) - 1)
+    rr, dd = np.concatenate([[0.0], r]), np.concatenate([[0.0], d])
+    coeffs = np.polyfit(rr, dd, deg, w=np.concatenate([[3.0], np.ones(len(r))]))
+    poly_grid = np.polyval(coeffs, grid)
+    if np.all(np.diff(poly_grid) > 0):                      # (a polynomial that goes down somewhere is no use)
+        curves[f"polynomial (degree {deg})"] = (poly_grid, np.polyval(coeffs, r))
+    name, (table, fit) = min(curves.items(), key=lambda kv: float(np.mean((kv[1][1] - d) ** 2)))
+    rms = float(np.sqrt(np.mean((fit - d) ** 2)))
+    worst = int(np.argmax(np.abs(fit - d)))
+    with CFG.lock:
+        CFG.radial = {**CFG.radial, "coeffs": None, "table_px": grid.tolist(), "table_cm": table.tolist(),
+                      "r_max_px": r_max, "rms_cm": rms, "model": name}
+    CFG.save()
+    return {"ok": True, "msg": f"Fitted ({name}) through {len(pts)} points: {rms:.1f} cm off on average (worst: point "
+                               f"{worst + 1}, {abs(fit[worst] - d[worst]):.1f} cm). Valid out to {r_max:.0f} px "
+                               f"= {table[-1]:.0f} cm. Press Generate config file to use it on the robot."}
+
+
+def radial_rings(img, robot_centre_xy):
+    """Draw the fitted distances (every 20 cm) on a raw frame, if the distance calibration is fitted."""
+    with CFG.lock:
+        rd = dict(CFG.radial)
+    if not rd.get("table_px"):
+        return img
+    grid, dist = np.array(rd["table_px"]), np.maximum.accumulate(np.array(rd["table_cm"]))
+    cx, cy = (int(round(v)) for v in robot_centre_xy)
+    for cm in range(20, int(dist[-1]) + 1, 20):
+        rp = int(round(np.interp(cm, dist, grid)))
+        cv2.circle(img, (cx, cy), rp, (0, 255, 255), 1)
+        cv2.putText(img, f"{cm}", (cx + rp + 2, cy), cv2.FONT_HERSHEY_PLAIN, 0.9, (0, 255, 255), 1)
+    for r_px, cm in rd["points"]:
+        cv2.circle(img, (cx, cy), int(round(r_px)), (255, 0, 255), 1)
+    return img
+
+
 ROTATION_NAMES = {cv2.ROTATE_90_CLOCKWISE: "90_CLOCKWISE", cv2.ROTATE_180: "180",
                   cv2.ROTATE_90_COUNTERCLOCKWISE: "90_COUNTERCLOCKWISE"}
 
@@ -989,6 +1169,7 @@ def build_export():
         yaw = dict(CFG.yaw)
         robot = CFG.robot
         ign = dict(CFG.ignore)
+        radial = dict(CFG.radial)
     td = P.topdown
     with S.lock:
         ign_px = S.ignore_px
@@ -1008,6 +1189,8 @@ def build_export():
         "topdown": None if (td is None or P.Hn is None) else
                    {"Hn": np.asarray(P.Hn).tolist(), "out_size": list(td[2]), "px_per_cm": td[3]},
         "robot_centre": robot,
+        "radial": None if not radial.get("table_px") else {"table_px": radial["table_px"], "table_cm": radial["table_cm"],
+                                                           "r_max_px": radial["r_max_px"], "model": radial.get("model")},
         "heading": {"align_to_field": yaw["enabled"], "invert": yaw["invert"], "offset_deg": yaw["offset"]},
     }
 
@@ -1020,6 +1203,9 @@ def api_export():
     os.replace(tmp, EXPORT_FILE)
     parts = ["HSV (5 colours)", "camera exposure/white balance", "ignore box (cm) + blob size", "heading settings"]
     notes = []
+    if data["radial"]:
+        parts.append("distance calibration (raw fisheye: direction + calibrated distance, no undistortion)")
+        return {"ok": True, "msg": f"Wrote {EXPORT_FILE} with: {', '.join(parts)}."}
     if data["lens"]:
         parts.append("lens calibration")
     else:
@@ -1102,6 +1288,21 @@ PAGE = r"""<!doctype html>
   <div class="dim" style="margin-top:6px">Ignore box (robot body), cm from the robot centre. Red box in the Masks/Detect tabs.
    Keep 'front' small enough that a ball sitting in the capture zone is still outside the box.</div>
   <div id="ignbox"></div>
+ </details>
+ <details open><summary>Distance calibration (no undistortion)</summary>
+  <div class="dim">Instead of flattening the fisheye: measure how far out (pixels) the ball looks at known distances and fit a
+   curve. Every pixel's direction is its angle from the robot centre, its distance comes from the curve.<br>
+   1. Set the robot centre on the <b>Raw</b> tab (button above, click the middle of the robot).<br>
+   2. Put the ball at a measured distance from the robot centre (centre to centre), type it, press Add point.
+   Do 8-12 distances from close (~15 cm) to as far as you need (~100 cm), in different directions.<br>
+   3. Fit. Yellow rings on the Raw tab show 20, 40, 60... cm; check the ball sits on the right ring.</div>
+  <div class="row"><span class="n">Camera height cm</span><input type="number" id="rad_h" min="5" max="60" step="0.5" style="width:80px">
+   <span class="dim">lens to floor</span></div>
+  <div class="row"><span class="n">Distance cm</span><input type="number" id="rad_cm" min="0" max="300" step="0.5" style="width:80px">
+   <button class="a" onclick="post('/api/radial/add',{cm:+$('rad_cm').value,cam_h:+$('rad_h').value})">Add point</button></div>
+  <button class="a" onclick="post('/api/radial/undo')">Undo</button>
+  <button class="a" onclick="post('/api/radial/reset')">Reset</button>
+  <button class="a" onclick="post('/api/radial/fit')">Fit</button>
  </details>
  <details open><summary>Export for the robot script</summary>
   <div class="dim">Bundles the HSV ranges, exposure/white balance, lens calibration, top-down mapping, ignore box and heading settings into one file the robot script loads with robot_vision.py.</div>
@@ -1340,7 +1541,7 @@ def get_view(mode, cols, rows, show_bg):
     if raw is None:
         return fid, None
     if mode == "raw":
-        img = raw
+        img = radial_rings(raw.copy(), _raw_centre(raw))
     elif mode == "calib":
         img = raw.copy()
         gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
@@ -1523,6 +1724,14 @@ class Handler(BaseHTTPRequestHandler):
                 res = api_export()
             elif path == "/api/robot":
                 res = api_robot(body)
+            elif path == "/api/radial/add":
+                res = api_radial_add(body)
+            elif path == "/api/radial/undo":
+                res = api_radial_undo()
+            elif path == "/api/radial/reset":
+                res = api_radial_reset()
+            elif path == "/api/radial/fit":
+                res = api_radial_fit()
             elif path == "/api/ignore":
                 res = api_ignore(body)
             else:

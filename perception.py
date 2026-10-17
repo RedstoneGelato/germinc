@@ -140,7 +140,7 @@ class World:
             return
         self.frame_id = frame_id
         now = time.monotonic()
-        c = det.compass
+        c = det.compass + getattr(pose, "dh", 0.0)   # localisation's compass correction (0 without a pose)
         self.field_visible = det.field_visible
 
         # ball

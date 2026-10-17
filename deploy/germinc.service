@@ -1,0 +1,25 @@
+# germinc.service - starts the robot program at boot and starts it again whenever it stops (crash, error).
+# Install with deploy/install_service.sh (it fills in the user, folder and script), don't copy this file by hand.
+[Unit]
+Description=Germ Inc robot (SCRIPT)
+After=network-online.target
+Wants=network-online.target
+# never give up restarting (by default systemd stops after 5 restarts in 10 s)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=USER
+WorkingDirectory=CODE_DIR
+ExecStart=VENV_PYTHON -u CODE_DIR/SCRIPT
+# run the STOP script whenever the program ends, however it ended: the motor drivers may keep the last speed
+ExecStopPost=VENV_PYTHON CODE_DIR/STOP_SCRIPT
+Restart=always
+RestartSec=1
+# Ctrl+C-like stop so main's finally: shutdown() runs (motors off) when the service is stopped
+KillSignal=SIGINT
+TimeoutStopSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -16,6 +16,7 @@ Field frame: origin = centre, +y = goal we attack. "relative" = robot -> thing v
 """
 import math
 import threading
+import time
 
 import numpy as np
 
@@ -28,11 +29,12 @@ PREDICT_NOISE = 1.5            # cm per update, plus...
 PREDICT_NOISE_SPEED = 90.0     # ...cm/s * dt  (how far the robot might move between frames that we don't model)
 LINE_SIGMA = 4.0               # cm: how far off a matched line point typically is
 LINE_CLIP = 12.0               # cm: points further than this from any line count as this (robust to junk)
-LINE_WEIGHT = 10.0             # how many "independent" measurements the line points are worth together
+LINE_WEIGHT = 30.0             # how many "independent" measurements the line points are worth together
 LINE_MIN_POINTS = 8            # fewer white points than this = don't use lines this frame
 LINE_MAX_POINTS = 120          # subsample to this for speed
 GOAL_SIGMA = 6.0               # cm, plus...
 GOAL_SIGMA_PER_CM = 0.12       # ...this much per cm of distance (far goals are less accurate in top-down)
+GOAL_OUTLIER = 0.05            # goal likelihood floor (0 = plain Gaussian): how often a seen goal is badly off
 GOAL_X_DEADBAND = 3.0          # position_from_goals: goal near point within this of straight ahead = "in front of it"
 WALL_SIGMA = 5.0               # ultrasonic
 WALL_OUTLIER = 0.2             # chance an ultrasonic reading is junk (hit a robot, etc.)
@@ -43,6 +45,18 @@ CONFIDENT_STD = 15.0           # cm spread below which the estimate is trusted
 LOST_STD = 40.0
 VEL_SMOOTH = 0.3               # velocity estimate smoothing (0..1, higher = faster response)
 VEL_MAX = 250.0                # cm/s
+# compass correction: the IMU is zeroed by hand ("facing forward" is never exactly forward) and drifts, and a few
+# degrees off turns every line point 1 m away by several cm. Each confident frame the line points are also tried
+# turned a little either way; whichever fits the field lines best nudges the correction (dh) towards it.
+HEADING_FIX = True
+HEADING_MIN_POINTS = 30        # white points needed to judge the heading
+HEADING_TRY = math.radians(1.5)     # tried turns: -2, -1, 0, +1, +2 x this
+HEADING_SHIFT = 3.0            # cm: each tried turn may also shift by this much (a turn and a shift look alike)
+HEADING_GAIN = 0.15            # fraction of the best turn applied per frame (averages out noisy frames)
+HEADING_MAX = math.radians(25.0)    # never correct more than this
+HEADING_FIT = 1.5              # only when the lines fit well: RMS distance <= this x LINE_SIGMA (a wrong pose fits
+                               # badly, and turning the points to suit it would make the compass wrong too)
+HEADING_SETTLE = 15            # confident frames in a row (after a start / pickup) before the heading is judged
 
 
 def position_from_goals(attack_near, own_near):
@@ -71,6 +85,8 @@ class Localiser:
         self.xmax = field.WALL_W / 2 - 5.0
         self.ymax = field.WALL_L / 2 - 5.0
         self.vel = np.zeros(2)
+        self.dh = 0.0                # compass correction (radians, + = turn the seen points CCW)
+        self._settled = 0            # confident frames in a row
         self._last_est = None
         self._last_t = None
         self.reset_uniform()
@@ -85,6 +101,7 @@ class Localiser:
         self.logw = np.zeros(self.n)
         self.vel[:] = 0
         self._last_est = None
+        self._settled = 0
 
     def reset_to(self, x, y, spread=10.0):
         self.p = np.column_stack([self.rng.normal(x, spread, self.n), self.rng.normal(y, spread, self.n)])
@@ -116,11 +133,13 @@ class Localiser:
         return True
 
     def correct_goal(self, near_rel, goal_y):
-        gx, gy = field.goal_near_point(self.p[:, 0], self.p[:, 1], goal_y)
+        gx, gy = field.goal_seen_point(self.p[:, 0], self.p[:, 1], goal_y)
         ex, ey = gx - self.p[:, 0], gy - self.p[:, 1]
         sigma = GOAL_SIGMA + GOAL_SIGMA_PER_CM * math.hypot(*near_rel)
         err2 = (ex - near_rel[0]) ** 2 + (ey - near_rel[1]) ** 2
-        self.logw += -err2 / (2 * sigma ** 2)
+        # robust: a goal half hidden behind a robot gives a near point far from the real one, so a big miss only
+        # costs as much as GOAL_OUTLIER says, instead of dragging every particle towards it
+        self.logw += np.log(np.exp(-err2 / (2 * sigma ** 2)) + GOAL_OUTLIER)
 
     def correct_walls(self, ranges, angles_rel, sensor_radius=0.0):
         """Ultrasonic ring (for later). ranges = cm from each sensor (None = no reading),
@@ -165,12 +184,48 @@ class Localiser:
         var = w @ np.sum((self.p - m) ** 2, axis=1)
         return float(m[0]), float(m[1]), float(math.sqrt(var))
 
+    # ---- compass correction
+    _TURNS = np.arange(-2, 3)
+    _SHIFTS = np.array([(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)], float)
+
+    def refine_heading(self, pts_rel, x, y):
+        """pts_rel = line points already turned by the current dh. Nudges dh towards the turn that fits best."""
+        if len(pts_rel) < HEADING_MIN_POINTS:
+            return
+        if len(pts_rel) > LINE_MAX_POINTS:
+            pts_rel = pts_rel[self.rng.choice(len(pts_rel), LINE_MAX_POINTS, replace=False)]
+        costs = []
+        for k in self._TURNS:
+            c, s = math.cos(k * HEADING_TRY), math.sin(k * HEADING_TRY)
+            px = pts_rel[:, 0] * c - pts_rel[:, 1] * s
+            py = pts_rel[:, 0] * s + pts_rel[:, 1] * c
+            sx = x + HEADING_SHIFT * self._SHIFTS[:, 0:1] + px[None, :]
+            sy = y + HEADING_SHIFT * self._SHIFTS[:, 1:2] + py[None, :]
+            d = self.map.lookup(sx, sy, clip=LINE_CLIP)
+            costs.append(float(np.min(np.mean(d * d, axis=1))))
+        costs = np.array(costs)
+        if costs[len(costs) // 2] > (HEADING_FIT * LINE_SIGMA) ** 2:
+            return
+        a, b, _ = np.polyfit(self._TURNS, costs, 2)
+        if a > 1e-9:
+            best = float(np.clip(-b / (2 * a), self._TURNS[0], self._TURNS[-1]))
+        else:
+            best = float(self._TURNS[int(np.argmin(costs))])
+        self.dh = float(np.clip(self.dh + HEADING_GAIN * best * HEADING_TRY, -HEADING_MAX, HEADING_MAX))
+
     # ---- one full step
     def update(self, t, line_pts_rel, attack_near_rel=None, own_near_rel=None, walls=None):
-        """t = capture time. walls = (ranges, angles_rel) from the ultrasonic ring, or None."""
+        """t = capture time. walls = (ranges, angles_rel) from the ultrasonic ring, or None.
+        Everything is turned by the compass correction dh first."""
         dt = 0.0 if self._last_t is None else t - self._last_t
         self._last_t = t
         self.predict(dt)
+        if self.dh:
+            line_pts_rel = rotate_points(line_pts_rel, self.dh)
+            attack_near_rel = None if attack_near_rel is None else rotate(attack_near_rel, self.dh)
+            own_near_rel = None if own_near_rel is None else rotate(own_near_rel, self.dh)
+            if walls is not None:
+                walls = (walls[0], [a + self.dh for a in walls[1]])
 
         self.correct_lines(line_pts_rel)
         if attack_near_rel is not None:
@@ -183,6 +238,9 @@ class Localiser:
         x, y, std = self.estimate()
         seed = position_from_goals(attack_near_rel, own_near_rel) if std > LOST_STD else None
         self.resample_if_needed(seed)
+        self._settled = self._settled + 1 if std < CONFIDENT_STD else 0
+        if HEADING_FIX and self._settled > HEADING_SETTLE:
+            self.refine_heading(line_pts_rel, x, y)
 
         if std < CONFIDENT_STD and self._last_est is not None and dt > 0:
             v = (np.array([x, y]) - self._last_est) / dt
@@ -197,10 +255,11 @@ class Localiser:
 
 
 class Pose:
-    __slots__ = ("x", "y", "std", "t")
+    """dh = the compass correction localisation is using (radians): compass + dh is the better heading."""
+    __slots__ = ("x", "y", "std", "t", "dh")
 
-    def __init__(self, x=0.0, y=0.0, std=1e3, t=0.0):
-        self.x, self.y, self.std, self.t = x, y, std, t
+    def __init__(self, x=0.0, y=0.0, std=1e3, t=0.0, dh=0.0):
+        self.x, self.y, self.std, self.t, self.dh = x, y, std, t, dh
 
     @property
     def confident(self):
@@ -224,21 +283,31 @@ class LocalisationThread(threading.Thread):
         self._reset = False
 
     def relocalise(self):
-        """Call when the robot is picked up / put down somewhere new."""
+        """Call when the robot is picked up / put down somewhere new. Also forgets the compass correction: while
+        paused, common.standby() zeroes the IMU again, so the old correction no longer applies."""
         self._reset = True
 
     def run(self):
         last_id = -1
+        errors = 0
         while self.running:
-            last_id, det = self.vision.wait_new(last_id, timeout=0.5)
-            if det is not None:
-                self.process(det)
+            try:
+                last_id, det = self.vision.wait_new(last_id, timeout=0.5)  # (self.vision changes if the camera restarts)
+                if det is not None:
+                    self.process(det)
+                errors = 0
+            except Exception as e:     # a bad frame must not end localisation for the rest of the game
+                errors += 1
+                if errors == 1:
+                    print(f"[localisation] frame failed: {e!r}")
+                time.sleep(0.01)
 
     def process(self, det):
         """One camera frame. The thread above and simulator.py both use exactly this."""
         if self._reset:
             self._reset = False
             self.loc.reset_uniform()
+            self.loc.dh = 0.0
         att = self.attack_colour()
         own = "blue" if att == "yellow" else "yellow"
         c = det.compass
@@ -249,7 +318,7 @@ class LocalisationThread(threading.Thread):
             None if g_own is None else rotate(g_own.near, c),
             self.walls)
         with self.lock:
-            self.pose = Pose(x, y, std, det.t)
+            self.pose = Pose(x, y, std, det.t, self.loc.dh)
 
     def get(self):
         with self.lock:

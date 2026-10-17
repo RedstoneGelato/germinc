@@ -119,3 +119,44 @@ class PointTracker:
         self.points = []
         self.unconcordant = 0
         self.last_seen = 0.0
+
+
+class HeadingFilter:
+    """Removes sudden jumps from a heading. The BNO08x's game rotation vector restarts at 0 wherever the robot is
+    facing whenever the sensor resets (I2C glitch, re-init after an error), and a robot can't really turn more than
+    MAX_SPIN rad/s, so any faster change is a sensor jump: it's absorbed into an offset and the heading carries on
+    from where it was."""
+    MAX_SPIN = 20.0       # rad/s (the robot spins ~6 rad/s flat out)
+    MARGIN = 0.3          # rad allowed on top of MAX_SPIN * dt
+
+    def __init__(self):
+        self.offset = 0.0
+        self.last = None      # (t, filtered heading)
+        self.jumps = 0
+        self._reanchor = False
+
+    def reanchor(self):
+        """The sensor was re-opened (its heading restarts at 0): the next reading carries on from the last one,
+        however long it's been."""
+        self._reanchor = True
+
+    def continue_from(self, heading):
+        """Make the next reading carry on from this heading (e.g. one saved before the program restarted)."""
+        self.last = (-1e9, heading)
+        self._reanchor = True
+
+    def update(self, raw, t):
+        h = wrap_pi(raw + self.offset)
+        if self._reanchor and self.last is not None:
+            self._reanchor = False
+            self.offset = wrap_pi(self.offset + angdiff(self.last[1], h))
+            h = self.last[1]
+        elif self.last is not None:
+            lt, lh = self.last
+            step = angdiff(h, lh)
+            if abs(step) > self.MAX_SPIN * max(t - lt, 0.0) + self.MARGIN:
+                self.offset = wrap_pi(self.offset - step)
+                h = lh
+                self.jumps += 1
+        self.last = (t, h)
+        return h

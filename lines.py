@@ -99,7 +99,7 @@ class LineFusion:
             near = pts[d2 < CAM_NEAR ** 2]
             if confident and len(near):
                 fx, fy = near[:, 0] + pose.x, near[:, 1] + pose.y
-                boundary = ((np.abs(fx) > field.PLAY_W / 2 - BOUNDARY_BAND) |   # incl. the lines inside the goals
+                boundary = ((np.abs(fx) > field.PLAY_W / 2 - BOUNDARY_BAND) |
                             (np.abs(fy) > field.PLAY_L / 2 - BOUNDARY_BAND))
                 near = near[boundary]
             if len(near) >= CAM_MIN_POINTS:

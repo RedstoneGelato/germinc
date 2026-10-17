@@ -39,7 +39,7 @@ ADVANCE_Y = 60.0              # striker, no ball, their goal not seen: drive thi
 HOME_DIST = 25.0              # striker on its own, no ball: stand this far in front of our goal
 CHASE_MARGIN = R + 4.0        # striker: keep its target this far inside the white line (when a goal tells us roughly
 CARRY_MARGIN = R + 16.0       # where we are), and this far while carrying the ball (it sits in front of the robot)
-GOAL_CENTRE_Y = field.PLAY_L / 2 + field.GOAL_DEPTH / 2   # where a seen goal's "centre" roughly is (field y)
+GOAL_CENTRE_Y = field.ATTACK_GOAL_Y + field.GOAL_DEPTH / 2  # where a seen goal's "centre" roughly is (field y)
 
 
 def rough_position(world):

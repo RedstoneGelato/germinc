@@ -352,8 +352,20 @@ must point at the right main file and stop script.
 
 ## 9. Setup / tuning order (each robot)
 
-1. `python3 test_camera.py` → lens calibration → top-down → robot centre → ignore box → HSV for all 5 colours → **Generate config file**.
-   Top-down px/cm: **2 or more**. At 1 px/cm a 4 cm ball is so small the noise filter removes it.
+1. `python3 test_camera.py` (captures at 640x480) → robot centre (on the **Raw** tab) → ignore box → HSV for all 5
+   colours → **Distance calibration** → **Generate config file**.
+   Distance calibration replaces undistorting the fisheye: put the ball at 8-12 measured distances (robot centre to
+   ball centre, ~15 to ~100 cm, different directions), Add point each time, then Fit. It fits the fisheye shape
+   cm = a·tan(b·pixels) (or a polynomial if that fits better), shown as yellow 20/40/60... cm rings on the Raw tab. On
+   the robot (`robot_vision.py` "radial" mode) every pixel's direction is its angle from the robot centre and its
+   distance comes from that curve (`rv.polar()`); everything after that gets positions in cm as before.
+   (The old way - lens calibration + top-down - still works if a config has no distance calibration.)
+   Lines stay straight: the curve in the raw image doesn't matter, every white pixel is converted to cm on its own
+   (checked on a rendered fisheye field: line points land inside the real 5 cm stripe). detection.py does its size
+   checks in cm (a robot's thickness = widest circle inside its outline converted to cm - the black penalty line,
+   wide in pixels close up, stays a line), ignores pixels past the calibrated distance, and takes the goal centre
+   from its points in cm. The calibration corrects for the ball's centre being 2.1 cm above the floor (camera
+   height). Set the robot centre carefully: the distances are measured from it, as if the lens sits right above it.
 2. `python3 test_localisation.py --pcb` (motors stay off):
    - camera view: ball circled, goals crossed, lines magenta, field hull green, no red obstacles on empty field;
    - ball in the dribbler sits inside the cyan capture box;
@@ -392,7 +404,7 @@ is the robot's own code. Only the hardware is fake:
 
 | Real | Simulated |
 | --- | --- |
-| camera + lens + top-down calibration | the field through a `CAM_FOV_DEG` fisheye lens `CAM_HEIGHT` cm up at `CAM_RES` pixels (far things get blurry like the real one), turned into a `TOPDOWN_PPC` px/cm top-down view, then the real `robot_vision.py` masks and `detection.py` |
+| camera + omni mirror + distance calibration | the field as the camera sees it in the hyperbolic mirror (`MIRROR_*` settings, from `hardware/omni_mirror_calc.py`) at `CAM_RES` pixels across the mirror (far things get small and blurry like the real one). Robots (`ROBOT_HEIGHT`), the ball and the goal walls (`GOAL_HEIGHT`) are solid: they hide whatever is behind them, and our own deck (`OWN_DECK_HEIGHT`) hides the floor near us. The raw image goes to `robot_vision.py`'s radial mode with the pixels → cm curve worked out from the mirror (or, without radial mode, a `TOPDOWN_PPC` px/cm top-down view), then the real masks and `detection.py`. Fast mode hides the same things |
 | dribbler | holds the ball in the capture notch while on; loses it when spinning faster than `DRIBBLE_MAX_SPIN`, moving sideways / backwards faster than `DRIBBLE_MAX_SIDE`, or when an opponent touches it. A ball squeezed between two robots: the contacts are handled in a random order each tick (a fixed order let one robot shove the other back at full speed) |
 | kicker | ball leaves at `KICK_SPEED` (+ robot speed), cooldown from the hardware file |
 | goals | solid side and back walls (`GOAL_WALL_T` thick): the ball bounces off them, robots can't drive through them, so goals only count through the front |
@@ -410,7 +422,7 @@ as `test_localisation.py` (`c` switches to the raw colour masks). The keys are l
 `simulator.py`. `r` picks up the selected robot and drops it somewhere random, to test relocalisation.
 
 Settings to make it match the real robots (top of `simulator.py`): `TOP_SPEED` / `TOP_SPIN` (measure them),
-`CAMERA_EVERY` (camera fps), `CAM_FOV_DEG` / `CAM_HEIGHT` / `CAM_RES` (lens), `BALL_RADIUS`, `KICK_SPEED`,
+`CAMERA_EVERY` (camera fps), `MIRROR_*` / `CAM_RES` (mirror and capture size), `OWN_DECK_HEIGHT` / `ROBOT_HEIGHT` (what hides what), `BALL_RADIUS`, `KICK_SPEED`,
 `LDR_PHYSICAL_OFFSET` (where LDR 0 physically is, see the comment there).
 
 **Many games at once (`arena.py`):** one game proves little (a lucky bounce decides it), so to check a strategy
@@ -441,19 +453,21 @@ For self-play the opponents run the other folder's `main.py` / `main_attack.py` 
 version with `git worktree add ../old_version <commit>`. The window takes the same idea:
 `Sim(seed=..., opp_code=simulator.load_code(folder))`.
 
-Not simulated, so these still need the real robot: lens / top-down calibration errors, tall objects stretching,
-robots hiding things behind them, real colours and lighting, motor wiring or sign mistakes, how well the real
+Not simulated, so these still need the real robot: mirror / calibration errors, the mirror's mounting (rods or
+tube), the mirror flipping the image left-right, real colours and lighting, motor wiring or sign mistakes, how well the real
 dribbler actually grips. A robot only gets a dribbler / kicker in the simulator if its hardware file has one.
 
 ## 12. Camera: how far it sees
 
-The lens points straight down from 20 cm. For a circular fisheye, the floor it sees reaches `20 x tan(FOV / 2)`:
+The camera looks up into a 70 mm hyperbolic mirror whose rim is 212 mm up (`hardware/omni-mirror-design.md`). The
+mirror sees as if from one point ~21.4 cm up, all the way round, from the floor next to the robot out to ~4 m, so
+the whole field. Far things get small: with 400 px across the mirror the ball is found out to about 2 m. What
+limits it now is what's in the way:
 
-| FOV | sees around the robot | cm per pixel at 55 / 75 / 90 cm (240 px across) | with 480 px |
-| --- | --- | --- | --- |
-| 140° | **55 cm**: from the centre it can't see either goal | 1.7 / - / - | 0.9 / - / - |
-| 160° | **113 cm**: both goal lines from midfield | 2.0 / 3.5 / 4.9 | 1.0 / 1.8 / 2.5 |
-
-So use 160°. Lines and goals are fine to the edge. The ball (about 4 cm) stops being detected around 60-75 cm at
-240 px; capturing at 480 px roughly doubles that, and shared ball positions cover the rest. If the lens spec's FOV is
-the *diagonal*, it would only see about 20 cm, so make sure it's a circular fisheye whose FOV is the image circle.
+- **Other robots hide a long wedge behind them.** Seen from 21 cm up, an 18 cm robot 50 cm away hides the floor
+  from 39 cm out to about 2.5 m. A goal or the ball behind an opponent is simply not there; shared ball
+  positions and remembered goals have to cover it.
+- **Our own body hides the floor near us**, out to `11 x 21.4 / (21.4 - deck height)` cm: 13.5 cm with a 4 cm
+  deck, 17.6 cm with an 8 cm deck. Above ~5 cm the camera can't see a ball in the dribbler at all, so the
+  capture zone needs its own sensor.
+- **Tall things look stretched outwards** (a goal wall, the top of the ball), so use nearest points, not blob sizes.
