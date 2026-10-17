@@ -9,9 +9,11 @@ simulator.py - test the robots' logic on a simulated field, on a laptop (no Pi n
 It runs main.GoalieBrain and main_attack.StrikerBrain - the SAME code that runs on the robots: camera detection,
 localisation, perception, line fusion, strategy and motion. Only the hardware is replaced:
 
-    camera   the field seen through a CAM_FOV_DEG fisheye lens CAM_HEIGHT cm up, pointing straight down, at
-             CAM_RES pixels (so things far away get blurry like on the real camera), turned into the top-down
-             view, then the real robot_vision.py masks -> detection.py -> localisation.py
+    camera   the field seen through the omni mirror (camera looking up into a hyperbolic mirror, MIRROR_* settings)
+             at CAM_RES pixels (so things far away get small and blurry like on the real camera). Robots, the ball
+             and the goal walls stand up: they hide whatever is behind them, and our own deck hides the floor
+             near us. Then the raw image (robot_vision "radial" mode) or its top-down view, the real
+             robot_vision.py masks -> detection.py -> localisation.py
     LDRs     32 readings: white line under the sensor = low reading, green = high
     IMU      the true heading (+ drift with noise on)
     comms    the two robots' my_state handed straight to each other
@@ -25,8 +27,8 @@ localisation, perception, line fusion, strategy and motion. Only the hardware is
              a robot fully out -> taken off as damaged for DAMAGED_TIME s or until the next kickoff
              (a robot only gets a dribbler / kicker if its hardware_attack.py / hardware_defense.py has one)
 
-NOT simulated (so test these on the real robot): lens distortion / top-down calibration errors, tall objects
-stretching in the top-down view, robots hiding things behind them, real lighting, motor wiring/sign mistakes
+NOT simulated (so test these on the real robot): mirror / lens / calibration errors, the mirror's mounting (rods or
+tube), the real image being left-right flipped by the mirror, real lighting, motor wiring/sign mistakes
 (the sim assumes VelocityToMotor's output moves the robot the way the code intends), real dribbler grip.
 
 Mouse:  left-drag  move the ball / a robot / an opponent
@@ -64,6 +66,7 @@ from main_attack import StrikerBrain  # noqa: E402
 from motion import Mover  # noqa: E402
 from perception import World  # noqa: E402
 from robot_vision import RobotVision  # noqa: E402
+import robot_vision as _robot_vision_mod  # noqa: E402
 from utils import rotate, wrap_pi  # noqa: E402
 from vision import analyse_frame  # noqa: E402
 
@@ -121,13 +124,24 @@ def load_code(folder):
 DT = 0.01                    # physics + control tick (the robots' main loop is 100 Hz)
 CAMERA_EVERY = 3             # camera frame every 3 ticks = 33 fps (set to what test_localisation.py shows)
 PCB_EVERY = 4                # LDR update every 4 ticks = 25 Hz
-CAM_FOV_DEG = 160.0          # circular fisheye, full angle. 140 deg at 20 cm only sees 55 cm around the robot
-CAM_HEIGHT = 20.0            # cm, lens above the floor, pointing straight down, above the robot centre
-CAM_RES = 240                # px across the fisheye image circle (= the capture's short side). Try 480.
-VIEW_RADIUS = CAM_HEIGHT * math.tan(math.radians(CAM_FOV_DEG / 2))   # cm of floor the lens sees (113 at 160 deg)
-TOPDOWN_PPC = 2.0            # px/cm of the top-down view handed to robot_vision. Use >= 2 on the real robot too:
-                             # at 1 px/cm a 4 cm ball is so small the noise filter removes it
-CAM_SIZE = int(2 * VIEW_RADIUS * TOPDOWN_PPC)
+# camera: Pi Camera Module 3 Wide looking straight up into a hyperbolic omni mirror (geometry from the project's
+# hardware/omni_mirror_calc.py; change these to match what you build)
+MIRROR_D = 7.0               # cm, mirror diameter
+MIRROR_RIM_Z = 21.2          # cm, mirror rim above the floor
+MIRROR_USE_HALF = 31.0       # deg, half-angle of the camera's view the mirror rim fills
+MIRROR_RIM_ELEV = -3.0       # deg, rim ray from the viewpoint (below the horizon: the rim sees the floor ~4 m away)
+CAM_RES = 400                # px across the mirror circle in the image. ~784 in the 1536x864 binned mode, ~350 at
+                             # 640x480. Far things are only a few px (a ball at 2 m is ~8 px at 784, ~4 px at 400)
+OWN_DECK_HEIGHT = 4.0        # cm, top of our own body around the mast. It hides the floor near the robot: out to
+                             # ROBOT_RADIUS * H / (H - OWN_DECK_HEIGHT) from the centre (13.5 cm at 4 cm, 17.6 at 8).
+                             # Above ~5 cm the camera can't see a ball in the dribbler at all (needs a ball sensor)
+ROBOT_HEIGHT = 18.0          # cm, other robots as solid cylinders this tall: they hide everything behind them (seen
+                             # from the mirror's viewpoint ~21 cm up, a robot hides a long wedge of floor behind it)
+GOAL_HEIGHT = 10.0           # cm, goal walls (solid boxes, also hide what's behind them)
+TOPDOWN_PPC = 2.0            # px/cm of the top-down view handed to robot_vision (when robot_vision has no "radial"
+                             # mode). Use >= 2 on the real robot too: at 1 px/cm a 4 cm ball is so small the noise
+                             # filter removes it
+TOPDOWN_RADIUS = 150.0       # cm of floor the top-down view covers (only without radial mode; bigger = slower)
 
 TOP_SPEED = 200.0            # cm/s when the motors get BASE_SPEED - MEASURE on the real robot
 TOP_SPIN = 6.0               # rad/s spinning on the spot at BASE_SPEED - MEASURE
@@ -172,6 +186,7 @@ MARGIN = 10.0                # cm drawn around the walls
 
 GREEN, WHITE, WALL = (40, 150, 40), (250, 250, 250), (25, 25, 25)
 YELLOW, BLUE, ORANGE, ROBOT = (0, 220, 255), (220, 70, 0), (0, 120, 255), (45, 45, 45)
+GOAL_BGR = {"yellow": YELLOW, "blue": BLUE}
 
 MASK_BGR = {"blue": (255, 90, 0), "yellow": (0, 255, 255), "white": (255, 255, 255),   # masks view
             "green": (0, 200, 0), "orange": (0, 140, 255)}
@@ -188,6 +203,54 @@ SIM_HSV = {
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def mirror_design():
+    """Hyperbolic mirror (z - c)^2 / a^2 - r^2 / b^2 = 1, camera pupil at z = 0 (one focus), z up, cm. Same maths as
+    hardware/omni_mirror_calc.py. The robot 'sees' from the other focus (z = 2c): a single viewpoint VIEW_Z up."""
+    R = MIRROR_D / 2
+    zr = R / math.tan(math.radians(MIRROR_USE_HALF))            # pupil -> rim height
+    c = (zr - R * math.tan(math.radians(MIRROR_RIM_ELEV))) / 2
+    a = (math.hypot(R, zr) - math.hypot(R, zr - 2 * c)) / 2
+    b = math.sqrt(c * c - a * a)
+    cam_z = MIRROR_RIM_Z - zr
+    return dict(a=a, b=b, c=c, cam_z=cam_z, view_z=cam_z + 2 * c)
+
+
+def mirror_floor_table(d, n=4000):
+    """Camera ray angle from the axis (rad, 0..MIRROR_USE_HALF) -> floor distance (cm) from the robot centre, seen
+    via the mirror. Increasing; the rim ray (just below the horizon) is the last entry."""
+    a, b, c = d["a"], d["b"], d["c"]
+    th = np.linspace(0.0, math.radians(MIRROR_USE_HALF), n)
+    t = np.tan(th)
+    A = 1 / a ** 2 - t ** 2 / b ** 2           # (z-c)^2/a^2 - (z t)^2/b^2 = 1, root on the upper sheet
+    B = -2 * c / a ** 2
+    C = c ** 2 / a ** 2 - 1
+    z = (-B + np.sqrt(B * B - 4 * A * C)) / (2 * A)
+    dep = np.arctan2(2 * c - z, z * t)         # depression of the ray from the viewpoint (> 0 = towards the floor)
+    with np.errstate(divide="ignore"):
+        dist = d["view_z"] / np.tan(dep)
+    return th, np.minimum(dist, 1e4)
+
+
+MIRROR = mirror_design()
+VIEW_Z = MIRROR["view_z"]                     # cm, the mirror's effective viewpoint above the floor (~21.4)
+MIRROR_TH, MIRROR_DIST = mirror_floor_table(MIRROR)
+MIRROR_FPX = (CAM_RES / 2) / math.tan(math.radians(MIRROR_USE_HALF))   # camera focal length in image px
+VIEW_MAX = float(MIRROR_DIST[-1])             # cm of floor the mirror rim sees (~400: the whole field)
+EGO_RADIUS = 300.0                            # cm rendered around the robot (further away = outside the walls)
+# Detection runs on the raw mirror image when robot_vision has the "radial" mode (pixel angle = direction, a
+# pixels -> cm curve = distance), otherwise on a top-down remap of it
+RADIAL = hasattr(_robot_vision_mod, "radial_table")
+VIEW_RADIUS = min(VIEW_MAX, EGO_RADIUS) if RADIAL else TOPDOWN_RADIUS   # cm the robot code can see
+CAM_SIZE = CAM_RES if RADIAL else int(2 * TOPDOWN_RADIUS * TOPDOWN_PPC)
+OWN_HIDDEN_R = cfg.ROBOT_RADIUS * VIEW_Z / (VIEW_Z - OWN_DECK_HEIGHT)   # floor our own deck hides (cm from centre)
+
+
+def radial_calibration():
+    """What test_camera.py's Distance calibration would measure: image radius (px) -> floor distance (cm)."""
+    keep = MIRROR_DIST <= VIEW_RADIUS
+    return {"table_px": (MIRROR_FPX * np.tan(MIRROR_TH[keep])).tolist(), "table_cm": MIRROR_DIST[keep].tolist()}
+
+
 def sim_vision_config():
     """robot_vision config for the sim camera. Uses the ignore box from your real config if there is one."""
     ignore = {"left": 11.0, "right": 11.0, "back": 11.0, "front": 5.0}
@@ -201,6 +264,7 @@ def sim_vision_config():
         "camera": {"controls": {}}, "hsv": SIM_HSV,
         "detection": {"ignore_cm": ignore, "min_blob_area": 50, "morph_kernel": 3},
         "lens": None, "undistort_view": {"balance": 1, "fov_scale": 1}, "topdown": None,
+        "radial": radial_calibration() if RADIAL else None,
         "robot_centre": None, "heading": {"align_to_field": False, "invert": False, "offset_deg": 0},
     }
 
@@ -212,66 +276,156 @@ def make_rv():
     with open(path, "w") as f:
         json.dump(sim_vision_config(), f)
     rv = RobotVision(path)
+    fov = np.zeros((CAM_SIZE, CAM_SIZE), np.uint8)
+    if RADIAL:      # robot_vision works out the scale, ignore box and calibrated circle itself; add the mirror circle
+        cv2.circle(fov, (CAM_SIZE // 2, CAM_SIZE // 2), int(rv.radius_px(VIEW_RADIUS)) - 2, 255, -1)
+        rv.valid = cv2.bitwise_and(rv.valid, cv2.erode(fov, np.ones((5, 5), np.uint8)))
+        return rv, fov
     # "raw" mode means 1 px/cm; the sim's top-down view is TOPDOWN_PPC, like a real top-down setup would be
     rv.px_per_cm = TOPDOWN_PPC
     ign, (cx, cy) = rv.config["detection"]["ignore_cm"], rv.centre
     box = (cx - ign["left"] * TOPDOWN_PPC, cy - ign["front"] * TOPDOWN_PPC,
            cx + ign["right"] * TOPDOWN_PPC, cy + ign["back"] * TOPDOWN_PPC)
     rv.ignore_box = tuple(max(int(round(v)), 0) for v in box)
-    fov = np.zeros((CAM_SIZE, CAM_SIZE), np.uint8)
     cv2.circle(fov, (CAM_SIZE // 2, CAM_SIZE // 2), int(VIEW_RADIUS * TOPDOWN_PPC) - 3, 255, -1)
     rv.valid = cv2.erode(fov, np.ones((5, 5), np.uint8))   # like the real top-down "camera sees this" mask
     return rv, fov
 
 
-class FisheyeCamera:
-    """Equidistant fisheye (angle from straight down proportional to distance from the image centre).
-    Rendering is two steps so nothing per-pixel is computed per frame: (1) one affine warp of the field image into
-    the robot's frame (rotation + position), (2) a fixed remap from there to the fisheye pixels (precomputed).
-    Then the fisheye image -> top-down view with another fixed remap, like robot_vision's calibration."""
-    SS = 2   # supersampling when rendering the fisheye image (pixels average over their area, like a real sensor)
+def _ring(cx, cy, r, n=20):
+    a = np.linspace(0, 2 * math.pi, n, endpoint=False)
+    return np.stack([cx + r * np.cos(a), cy + r * np.sin(a)], axis=1)
+
+
+def _lift(pts, z):
+    """Robot-frame points at height z cm -> where the mirror's viewpoint sees them on the floor (they're pushed
+    outwards: at or above the viewpoint's height they'd be on the horizon, so cap it)."""
+    return pts * min(VIEW_Z / max(VIEW_Z - z, 1e-3), 40.0)
+
+
+def cylinder_shadow(x, y, r, height):
+    """Floor area (robot-frame polygon, cm) a solid cylinder hides from the mirror, itself included: the convex
+    hull of its base and of its top seen on the floor."""
+    base = _ring(x, y, r)
+    return np.vstack([base, _lift(base, height)])
+
+
+def ball_shadow(x, y):
+    """Same for the ball (a sphere on the floor): hull of its horizontal slices seen on the floor."""
+    pts = []
+    for z in np.linspace(0.0, 2 * BALL_RADIUS, 5):
+        rr = math.sqrt(max(BALL_RADIUS ** 2 - (z - BALL_RADIUS) ** 2, 0.0)) + 0.05
+        pts.append(_lift(_ring(x, y, rr, 12), z))
+    return np.vstack(pts)
+
+
+def box_shadow(corners, height):
+    """Same for a solid box standing on the floor (corners: (4, 2) robot frame)."""
+    return np.vstack([corners, _lift(corners, height)])
+
+
+def ray_hidden(sim, r, pts, z=0.0, exclude=None):
+    """Which robot-frame points (N, 2) at height z the mirror on robot r can't see because another robot is in the
+    way (the ray from the viewpoint, VIEW_Z up, passes through a ROBOT_HEIGHT cylinder before reaching them) or
+    because our own deck hides them. Used by fast mode; the full camera renders the same thing."""
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    dist = np.hypot(pts[:, 0], pts[:, 1])
+    hidden = dist * (VIEW_Z - OWN_DECK_HEIGHT) / max(VIEW_Z - z, 1e-3) < cfg.ROBOT_RADIUS   # under our own deck line
+    hidden |= dist > VIEW_RADIUS
+    u = pts / np.maximum(dist, 1e-6)[:, None]
+    for b in sim.on_field:
+        if b is r or b is exclude:
+            continue
+        bx, by = rotate([b.x - r.x, b.y - r.y], -r.h)
+        s_c = u[:, 0] * bx + u[:, 1] * by                  # along the ray to the body's centre
+        perp2 = bx * bx + by * by - s_c * s_c
+        half = np.sqrt(np.maximum(b.r * b.r - perp2, 0.0))
+        s_in, s_out = s_c - half, np.minimum(s_c + half, dist - 1e-3)
+        hit = (perp2 < b.r * b.r) & (s_in < s_out) & (s_out > 0)
+        ray_z = VIEW_Z - (VIEW_Z - z) * s_out / np.maximum(dist, 1e-6)   # the ray's lowest point inside the body
+        hidden |= hit & (ray_z <= ROBOT_HEIGHT)
+    return hidden
+
+
+class OmniCamera:
+    """Pi Camera Module 3 Wide looking up into the hyperbolic omni mirror. The mirror has a single viewpoint VIEW_Z
+    up, so the image is that point's view in every direction: image angle = direction from the robot, image
+    radius = how far below the horizon (radius -> floor distance from mirror_floor_table). Things standing up are
+    seen on the floor further out than they are (_lift), so robots and goal walls are drawn as the floor area
+    they cover from the viewpoint, far ones first: anything behind them is hidden, like on the real robot.
+    Rendering stays cheap: (1) one affine warp of the field into the robot's frame, (2) the bodies' shadows
+    painted on that, (3) a fixed remap to the mirror image. Then (only without radial mode) another fixed remap to
+    the top-down view, like robot_vision's calibration.
+    Not modelled: the mirror image is left-right flipped on the real camera (the sim's is already turned the right
+    way round), mirror mounting rods / tube glare, focus blur, robots' own colours (all drawn dark)."""
+    SS = 2   # supersampling when rendering the raw image (pixels average over their area, like a real sensor)
 
     def __init__(self):
-        half = math.radians(CAM_FOV_DEG / 2)
         n = CAM_RES * self.SS
         c = n / 2.0
         j, i = np.meshgrid(np.arange(n) + 0.5, np.arange(n) + 0.5)
-        dx, dy = (j - c) / c, (c - i) / c                 # -1..1, +dy = robot front
+        dx, dy = (j - c), (c - i)                          # +dy = robot front
         rho = np.hypot(dx, dy)
-        theta = np.minimum(rho * half, math.radians(89.5))
-        r = CAM_HEIGHT * np.tan(theta)
+        th = np.arctan(rho / (MIRROR_FPX * self.SS))
+        dist = np.interp(th, MIRROR_TH, MIRROR_DIST)
         with np.errstate(invalid="ignore", divide="ignore"):
-            gx = np.where(rho > 0, r * dx / rho, 0)        # floor point, robot frame cm
-            gy = np.where(rho > 0, r * dy / rho, 0)
+            gx = np.where(rho > 0, dist * dx / rho, 0)     # floor point, robot frame cm
+            gy = np.where(rho > 0, dist * dy / rho, 0)
         # (1) robot-frame floor image at FIELD_PPC, robot in the middle, front = up
         k = FIELD_PPC
-        self.half_px = int(math.ceil(VIEW_RADIUS * k)) + 4
+        self.half_px = int(math.ceil(EGO_RADIUS * k)) + 4
         self.ego_size = 2 * self.half_px
-        # (2) fisheye pixel -> robot-frame image pixel; outside the lens circle -> -1 (black)
+        # (3) mirror image pixel -> robot-frame image pixel; outside the mirror circle -> -1 (black)
         ex = (self.half_px + gx * k).astype(np.float32)
         ey = (self.half_px - gy * k).astype(np.float32)
-        ex[rho > 1.0] = -10
-        ey[rho > 1.0] = -10
+        out = th > math.radians(MIRROR_USE_HALF)
+        ex[out] = -10
+        ey[out] = -10
         self.lens_maps = cv2.convertMaps(ex, ey, cv2.CV_16SC2)
-        # top-down (TOPDOWN_PPC px/cm, CAM_SIZE square, robot at the centre) -> fisheye pixel (at CAM_RES);
-        # outside the "camera sees this" circle -> -1 (black), same circle as make_rv's fov mask
-        m = CAM_SIZE
-        u, v = np.meshgrid(np.arange(m) + 0.5, np.arange(m) + 0.5)
-        x, y = (u - m / 2.0) / TOPDOWN_PPC, (m / 2.0 - v) / TOPDOWN_PPC
-        rr = np.hypot(x, y)
-        rho_t = np.arctan(rr / CAM_HEIGHT) / half
-        cr = CAM_RES / 2.0
-        with np.errstate(invalid="ignore", divide="ignore"):
-            map_x = np.where(rr > 0, cr + rho_t * cr * x / rr, cr).astype(np.float32)
-            map_y = np.where(rr > 0, cr - rho_t * cr * y / rr, cr).astype(np.float32)
-        fov = np.zeros((m, m), np.uint8)
-        cv2.circle(fov, (m // 2, m // 2), int(VIEW_RADIUS * TOPDOWN_PPC) - 3, 255, -1)
-        map_x[fov == 0] = -10
-        map_y[fov == 0] = -10
-        self.top_maps = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
+        self.top_maps = None
+        if not RADIAL:
+            # top-down (TOPDOWN_PPC px/cm, CAM_SIZE square, robot at the centre) -> mirror pixel (at CAM_RES);
+            # outside the "camera sees this" circle -> -1 (black), same circle as make_rv's fov mask
+            m = CAM_SIZE
+            u, v = np.meshgrid(np.arange(m) + 0.5, np.arange(m) + 0.5)
+            x, y = (u - m / 2.0) / TOPDOWN_PPC, (m / 2.0 - v) / TOPDOWN_PPC
+            rr = np.hypot(x, y)
+            rho_t = MIRROR_FPX * np.tan(np.interp(rr, MIRROR_DIST, MIRROR_TH))
+            cr = CAM_RES / 2.0
+            with np.errstate(invalid="ignore", divide="ignore"):
+                map_x = np.where(rr > 0, cr + rho_t * x / rr, cr).astype(np.float32)
+                map_y = np.where(rr > 0, cr - rho_t * y / rr, cr).astype(np.float32)
+            fov = np.zeros((m, m), np.uint8)
+            cv2.circle(fov, (m // 2, m // 2), int(VIEW_RADIUS * TOPDOWN_PPC) - 3, 255, -1)
+            map_x[fov == 0] = -10
+            map_y[fov == 0] = -10
+            self.top_maps = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
+        self.goal_boxes = [("yellow" if y0 + y1 > 0 else "blue", np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float))
+                           for x0, x1, y0, y1 in GOAL_WALLS]
 
-    def render(self, field_img, robot, noise_rng=None):
-        """Raw fisheye image (CAM_RES square) as the camera would see the (flat) field from this robot."""
+    def shadows(self, robot, bodies, ball):
+        """(colour, robot-frame polygon cm) to paint, in order (far first, nearer ones on top)."""
+        c, s = math.cos(-robot.h), math.sin(-robot.h)
+        R = np.array([[c, -s], [s, c]])
+        to_robot = lambda p: (np.asarray(p, np.float64) - [robot.x, robot.y]) @ R.T
+        items = []
+        for colour, corners in self.goal_boxes:
+            rc = to_robot(corners)
+            items.append((float(np.hypot(rc[:, 0], rc[:, 1]).min()), GOAL_BGR[colour], box_shadow(rc, GOAL_HEIGHT)))
+        for b in bodies:
+            if b is robot:
+                continue
+            bx, by = to_robot([b.x, b.y])
+            items.append((math.hypot(bx, by) - b.r, ROBOT, cylinder_shadow(bx, by, b.r, ROBOT_HEIGHT)))
+        if ball is not None:
+            bx, by = to_robot(ball)
+            items.append((math.hypot(bx, by) - BALL_RADIUS, ORANGE, ball_shadow(bx, by)))
+        items.sort(key=lambda it: -it[0])
+        items.append((0.0, ROBOT, _ring(0.0, 0.0, OWN_HIDDEN_R, 32)))   # our own deck, nearest of all
+        return [(col, poly) for _, col, poly in items]
+
+    def render(self, field_img, robot, noise_rng=None, bodies=(), ball=None):
+        """Raw mirror image (CAM_RES square) as the camera would see the field + bodies + ball from this robot."""
         c, s = math.cos(robot.h), math.sin(robot.h)
         k, h = FIELD_PPC, self.half_px
         # robot-frame pixel (u, v) -> field image pixel (inverse map for warpAffine)
@@ -279,6 +433,11 @@ class FisheyeCamera:
                         [-s, c, (FieldImage.L / 2 - robot.y) * k + s * h - c * h]])
         ego = cv2.warpAffine(field_img, M, (self.ego_size, self.ego_size), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                              borderMode=cv2.BORDER_CONSTANT, borderValue=WALL)
+        for colour, poly in self.shadows(robot, bodies, ball):
+            px = np.stack([h + poly[:, 0] * k, h - poly[:, 1] * k], axis=1)
+            px = np.clip(px, -4 * self.ego_size, 5 * self.ego_size)
+            hull = cv2.convexHull(np.round(px * 4).astype(np.int32))
+            cv2.fillConvexPoly(ego, hull, colour, cv2.LINE_8, shift=2)
         img = cv2.remap(ego, *self.lens_maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         img = cv2.resize(img, (CAM_RES, CAM_RES), interpolation=cv2.INTER_AREA)
         if noise_rng is not None:      # pixel noise: a random pick from a bank of noise frames, randomly shifted
@@ -290,6 +449,9 @@ class FisheyeCamera:
         return img
 
     def topdown(self, raw):
+        """What robot_vision gets: the raw mirror image itself (radial mode) or its top-down remap."""
+        if self.top_maps is None:
+            return raw
         return cv2.remap(raw, *self.top_maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
@@ -303,13 +465,10 @@ class FieldImage:
         self.size = (int(round(self.W * ppc)), int(round(self.L * ppc)))
         img = np.full((self.size[1], self.size[0], 3), WALL, np.uint8)
         cv2.rectangle(img, self.px(-field.WALL_W / 2, field.WALL_L / 2), self.px(field.WALL_W / 2, -field.WALL_L / 2), GREEN, -1)
-        # goals: coloured walls, and the back wall's colour reaching outwards (that's how the stretched
-        # top-down view of a 10 cm tall wall looks); the goal floor is green with the white line on it
-        for sgn, col in ((1, YELLOW), (-1, BLUE)):
-            gy0, gy1 = field.PLAY_L / 2, field.PLAY_L / 2 + field.GOAL_DEPTH
-            gw, t = field.GOAL_W / 2, 5.0   # side walls look wide: the top-down view stretches tall walls
-            cv2.rectangle(img, self.px(-gw - t, sgn * gy0), self.px(gw + t, sgn * (field.WALL_L / 2)), col, -1)
-            cv2.rectangle(img, self.px(-gw, sgn * gy0), self.px(gw, sgn * gy1), GREEN, -1)
+        # goals: the floor under the coloured walls (the camera draws the walls standing up, see OmniCamera); the
+        # goal floor is green with the white line on it
+        for x0, x1, y0, y1 in GOAL_WALLS:
+            cv2.rectangle(img, self.px(x0, y1), self.px(x1, y0), YELLOW if y0 + y1 > 0 else BLUE, -1)
         self.white = np.zeros(img.shape[:2], np.uint8)
         thick = max(1, int(round(field.LINE_W * ppc)))
         for a, b in field.black_line_segments():     # penalty box: black, the LDRs and white mask ignore it
@@ -535,7 +694,7 @@ class Sim:
         self.fast = fast
         self.fimg = FieldImage(FIELD_PPC)
         self.rv, self.fov = make_rv()
-        self.cam = FisheyeCamera()
+        self.cam = OmniCamera()
         self.held_by = None       # robot whose dribbler has the ball
         self.held_since = 0.0
         self.kicks = 0
@@ -654,18 +813,16 @@ class Sim:
         return [b for b in self.robots + self.opponents if b.removed_until is None]
 
     def draw_dynamic(self):
-        img = self.fimg.img.copy()
-        ppc = FIELD_PPC
-        for b in self.on_field:
-            cv2.circle(img, self.fimg.px(b.x, b.y), int(b.r * ppc), ROBOT, -1)
-        cv2.circle(img, self.fimg.px(*self.ball), max(1, int(round(BALL_RADIUS * ppc))), ORANGE, -1)
-        return img
+        """The field the cameras look at. Just the static field: robots and the ball stand up, so each camera draws
+        them from its own viewpoint (OmniCamera.render)."""
+        return self.fimg.img
 
     def camera(self, img, robot):
-        """Fisheye image from the robot -> top-down robot-frame image (robot front = up), like
-        robot_vision gets from the real camera after its calibration."""
-        raw = self.cam.render(img, robot, self.rng if self.noise else None)
-        return self.cam.topdown(raw)        # (outside the fov circle is already black)
+        """Omni mirror image from the robot (robot front = up) -> what robot_vision gets from the real camera after
+        its calibration: the raw mirror image (radial mode) or its top-down view."""
+        ball = None if self.ball[0] > BALL_PARK[0] / 2 else self.ball
+        raw = self.cam.render(img, robot, self.rng if self.noise else None, self.on_field, ball)
+        return self.cam.topdown(raw)        # (outside the mirror / fov circle is already black)
 
     _LDR_RING = None    # (N, 2) robot-frame LDR positions (computed once)
 
@@ -1085,8 +1242,8 @@ class Sim:
 # the truth (+ noise). Everything after that (perception, lines, strategy, motion) is still the real robot code.
 # ~10x faster: use it to screen ideas, then confirm the good ones in the full simulator.
 FAST_POSE_NOISE = 1.5        # cm
-FAST_BALL_RANGE = 75.0       # cm the camera finds the ball out to (240 px fisheye, see GUIDE.md)
-FAST_LINE_RANGE = 100.0      # cm
+FAST_BALL_RANGE = 200.0      # cm the camera finds the ball out to (400 px mirror image; 150 = the top-down view's edge)
+FAST_LINE_RANGE = 150.0      # cm
 FAST_LINE_STEP = 2.0         # cm between line points
 FAST_RELOCALISE = 0.3        # s without a confident pose after being picked up
 
@@ -1149,15 +1306,16 @@ def fast_detect(sim, r, ignore):
     def to_robot(px, py):
         return rotate([px - r.x, py - r.y], -r.h)
 
-    def hidden(p):           # inside the ignore box (our own body)
-        return -ignore["left"] < p[0] < ignore["right"] and -ignore["back"] < p[1] < ignore["front"]
+    def hidden(p, z=0.0, exclude=None):   # inside the ignore box (our own body), or something's in the way
+        return (-ignore["left"] < p[0] < ignore["right"] and -ignore["back"] < p[1] < ignore["front"]) or \
+            bool(ray_hidden(sim, r, [p], z, exclude)[0])
 
     # ball: nearest point
     dx, dy = sim.ball[0] - r.x, sim.ball[1] - r.y
     d = math.hypot(dx, dy)
     if 1e-6 < d < FAST_BALL_RANGE:
         near = to_robot(sim.ball[0] - dx / d * BALL_RADIUS, sim.ball[1] - dy / d * BALL_RADIUS)
-        if not hidden(near):
+        if not hidden(to_robot(*sim.ball), 2 * BALL_RADIUS):     # its top still shows = found
             s = 0.3 + 0.01 * d
             det.ball = [near[0] + rng.normal(0, s), near[1] + rng.normal(0, s)]
     # goals: nearest coloured point + centre
@@ -1168,7 +1326,7 @@ def fast_detect(sim, r, ignore):
             dd = math.hypot(cx - r.x, cy - r.y)
             if best is None or dd < best[0]:
                 best = (dd, cx, cy)
-        if best[0] < VIEW_RADIUS - 5:
+        if best[0] < VIEW_RADIUS - 5 and not hidden(to_robot(best[1], best[2]), GOAL_HEIGHT / 2):
             sgn = 1 if colour == "yellow" else -1
             det.goals[colour] = Goal(to_robot(best[1], best[2]),
                                      to_robot(0.0, sgn * (field.PLAY_L / 2 + field.GOAL_DEPTH + 1)))
@@ -1178,7 +1336,7 @@ def fast_detect(sim, r, ignore):
             continue
         dx, dy = b.x - r.x, b.y - r.y
         d = math.hypot(dx, dy)
-        if b.r < d < 90.0:
+        if b.r < d < 90.0 and not hidden(to_robot(b.x, b.y), ROBOT_HEIGHT, b):
             near = to_robot(b.x - dx / d * b.r, b.y - dy / d * b.r)
             centre = to_robot(b.x, b.y)
             n = rng.normal(0, 1.0, 2)
@@ -1189,7 +1347,8 @@ def fast_detect(sim, r, ignore):
     if len(rel) > 250:
         rel = rel[np.linspace(0, len(rel) - 1, 250).astype(int)]
     c, s = math.cos(-r.h), math.sin(-r.h)
-    det.line_pts = np.stack([rel[:, 0] * c - rel[:, 1] * s, rel[:, 0] * s + rel[:, 1] * c], axis=1).astype(np.float32)
+    pts = np.stack([rel[:, 0] * c - rel[:, 1] * s, rel[:, 0] * s + rel[:, 1] * c], axis=1)
+    det.line_pts = pts[~ray_hidden(sim, r, pts)].astype(np.float32)
     return det
 
 
@@ -1444,7 +1603,7 @@ def headless(sim, seconds):
     wall = time.perf_counter() - t0
     print(f"simulated {seconds:.0f} s in {wall:.1f} s ({seconds / wall:.1f}x real time)")
     print(f"score us-them: {sim.score['us']}-{sim.score['them']}   kicks {sim.kicks}   camera sees {VIEW_RADIUS:.0f} cm "
-          f"({CAM_FOV_DEG:.0f} deg at {CAM_HEIGHT:.0f} cm, {CAM_RES} px)")
+          f"(omni mirror, viewpoint {VIEW_Z:.1f} cm up, {CAM_RES} px, {'radial' if RADIAL else 'top-down'})")
     for r in sim.robots:
         e = sim.loc_err[r.name]
         tot = sum(states[r.name].values())
