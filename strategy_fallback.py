@@ -8,11 +8,6 @@ same way as the field: +y = towards the goal we attack), in cm. What the camera 
     world.ball_in_capture the ball is in our capture zone (dribbler)
     world.attack_goal / world.own_goal   Goal(near, centre) or None (not seen)
 Both classes: update(...) -> (desired_pos, desired_heading, dribbler_on), and .speed / .kick / .botstate / .chasing.
-
-They use the same ideas as the main strategy (strategy.py), just without knowing where the field's lines are:
-    striker: TS-style chase, carry at their goal, kick when facing it close enough (or right after winning the ball)
-    goalie:  guard on an arc between our goal and the ball, block a ball rolling at our goal, clear a ball that's
-             close to our goal (kick it up-field)
 """
 import math
 import time

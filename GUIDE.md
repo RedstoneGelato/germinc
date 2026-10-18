@@ -6,7 +6,7 @@ Every robot runs one main file: `main.py` (goalie) or `main_attack.py` (striker)
 side by side, then loops 100 times a second:
 
 ```
- camera ──► vision.py ──► detection.py ──► Detections (ball, goals, line points, obstacles, in cm)
+ camera ──► vision.py (RobotVision ──► detect()) ──► Detections (ball, goals, line points, obstacles, in cm)
                 │                               │
  IMU ───────────┴─ compass                      ├──► localisation.py ──► Pose (x, y on the field)
                                                 │                            │
@@ -54,9 +54,9 @@ Everything is in **cm**. There are three ways of describing a position:
 ## 3. What happens in one camera frame
 
 1. **`vision.py`** grabs a frame and reads the compass at the same moment.
-2. **`robot_vision.py`** (`RobotVision.process`) uses the calibration from `robot_vision_config.json`:
+2. **`vision.py`** (`RobotVision.process`) uses the calibration from `robot_vision_config.json`:
    fisheye + top-down remap → rotate for the camera mounting → 5 HSV colour masks → blanks out the ignore box (our own body).
-3. **`detection.py`** turns the masks into objects in robot-frame cm:
+3. **`vision.py`** (`detect()`) turns the masks into objects in robot-frame cm:
    - **green** → convex hull = "the field". Everything outside it is ignored (people, walls, the crowd).
    - **orange** → biggest blob = ball.
    - **yellow / blue** → goals (all blobs of that colour together).
@@ -242,7 +242,7 @@ The parts the goalie's ball play is built from (all in `strategy.py`):
 - `approach()` goes round (orbit) instead of straight to the line-up point when the straight path would clip the
   ball - clipping it was knocking it the wrong way, sometimes into our own goal.
 
-**Opponents are whole robots:** `detection.py` estimates each opponent's centre from the whole blob (the middle of
+**Opponents are whole robots:** `vision.py` (`detect()`) estimates each opponent's centre from the whole blob (the middle of
 its angular extent, one robot radius beyond its nearest point), not just the part facing us, and the strategy
 treats every opponent as a robot-sized circle around that centre. The camera views draw them as circles.
 
@@ -273,7 +273,7 @@ pose the old safe rule is used: any LDR on the line = escape. `strategy.py` uses
 getting behind a ball near the line and going round obstacles. To be more careful, raise `LINE_TOUCH_SAFETY`.
 
 Only the boundary is white. The penalty box line is **black**, so neither the LDRs nor the camera's white mask
-react to it, and `detection.py`'s obstacle filter (`OBSTACLE_KERNEL`) removes anything as thin as that line.
+react to it, and `vision.py`'s obstacle filter (`OBSTACLE_KERNEL`) removes anything as thin as that line.
 `IGNORE_INNER_LINES` (off) would ignore LDR hits far from the boundary, which only makes sense if white lines are
 ever added inside the field.
 The escape direction is a blend of whichever sources are available.
@@ -286,8 +286,8 @@ The escape direction is a blend of whichever sources are available.
 | retune colours, exposure, white balance | `test_camera.py` web page | then **Generate config file** |
 | change the ignore box (robot body) | `test_camera.py` web page, Heading panel sliders | cm from the robot centre |
 | change where "robot centre" is | `test_camera.py`, "Set robot centre" | |
-| change minimum ball / goal / obstacle size, line point count | `detection.py` top | areas are in cm² |
-| obstacles where there's no robot (ghosts) | `detection.py`: `OBSTACLE_MIN_SIZE`, `OBSTACLE_MAX_RANGE`, `OBSTACLE_LINE_MARGIN(_FAR)`, `OBSTACLE_KERNEL`; `perception.py`: `OBSTACLE_MEMORY` | far away the lens blurs lines (white and the black penalty line) into robot-sized blobs; `test_localisation.py` shows each obstacle as a red circle |
+| change minimum ball / goal / obstacle size, line point count | `vision.py`, part 2 (Detection) top | areas are in cm² |
+| obstacles where there's no robot (ghosts) | `vision.py`: `OBSTACLE_MIN_SIZE`, `OBSTACLE_MAX_RANGE`, `OBSTACLE_LINE_MARGIN(_FAR)`, `OBSTACLE_KERNEL`; `perception.py`: `OBSTACLE_MEMORY` | far away the lens blurs lines (white and the black penalty line) into robot-sized blobs; `test_localisation.py` shows each obstacle as a red circle |
 | **Field / localisation** | | |
 | field dimensions | `field.py` top | **measure the real field** |
 | the line inside the goals (gap to the goal walls) | `field.py`: `GOAL_LINE_INSET`, `boundary_polyline()` | |
@@ -357,11 +357,11 @@ must point at the right main file and stop script.
    Distance calibration replaces undistorting the fisheye: put the ball at 8-12 measured distances (robot centre to
    ball centre, ~15 to ~100 cm, different directions), Add point each time, then Fit. It fits the fisheye shape
    cm = a·tan(b·pixels) (or a polynomial if that fits better), shown as yellow 20/40/60... cm rings on the Raw tab. On
-   the robot (`robot_vision.py` "radial" mode) every pixel's direction is its angle from the robot centre and its
+   the robot (`vision.py` RobotVision "radial" mode) every pixel's direction is its angle from the robot centre and its
    distance comes from that curve (`rv.polar()`); everything after that gets positions in cm as before.
    (The old way - lens calibration + top-down - still works if a config has no distance calibration.)
    Lines stay straight: the curve in the raw image doesn't matter, every white pixel is converted to cm on its own
-   (checked on a rendered fisheye field: line points land inside the real 5 cm stripe). detection.py does its size
+   (checked on a rendered fisheye field: line points land inside the real 5 cm stripe). vision.py's detect() does its size
    checks in cm (a robot's thickness = widest circle inside its outline converted to cm - the black penalty line,
    wide in pixels close up, stays a line), ignores pixels past the calibrated distance, and takes the goal centre
    from its points in cm. The calibration corrects for the ball's centre being 2.1 cm above the floor (camera
@@ -404,7 +404,7 @@ is the robot's own code. Only the hardware is fake:
 
 | Real | Simulated |
 | --- | --- |
-| camera + omni mirror + distance calibration | the field as the camera sees it in the hyperbolic mirror (`MIRROR_*` settings, from `hardware/omni_mirror_calc.py`) at `CAM_RES` pixels across the mirror (far things get small and blurry like the real one). Robots (`ROBOT_HEIGHT`), the ball and the goal walls (`GOAL_HEIGHT`) are solid: they hide whatever is behind them, and our own deck (`OWN_DECK_HEIGHT`) hides the floor near us. The raw image goes to `robot_vision.py`'s radial mode with the pixels → cm curve worked out from the mirror (or, without radial mode, a `TOPDOWN_PPC` px/cm top-down view), then the real masks and `detection.py`. Fast mode hides the same things |
+| camera + omni mirror + distance calibration | the field as the camera sees it in the hyperbolic mirror (`MIRROR_*` settings, from `hardware/omni_mirror_calc.py`) at `CAM_RES` pixels across the mirror (far things get small and blurry like the real one). Robots (`ROBOT_HEIGHT`), the ball and the goal walls (`GOAL_HEIGHT`) are solid: they hide whatever is behind them, and our own deck (`OWN_DECK_HEIGHT`) hides the floor near us. The raw image goes to `vision.py`'s RobotVision radial mode with the pixels → cm curve worked out from the mirror (or, without radial mode, a `TOPDOWN_PPC` px/cm top-down view), then the real masks and `detect()`. Fast mode hides the same things |
 | dribbler | holds the ball in the capture notch while on; loses it when spinning faster than `DRIBBLE_MAX_SPIN`, moving sideways / backwards faster than `DRIBBLE_MAX_SIDE`, or when an opponent touches it. A ball squeezed between two robots: the contacts are handled in a random order each tick (a fixed order let one robot shove the other back at full speed) |
 | kicker | ball leaves at `KICK_SPEED` (+ robot speed), cooldown from the hardware file |
 | goals | solid side and back walls (`GOAL_WALL_T` thick): the ball bounces off them, robots can't drive through them, so goals only count through the front |
@@ -441,7 +441,7 @@ python arena.py --games 22 --opp comp            # the old competition logic (pa
 with `python simulator.py --opp v26` (window) or `python arena.py --opp v26` - any folder with the robot code works too.
 
 **Fast mode (`--fast`, `Sim(fast=True)`):** no camera rendering, detection or localisation - each camera frame's
-`Detections` are made straight from the true positions (+ noise) in the same format `detection.py` gives, and the
+`Detections` are made straight from the true positions (+ noise) in the same format `vision.detect()` gives, and the
 pose is the true position (+ noise). Perception, line fusion, strategy and motion are still the real code. Use it
 to try ideas quickly, then confirm the good ones in the full simulator (it can't catch vision / localisation
 problems). For a fair self-play comparison, play both ways round (each version as "us" once) and add the results

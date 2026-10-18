@@ -13,7 +13,7 @@ localisation, perception, line fusion, strategy and motion. Only the hardware is
              at CAM_RES pixels (so things far away get small and blurry like on the real camera). Robots, the ball
              and the goal walls stand up: they hide whatever is behind them, and our own deck hides the floor
              near us. Then the raw image (robot_vision "radial" mode) or its top-down view, the real
-             robot_vision.py masks -> detection.py -> localisation.py
+             vision.py (masks -> detection) -> localisation.py
     LDRs     32 readings: white line under the sensor = low reading, green = high
     IMU      the true heading (+ drift with noise on)
     comms    the two robots' my_state handed straight to each other
@@ -65,10 +65,9 @@ from main import GoalieBrain  # noqa: E402
 from main_attack import StrikerBrain  # noqa: E402
 from motion import Mover  # noqa: E402
 from perception import World  # noqa: E402
-from robot_vision import RobotVision  # noqa: E402
-import robot_vision as _robot_vision_mod  # noqa: E402
+import vision as _vision_mod  # noqa: E402
 from utils import rotate, wrap_pi  # noqa: E402
-from vision import analyse_frame  # noqa: E402
+from vision import RobotVision, analyse_frame  # noqa: E402
 
 import common as _common, lines as _lines, localisation as _localisation, main as _main  # noqa: E402,E401
 import main_attack as _main_attack, motion as _motion, perception as _perception  # noqa: E402,E401
@@ -242,7 +241,7 @@ VIEW_MAX = float(MIRROR_DIST[-1])             # cm of floor the mirror rim sees 
 EGO_RADIUS = 300.0                            # cm rendered around the robot (further away = outside the walls)
 # Detection runs on the raw mirror image when robot_vision has the "radial" mode (pixel angle = direction, a
 # pixels -> cm curve = distance), otherwise on a top-down remap of it
-RADIAL = hasattr(_robot_vision_mod, "radial_table")
+RADIAL = hasattr(_vision_mod, "radial_table")
 VIEW_RADIUS = min(VIEW_MAX, EGO_RADIUS) if RADIAL else TOPDOWN_RADIUS   # cm the robot code can see
 CAM_SIZE = CAM_RES if RADIAL else int(2 * TOPDOWN_RADIUS * TOPDOWN_PPC)
 OWN_HIDDEN_R = cfg.ROBOT_RADIUS * VIEW_Z / (VIEW_Z - OWN_DECK_HEIGHT)   # floor our own deck hides (cm from centre)
@@ -1246,7 +1245,7 @@ class Sim:
 
 # ==================================== FAST MODE ====================================
 # Sim(fast=True): no camera rendering / detection / localisation. Each camera frame's Detections are made straight
-# from the true positions (+ a little noise), in the same format detection.py produces, and the pose comes from
+# from the true positions (+ a little noise), in the same format vision.detect() produces, and the pose comes from
 # the truth (+ noise). Everything after that (perception, lines, strategy, motion) is still the real robot code.
 # ~10x faster: use it to screen ideas, then confirm the good ones in the full simulator.
 FAST_POSE_NOISE = 1.5        # cm
@@ -1306,7 +1305,7 @@ GOAL_PARTS = {"yellow": _goal_parts(1), "blue": _goal_parts(-1)}
 
 def fast_detect(sim, r, ignore):
     """Detections for robot r from the true positions (robot frame cm), like detection.detect() would give."""
-    from detection import Detections, Goal, Obstacle
+    from vision import Detections, Goal, Obstacle
     rng = sim.rng
     det = Detections(time.monotonic(), r.bot.imu.compass())
     det.field_visible = True

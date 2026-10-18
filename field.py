@@ -115,7 +115,7 @@ def goal_near_point(px, py, goal_y):
 
 
 def goal_seen_point(px, py, goal_y):
-    """Nearest COLOURED point of a goal from (px, py): what detection.py reports as the goal's near point. The mouth
+    """Nearest COLOURED point of a goal from (px, py): what vision.py's detect() reports as the goal's near point. The mouth
     itself is empty, so from in front of the goal that's a post or the back wall, not a point in the mouth (which
     goal_near_point gives, up to GOAL_DEPTH / GOAL_W / 2 off). Coloured = the inside of both side walls (from the
     goal line to the back) and the back wall. Arrays work too."""

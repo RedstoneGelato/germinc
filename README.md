@@ -77,8 +77,7 @@ See [GUIDE.md](GUIDE.md) for how it all works and which file to edit for what.
 | `hardware.py` | IMU, PCB (LDR line ring + LEDs), motor thread |
 | `hardware_attack.py` / `hardware_defense.py` | Per-robot motor addresses + calibration, robot id |
 | `common.py` | Start-up, standby (paused) calibration, shutdown |
-| `vision.py` | Camera thread: calibration (`robot_vision.py`) -> detections (`detection.py`) |
-| `detection.py` | Masks -> ball (orange), goals (yellow/blue), field (green), lines (white), obstacles (anything else on the field) |
+| `vision.py` | Everything the camera does: calibration + colour masks (`RobotVision`), masks -> ball (orange), goals (yellow/blue), field (green), lines (white), obstacles (anything else on the field) (`detect()`), and the camera thread (`VisionThread`) |
 | `field.py` | Field dimensions + line distance map (check against the rules / real field!) |
 | `localisation.py` | Particle filter: robot x, y on the field from lines + goals (ultrasonic ring ready for later) |
 | `perception.py` | Smoothed ball / goals / obstacles in cm for the strategy |

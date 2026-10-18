@@ -26,7 +26,7 @@ Pipeline on every frame:
         --> ROTATION (camera mounting) --> colour masks (ignore box = robot body, robot frame)
         --> rotate by IMU yaw about the robot centre (field-aligned) --> goal detection
 
-Export: the "Generate config file" button writes robot_vision_config.json, which robot_vision.py loads in the robot script.
+Export: the "Generate config file" button writes robot_vision_config.json, which vision.py (RobotVision) loads in the robot script.
 
 Heading: this script reads the BNO08x itself (adafruit_bno08x over I2C) and rotates the frame by its yaw.
 It owns the I2C bus, so don't run it next to the robot code. If the IMU can't be read, the manual
@@ -386,7 +386,7 @@ def ignore_rect(centre, px_per_cm, ign, shape):
 
 def ignore_rect_radial(centre, radial, ign, shape):
     """ignore_rect() for the raw fisheye: each side's cm turned into pixels with the distance calibration curve
-    (the same box robot_vision.py uses in its "radial" mode)."""
+    (the same box vision.py's RobotVision uses in its "radial" mode)."""
     h, w = shape[:2]
     cx, cy = centre
     tp, tc = np.array(radial["table_px"]), np.maximum.accumulate(np.array(radial["table_cm"]))
@@ -1161,7 +1161,7 @@ ROTATION_NAMES = {cv2.ROTATE_90_CLOCKWISE: "90_CLOCKWISE", cv2.ROTATE_180: "180"
 
 
 def build_export():
-    """Everything the robot script needs, in one JSON-able dict (read it with robot_vision.py)."""
+    """Everything the robot script needs, in one JSON-able dict (read it with vision.py's RobotVision)."""
     with CFG.lock:
         hsv = copy.deepcopy(CFG.hsv)
         cam = dict(CFG.camera)
@@ -1305,7 +1305,7 @@ PAGE = r"""<!doctype html>
   <button class="a" onclick="post('/api/radial/fit')">Fit</button>
  </details>
  <details open><summary>Export for the robot script</summary>
-  <div class="dim">Bundles the HSV ranges, exposure/white balance, lens calibration, top-down mapping, ignore box and heading settings into one file the robot script loads with robot_vision.py.</div>
+  <div class="dim">Bundles the HSV ranges, exposure/white balance, lens calibration, top-down mapping, ignore box and heading settings into one file the robot script loads with vision.py.</div>
   <button class="a" onclick="exportCfg()">Generate config file</button>
   <a id="dl" href="/api/export/download" style="color:#9cf;display:none">Download robot_vision_config.json</a>
  </details>

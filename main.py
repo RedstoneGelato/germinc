@@ -8,7 +8,7 @@ The work lives in:
     robot_config.py        numbers shared by both robots + coordinate conventions
     hardware_defense.py    this robot's motor addresses / calibration, robot id
     common.py              start-up, standby (paused) calibration, shutdown
-    vision.py, detection.py, localisation.py, perception.py, lines.py, motion.py, comms.py
+    vision.py, localisation.py, perception.py, lines.py, motion.py, comms.py
     strategy.py            GoalieStrategy = what this robot decides to do
 
 Before running: tune the camera in test_camera.py ON THIS ROBOT and press "Generate config file"

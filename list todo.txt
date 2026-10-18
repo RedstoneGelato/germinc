@@ -1,4 +1,0 @@
-Yet to add or implement or do
-    rewrite code to look nice and modular or smth smth like that
-
-Test numbers or other already implemented thingys

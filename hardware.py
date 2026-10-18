@@ -2,7 +2,7 @@
 hardware.py - threads that talk to the IMU, the PCB (LDR line ring) and the motor drivers. Shared by both robots;
 the motor addresses / calibration for each robot are in hardware_attack.py and hardware_defense.py.
 
-The PCB's IR ball sensors are gone: the ball comes from the camera now (vision.py / detection.py).
+The PCB's IR ball sensors are gone: the ball comes from the camera now (vision.py).
 The PCB only does the 32 LDRs + bottom LEDs (commands 0x01 read colours, 0x03 set brightness).
 
 Ultrasonic ring (later): add an UltrasonicThread here that keeps `distances` (8 values in cm, None = no echo)

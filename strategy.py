@@ -81,6 +81,10 @@ SEAL_OPP = 45.0                   # round the ball and it was rolled in along th
 SEAL_KEEP_X = field.GOAL_W / 2 - 6.0   # against v88. Ball |x| past SEAL_X (once sealing: past SEAL_KEEP_X), less than
 SEAL_POST_X = field.GOAL_W / 2 - 2.0   # SEAL_Y above the goal line, an opponent's centre within SEAL_OPP of it; the
 SEAL_GAP = 0.0                         # goalie stands at |x| SEAL_POST_X, its edge SEAL_GAP above the goal line.
+SEAL_INNER_X = field.GOAL_W / 2 - 6.0  # also seal for a ball inside the post (|x| past this, once sealing past
+SEAL_INNER_KEEP_X = field.GOAL_W / 2 - 10.0  # SEAL_INNER_KEEP_X), standing just inside the ball: TS dribbled along
+                                       # the goal line from there while the goalie orbited. 160 fast games vs TS:
+                                       # 33 -> 22 goals against (v88 14 -> 18, within noise)
                                        # Simulator, 80 fast games vs v88: 69-152 before, 102-44 with it (wide goals
                                        # against 56 -> 4). SEAL_GAP 3 (the guard line) let most of them back in: 91-95
 GOALIE_FACE_MAX = math.radians(70)    # goalie guarding: face the ball, at most this far off up-field
@@ -88,6 +92,9 @@ GOALIE_CLEAR_PATH = 60.0          # goalie kicks: the ball's path must miss ever
                                   # straight into their striker (clearance up to a robot radius into it was accepted)
 GOALIE_KICK_TURN = math.radians(60)   # goalie with the ball (striker off): kicks it clear facing at most this far off
 GOALIE_KICK_CLEAR = 50.0          # up-field, when no robot is in the way for this far (cm)
+PRESSED_GAP = 45.0                # goalie with the ball: an opponent's centre within 2R + this = pressed, clear it now
+                                  # (20: lining up a pass, TS's striker drove in and took it - 80 fast games vs TS
+                                  # 20 -> 10 goals against)
 PASS_SIDE = 30.0                  # goalie with the ball, striker on: kicks it past the striker, aiming this far to one
 PASS_AHEAD = 20.0                 # side of it and this far up-field of it (the more open side; both open: the one
 PASS_TOL = 0.25                   # nearer the middle), once facing it within this (rad)
@@ -559,6 +566,29 @@ def rel(p, pose):
     return [p[0] - pose.x, p[1] - pose.y]
 
 
+COMMS_GRACE = 10.0   # s: no messages from the teammate (comms dropped) within this long of it saying it's on -> assume
+                     # it still is. A paused / taken-off robot sends "bot active": 0, so only lost comms goes silent -
+                     # without this the goalie played striker 0.5 s into every wifi drop and left the goal empty
+                     # (arena with --faults 1, 160 games: 164 -> 132 goals against). 0 = off.
+
+
+class MateMemory:
+    """Stands in for the teammate's message while comms are down (COMMS_GRACE)."""
+
+    def __init__(self):
+        self.on_at = -1e9        # when the teammate last said "bot active": 1
+
+    def __call__(self, mate):
+        now = time.monotonic()
+        if mate:
+            if mate.get("bot active") == 1:
+                self.on_at = now
+            return mate
+        if now - self.on_at < COMMS_GRACE:
+            return {"bot active": 1, "command": 0}    # (nothing else: its old position / ball would be stale)
+        return mate
+
+
 def mate_active(mate):
     """The teammate is on (it sends "bot active": 1)."""
     return bool(mate) and mate.get("bot active") == 1
@@ -594,12 +624,14 @@ class GoalieStrategy:
         self.sealing = False     # sealing the near post (POST_SEAL)
         self.alone = None        # striker off: the StrikerStrategy the goalie plays (GOALIE_ALONE_ATTACKS)
         self.avoid = Avoider()
+        self.mate_mem = MateMemory()
 
     def reset(self):
         self.fallback.reset()
         self.botstate_hyst.reset()
 
     def update(self, world, compass, mate, line_touches):
+        mate = self.mate_mem(mate)       # comms dropped: the teammate is still on (COMMS_GRACE)
         pose = world.pose
         self.kick = False
         self.possession = possession(world, mate)
@@ -802,7 +834,7 @@ class GoalieStrategy:
         target = list(me)
         striker = mate.get("pos") if striker_on else None
         fwd = (-math.sin(compass), math.cos(compass))                 # the way we face now
-        pressed = any(dist(o, me) < 2 * R + 20 for o in world.opponents)
+        pressed = any(dist(o, me) < 2 * R + PRESSED_GAP for o in world.opponents)
         if pressed:
             # an opponent closing in: no lining up a pass - turn to the open up-field side (away from the nearest
             # opponent first) and clear it the first moment the way is really clear
@@ -890,14 +922,17 @@ class GoalieStrategy:
     @staticmethod
     def wide_threat(ball, centres, min_x=SEAL_X):
         """Ball beside our goal (past a post sideways, close to the goal line) with an opponent at it (POST_SEAL)."""
-        if not POST_SEAL or abs(ball[0]) < min_x or ball[1] > field.OWN_GOAL_Y + SEAL_Y:
+        if not POST_SEAL or ball[1] > field.OWN_GOAL_Y + SEAL_Y:
+            return False
+        inner_x = SEAL_INNER_KEEP_X if min_x < SEAL_X else SEAL_INNER_X    # (min_x < SEAL_X: already sealing)
+        if abs(ball[0]) < min(min_x, inner_x):
             return False
         return any(dist(c, ball) < SEAL_OPP for c in centres)
 
     @staticmethod
     def seal_spot(ball):
         """On the goal line at the near post: blocks a ball rolled in along the line and a shot across the goal."""
-        return [math.copysign(SEAL_POST_X, ball[0]), field.OWN_GOAL_Y + R + SEAL_GAP]
+        return [math.copysign(min(SEAL_POST_X, abs(ball[0]) - 2.0), ball[0]), field.OWN_GOAL_Y + R + SEAL_GAP]
 
     @staticmethod
     def block_point(ball, vel):
@@ -1010,6 +1045,16 @@ CORNER_TURN_SHARE = 0.3     # side line: down to CORNER_TURN_SHARE facing 90 deg
 CARRY_AIM_CORNER = True     # the normal carry (carry_dir()) heads for that same front corner of their penalty area
                             # instead of their goal's centre, till level with it (within CORNER_REACHED), then the goal
 SHIELD_STAY = 6.0           # shielding: carries on while both robots are within SHIELD_IN - this inside the area
+BASE_SHIELD = True          # also start the shield outside the area when about to dribble the ball
+BASE_SHIELD_Y = 40.0        # out near their goal line: ball within BASE_SHIELD_Y of their goal line, wide of their goal
+BASE_SHIELD_EDGE = 12.0     # (|x| >= GOAL_W / 2), within BASE_SHIELD_EDGE of the side or goal line and heading out
+BASE_SHIELD_T = 0.3         # over it within BASE_SHIELD_T s at its speed (the goal mouth counts as in), their goalie in
+                            # their penalty area. Carries on while the ball is within BASE_SHIELD_Y + SHIELD_STAY of
+                            # the line and the goalie within SHIELD_STAY of the area.
+                            # Simulator (fast, 60 s, seeds 1-40): TS 103-5 -> 109-5 (losses 2 -> 0), v88 281-9 ->
+                            # 247-10. Doesn't catch TS seed 0 186.6 s (their goalie knocks it off before the line);
+                            # starting it on the way up the side lane there (goalie within 2R+15-30, or ball heading
+                            # out within 0.4 s) kept that ball but lost badly: v88 29-17, TS 21-1 /40.
 RESTART_SCREEN = True       # restart ball behind us (we're up-field of it) and their nearest robot within SCREEN_OPP
 SCREEN_TIME = 3.0           # cm of it, within SCREEN_TIME s of the ball going out: face up-field and go round the ball
 SCREEN_OPP = 60.0           # on that robot's side (bodying it) to get behind the ball - until it's further than
@@ -1218,8 +1263,10 @@ class StrikerStrategy:
         self.shield_side = None  # shielding: +1 facing the right side line, -1 the left, 0 = gave up (till
         self.shield_since = None # we lose the ball), None = not shielding; and since when
         self.shield_shot = False # shielding: turning to an open shot
+        self.shield_base = False # shielding started near their goal line, outside the area (BASE_SHIELD)
         self.last_ball = None    # (position, time, went out?) of the last ball seen - for an out ball, the position
                                  # is the neutral spot it'll come back to
+        self.mate_mem = MateMemory()
 
     def reset(self):
         self.fallback.reset()
@@ -1228,6 +1275,7 @@ class StrikerStrategy:
         self.won_at = None
 
     def update(self, world, compass, mate, line_touches):
+        mate = self.mate_mem(mate)       # comms dropped: the teammate is still on (COMMS_GRACE)
         pose = world.pose
         self.kick = False
         self.command = 0
@@ -1382,6 +1430,22 @@ class StrikerStrategy:
         others = [o for o in world.opponents if o is not keeper]
         return all(o[1] < me[1] for o in others)
 
+    def base_line_out(self, world, me, ball, keeper, staying):
+        """Near their goal line, wide of their goal, their goalie in their penalty area, and the ball at the side /
+        goal line about to go out (BASE_SHIELD)."""
+        stay = SHIELD_STAY if staying else 0.0
+        if ball[1] < field.ATTACK_GOAL_Y - BASE_SHIELD_Y - stay or abs(ball[0]) < field.GOAL_W / 2 - stay:
+            return False
+        if not self.in_their_box(keeper, -stay) or self.in_their_box(me, SHIELD_IN):
+            return False                        # (fully in the area: the normal shield)
+        if staying:
+            return True
+        if field.inside_play_area(ball[0], ball[1], BASE_SHIELD_EDGE):
+            return False                        # not at the side / goal line yet
+        vel = world.ball_vel
+        ahead = (ball[0] + vel[0] * BASE_SHIELD_T, ball[1] + vel[1] * BASE_SHIELD_T)
+        return not field.inside_play_area(ahead[0], ahead[1])
+
     def shield(self, world, compass, me, ball, goal):
         """Ball in our dribbler, our robot and their goalie both fully inside their penalty area: face the nearer
         side line (the ball away from the goalie and the goal), shove the goalie off the near half of the goal with
@@ -1393,10 +1457,15 @@ class StrikerStrategy:
             return None                                        # gave up on this possession (SHIELD_MAX_TIME)
         keeper = min(opponents, key=lambda o: dist(o, goal))
         margin = SHIELD_IN if self.shield_side is None else SHIELD_IN - SHIELD_STAY   # (in: fully inside; stays on
-        if not (self.in_their_box(me, margin) and self.in_their_box(keeper, margin)):   # till SHIELD_STAY further out)
+        in_box = self.in_their_box(me, margin) and self.in_their_box(keeper, margin)  # till SHIELD_STAY further out)
+        # (or about to dribble it out near their goal line - BASE_SHIELD)
+        staying = self.shield_side is not None and self.shield_base
+        base = BASE_SHIELD and not in_box and self.base_line_out(world, me, ball, keeper, staying)
+        if not (in_box or base):
             self.shield_side = None
             return None
         if self.shield_side is None:
+            self.shield_base = base
             # the nearer side line (in the middle: the side away from their goalie)
             dx = me[0] if abs(me[0]) > 3.0 else me[0] - keeper[0]
             self.shield_side = math.copysign(1.0, dx or 1.0)

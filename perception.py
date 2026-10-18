@@ -8,7 +8,7 @@ import time
 
 import field
 import robot_config as cfg
-from detection import Goal
+from vision import Goal
 import numpy as np
 
 from utils import PointTracker, rotate, rotate_points
@@ -33,7 +33,7 @@ OPP_MERGE = 15.0              # cm: a teammate's opponent this close to one of o
 
 
 def front_of(o):
-    """An obstacle as the point facing us, made consistent with its estimated centre (detection.Obstacle.centre):
+    """An obstacle as the point facing us, made consistent with its estimated centre (vision.Obstacle.centre):
     one robot radius in front of the centre, so `centre_of()` / strategy.obstacle_centres() get the whole robot's
     centre back."""
     if getattr(o, "centre", None) is None:
