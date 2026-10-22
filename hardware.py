@@ -2,8 +2,9 @@
 hardware.py - threads that talk to the IMU, the PCB (LDR line ring) and the motor drivers. Shared by both robots;
 the motor addresses / calibration for each robot are in hardware_attack.py and hardware_defense.py.
 
-The PCB's IR ball sensors are gone: the ball comes from the camera now (vision.py).
-The PCB only does the 32 LDRs + bottom LEDs (commands 0x01 read colours, 0x03 set brightness).
+The ball comes from the camera (vision.py), plus the IR ring where the camera can't see it (robot_config.IR_*).
+The PCB does the 32 LDRs + bottom LEDs (commands 0x01 read colours, 0x03 set brightness) and, with
+cfg.IR_ON_PCB, the IR ring (0x02 read IR - CHECK it matches the PCB firmware).
 
 Ultrasonic ring (later): add an UltrasonicThread here that keeps `distances` (8 values in cm, None = no echo)
 and `angles` (each sensor's direction in the robot frame, radians, 0 = robot's right, CCW). main.py then hands
@@ -77,9 +78,9 @@ class IMUThread(threading.Thread):
         self.heading_offset = 0
         self.filter.continue_from(compass)
 
-    def zero(self):
-        """Current heading = facing the goal we attack."""
-        self.heading_offset = self.heading
+    def zero(self, facing=0.0):
+        """Current heading = facing the goal we attack (or `facing` radians from it, e.g. pi = facing our own goal)."""
+        self.heading_offset = self.heading - facing
 
     def compass(self):
         """Robot heading in radians, CCW positive, 0 = facing the goal we attack."""
@@ -97,6 +98,7 @@ class PCBThread(threading.Thread):
         self.I2C_ADDR = 0x64
         self.CMD_READ_COLOURS = 0x01
         self.CMD_SET_BRIGHTNESS = 0x03
+        self.CMD_READ_IR = 0x02
         self.COLOUR_SENSOR_COUNT = cfg.LDR_COUNT
         self.COLOUR_PACKET_SIZE = self.COLOUR_SENSOR_COUNT * 2
         self.CMD_TO_RESPONSE_DELAY = 0.02
@@ -107,6 +109,7 @@ class PCBThread(threading.Thread):
         self.bus_lock = threading.Lock()
 
         self.colours = [0] * self.COLOUR_SENSOR_COUNT
+        self.ir = None            # IR ring, 0..1 per sensor (None = no IR on this PCB)
         self.brightness_target = 0
         self._brightness_sent = None
 
@@ -147,6 +150,10 @@ class PCBThread(threading.Thread):
 
         return values
 
+    def _read_ir(self): #read IR ball sensors -> 0..1 each
+        data = self._read_packet(self.CMD_READ_IR, cfg.IR_COUNT * 2)
+        return [min(1.0, (data[2*i] | (data[2*i + 1] << 8)) / cfg.IR_RAW_MAX) for i in range(cfg.IR_COUNT)]
+
     def set_brightness(self, value: float):  # called from main: just records the request
         self.brightness_target = int(max(0.0, min(65535.0, value)))
 
@@ -169,19 +176,25 @@ class PCBThread(threading.Thread):
                 if target != self._brightness_sent:
                     self._write_brightness(target)
                 new_colours = self._read_colours()
+                new_ir = self._read_ir() if cfg.IR_ON_PCB else None
                 with self.lock:
                     self.colours = new_colours
+                    self.ir = new_ir
                 self.ready = True
             except Exception as e: # IOError mostly; anything else mustn't end the thread either
                 print(f"PCB I2C error: {e!r}")
                 self.ready = False
-            time.sleep(0.02)  # only one packet per loop now that IR is gone, so poll a bit faster
+            time.sleep(0.02)
 
         self.bus.close()
 
     def snapshot(self):
         with self.lock:
             return list(self.colours)
+
+    def ir_snapshot(self):
+        with self.lock:
+            return None if self.ir is None else list(self.ir)
 
 
 # settings every drive motor gets (both robots)

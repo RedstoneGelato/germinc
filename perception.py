@@ -30,6 +30,18 @@ OPP_VEL_WINDOW = 0.3          # s: opponent velocity = straight-line fit through
 OPP_VEL_MIN_SPAN = 0.1        # frame differences were mostly noise: +-30 cm/s for a robot standing still); 0 until
 OPP_TRACK_LOST = 0.3          # it's been tracked this long (s). A track not matched for OPP_TRACK_LOST s is dropped
 OPP_MERGE = 15.0              # cm: a teammate's opponent this close to one of ours = the same robot
+# the ball where the camera can't see it: the ~2 cm blind ring right round our bumper (a ball in the dribbler is never
+# seen), the mirror mount bars' slices, robots in the way. With the IR ring (robot_config.IR_*) its bearing is used,
+# at the range the camera last had it (moved on by its velocity) or, without one, from the IR strength
+IR_NEAR = 20.0                # TUNE: cm, the IR sensors read full strength (1.0) closer than this, ~IR_NEAR / distance further
+IR_CLOSE = 0.8                # strongest IR reading above this = the ball is within IR_NEAR (unseen too = in the blind ring)
+IR_RANGE_MEMORY = 1.5         # s the last camera range is still used with the IR bearing
+IR_RING_R = cfg.ROBOT_RADIUS + 1.0       # cm, near point of a ball IR says is close but the camera can't see (blind ring)
+IR_CAPTURE_ANGLE = math.radians(20)      # ...and this near straight ahead = in the dribbler
+IR_CAPTURE_R = cfg.ROBOT_RADIUS + 3.0    # (cm, as long as its estimated near point is within this)
+NEAR_HOLD_DIST = 25.0         # no IR: a ball last seen this close (cm) that vanishes is in the blind ring, not gone -
+NEAR_HOLD_TIME = 0.6          # kept where it was (robot frame: we're usually pushing it) for this long (s)
+NO_IR_CAPTURE_MAX = 3.0       # no IR: s a ball that vanished out of the capture zone still counts as in the dribbler
 
 
 def front_of(o):
@@ -60,6 +72,25 @@ def centre_of(pose, near):
     dx, dy = near[0] - pose.x, near[1] - pose.y
     d = math.hypot(dx, dy) or 1.0
     return (near[0] + dx / d * cfg.ROBOT_RADIUS, near[1] + dy / d * cfg.ROBOT_RADIUS)
+
+
+def ir_bearing(ir):
+    """IR ring readings (0..1 per sensor, 0 = not seeing the ball) -> (bearing, strongest reading, sensors active), or
+    None if no sensor sees the ball. bearing: robot frame, radians, 0 = robot's right, anticlockwise (pi/2 = front)."""
+    if not ir:
+        return None
+    n = len(ir)
+    vx = vy = 0.0
+    active = 0
+    for i, v in enumerate(ir):
+        if v > 0:
+            a = cfg.IR_START_ANGLE + i * 2 * math.pi / n
+            vx += v * math.cos(a)
+            vy += v * math.sin(a)
+            active += 1
+    if not active or (vx == 0 and vy == 0):
+        return None
+    return math.atan2(vy, vx), max(ir), active
 
 
 def in_capture_zone(ball_robot):
@@ -112,6 +143,9 @@ class World:
         self.prev_ball = None         # (field position, time) of the last own-camera ball, for ball_vel
         self.mate_pos = None          # teammate's position (field frame) from comms, or None
         self.ball_in_capture = False
+        self.ball_hidden = None       # "ir" / "hold" when the ball is where the camera can't see it (hidden_ball()), else None
+        self.ir = None                # ir_bearing() of the latest IR readings, None = no sensor sees it / no IR ring
+        self.last_cam_ball = None     # (robot frame point, field point or None, time) of the last camera ball
         self.attack_goal = None       # Goal(near, centre), relative
         self.own_goal = None
         self.goal_source = ""         # "cam" / "pose" per goal, for printing
@@ -132,9 +166,10 @@ class World:
         self.last_capture = 0.0
         self.reset_values()
 
-    def update(self, frame_id, det, pose, attack_colour, mate=None):
+    def update(self, frame_id, det, pose, attack_colour, mate=None, ir=None):
         """Call every loop; only does work when there's a new camera frame.
-        mate = the teammate's latest comms message (or None): its "ball" and "pos" are used."""
+        mate = the teammate's latest comms message (or None): its "ball" and "pos" are used.
+        ir = the IR ring's readings (0..1 per sensor), None = no IR ring."""
         self.pose = pose
         if det is None or frame_id == self.frame_id:
             return
@@ -144,11 +179,35 @@ class World:
         self.field_visible = det.field_visible
 
         # ball
+        confident = pose is not None and pose.confident
         self.ball_robot = det.ball
         self.ball_own = self.ball_tracker.update(None if det.ball is None else rotate(det.ball, c), now)
+        self.ir = ir_bearing(ir)
+        self.ball_hidden = None
+        if det.ball is not None:
+            b = rotate(det.ball, c)
+            cam_ball_field = [b[0] + pose.x, b[1] + pose.y] if confident else None
+            self.last_cam_ball = (list(det.ball), cam_ball_field, now)
+        else:
+            hidden = self.hidden_ball(ir is not None, pose, c, now)
+            if hidden is not None:
+                self.ball_robot = hidden
+                self.ball_own = rotate(hidden, c)
         if in_capture_zone(det.ball):
             self.last_capture = now
-        self.ball_in_capture = in_capture_zone(det.ball) or (det.ball is None and now - self.last_capture < CAPTURE_HOLD)
+        ir_capture = (self.ball_hidden == "ir" and self.ir[1] >= IR_CLOSE and math.hypot(*self.ball_robot) < IR_CAPTURE_R
+                      and abs(self.ir[0] - math.pi / 2) < IR_CAPTURE_ANGLE)
+        if ir_capture:
+            self.last_capture = now
+        # no IR: a ball that vanished from the capture zone went into the blind ring = it's in the dribbler until the
+        # camera sees it somewhere again (NO_IR_CAPTURE_MAX at most)
+        hold = NO_IR_CAPTURE_MAX if ir is None and cfg.BALL_BLIND_RING > 0 else CAPTURE_HOLD
+        self.ball_in_capture = in_capture_zone(det.ball) or ir_capture or \
+            (det.ball is None and now - self.last_capture < hold)
+        if self.ball_in_capture and det.ball is None and ir is None and cfg.BALL_BLIND_RING > 0:
+            self.ball_robot = [0.0, cfg.ROBOT_RADIUS + 1.0]
+            self.ball_own = rotate(self.ball_robot, c)
+            self.ball_hidden = "hold"
 
         # goals: camera first, localisation as fallback when the goal is out of view
         own_colour = "blue" if attack_colour == "yellow" else "yellow"
@@ -175,8 +234,10 @@ class World:
         self.obstacles = self.obstacle_tracker.update([(rotate(front_of(o), c), o.size) for o in det.obstacles], now)
 
         # field-frame copies when we know where we are (anything from the teammate needs this too)
-        confident = pose is not None and pose.confident
-        mate_ball = mate.get("ball") if mate else None
+        # a paused / taken-off teammate still sends its last ball and opponents (only "bot active" turns 0): stale,
+        # e.g. the ball where it was when it went off - the goalie chased that over our goal line
+        mate_on = bool(mate) and mate.get("bot active") == 1
+        mate_ball = mate.get("ball") if mate_on else None
         self.mate_pos = mate.get("pos") if mate else None
         if confident:
             self.ball_own_field = None if self.ball_own is None else [self.ball_own[0] + pose.x, self.ball_own[1] + pose.y]
@@ -193,7 +254,7 @@ class World:
             self.obstacles_field = self.remember_obstacles(
                 [([p[0] + pose.x, p[1] + pose.y], s) for p, s in self.obstacles], pose, now)
             self.opponents_own = [centre_of(pose, [p[0] + pose.x, p[1] + pose.y]) for p, _ in self.obstacles]
-            self.opponents = self.merge_opponents(pose, mate)
+            self.opponents = self.merge_opponents(pose, mate if mate_on else None)
             self.opponent_vel = self.opponent_velocities(now)
         else:
             self.ball_own_field = None
@@ -203,19 +264,53 @@ class World:
             self.opponents = []
             self.opponent_vel = []
 
-        # ball: our own camera first, the teammate's sighting when we can't see it
+        # ball: our own camera (or IR / where it vanished, hidden_ball) first, the teammate's sighting when we can't see it
         if self.ball_own is not None:
-            self.ball, self.ball_field, self.ball_source = self.ball_own, self.ball_own_field, "cam"
+            self.ball, self.ball_field, self.ball_source = self.ball_own, self.ball_own_field, self.ball_hidden or "cam"
         elif confident and mate_ball is not None:
             self.ball = [mate_ball[0] - pose.x, mate_ball[1] - pose.y]
             self.ball_field, self.ball_source = list(mate_ball), "mate"
         else:
             self.ball, self.ball_field, self.ball_source = None, None, "-"
-        self.update_ball_vel(now)
+        self.update_ball_vel(now, None if self.ball_hidden else self.ball_own_field)
 
-    def update_ball_vel(self, now):
-        """Smoothed ball velocity (field frame) from our own camera's ball positions."""
-        b, prev = self.ball_own_field, self.prev_ball
+    def hidden_ball(self, has_ir, pose, c, now):
+        """Where the ball is while the camera can't see it (robot frame, its near point like the camera gives), or None
+        (then the tracker's last position is kept for BALL_LOST_TIME as before). Sets .ball_hidden to "ir" / "hold".
+        - IR ring: along the IR bearing, at the range of the last camera ball (moved on by its velocity, IR_RANGE_MEMORY)
+          kept within what the IR strength allows; strong IR + unseen = in the blind ring (IR_RING_R)
+        - no IR (and cfg.BALL_BLIND_RING): a ball that vanished within NEAR_HOLD_DIST is in the blind ring - it stays where it was (robot frame)
+          for NEAR_HOLD_TIME instead of being lost (we drive onto it, we don't back off or go searching)"""
+        last = self.last_cam_ball
+        recent = last is not None and now - last[2] < IR_RANGE_MEMORY
+        confident = pose is not None and pose.confident
+        if has_ir:
+            if self.ir is None:
+                return None
+            bearing, strength, _ = self.ir
+            r = None
+            if recent and confident and last[1] is not None:
+                dt = min(now - last[2], 0.5)
+                r = math.hypot(last[1][0] + self.ball_vel[0] * dt - pose.x, last[1][1] + self.ball_vel[1] * dt - pose.y)
+            elif recent:
+                r = math.hypot(last[0][0], last[0][1])
+            if strength >= IR_CLOSE:
+                r = IR_RING_R
+            else:
+                r_ir = IR_NEAR / max(strength, 1e-3) - cfg.BALL_RADIUS
+                r = r_ir if r is None else min(max(r, 0.6 * r_ir), 1.6 * r_ir)
+            r = max(r, cfg.ROBOT_RADIUS)
+            self.ball_hidden = "ir"
+            return [r * math.cos(bearing), r * math.sin(bearing)]
+        if (cfg.BALL_BLIND_RING <= 0 or last is None or now - last[2] > NEAR_HOLD_TIME
+                or math.hypot(last[0][0], last[0][1]) > NEAR_HOLD_DIST):
+            return None
+        self.ball_hidden = "hold"
+        return list(last[0])
+
+    def update_ball_vel(self, now, b):
+        """Smoothed ball velocity (field frame) from our own camera's ball positions (b = this frame's, or None)."""
+        prev = self.prev_ball
         if b is None:
             if prev is None or now - prev[1] > 0.3:
                 self.ball_vel, self.prev_ball = [0.0, 0.0], None

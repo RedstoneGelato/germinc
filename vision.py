@@ -6,6 +6,7 @@ vision.py - everything the camera does, in one file:
     3. VisionThread - camera thread: capture -> 1 -> 2 -> latest Detections (analyse_frame() is what the
                       robot and simulator.py both run on every frame)
 """
+import base64
 import collections
 import json
 import math
@@ -130,13 +131,17 @@ class Warp:
     out_size  (w, h) of the view
     crop      (x, y, w, h) of the camera frame the view uses: only that part gets classified
     valid     uint8, 255 where the view has camera image
-    colour(raw) -> BGR view (bilinear), labels(lab) -> label view (nearest), lab = classified crop."""
+    colour(raw) -> BGR view (bilinear), labels(lab) -> label view (nearest), lab = classified crop,
+    mask(m) -> a full camera-frame uint8 mask in the view (nearest, 0 where the view has no camera image)."""
     out_size = crop = valid = None
 
     def colour(self, raw):
         raise NotImplementedError
 
     def labels(self, lab):
+        raise NotImplementedError
+
+    def mask(self, m):
         raise NotImplementedError
 
 
@@ -158,6 +163,9 @@ class IdentityWarp(Warp):
 
     def labels(self, lab):
         return self._rot(lab)
+
+    def mask(self, m):
+        return self._rot(m)
 
 
 class RemapWarp(Warp):
@@ -198,6 +206,11 @@ class RemapWarp(Warp):
     def labels(self, lab):
         return cv2.remap(lab, self._nn, None, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
                          borderValue=self._outside)
+
+    def mask(self, m):
+        x, y, w, h = self.crop
+        return cv2.remap(np.ascontiguousarray(m[y:y + h, x:x + w]), self._nn, None, cv2.INTER_NEAREST,
+                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
 # Top-down models: name -> f(config, capture_size) returning (map_x, map_y, px_per_cm), float32 maps from the
@@ -315,6 +328,40 @@ def radial_table(radial):
 
 
 
+def encode_mask(mask):
+    """uint8 mask (255 = set) -> base64 PNG text, how test_camera.py stores the painted ignore mask in the config."""
+    ok, buf = cv2.imencode(".png", np.where(mask > 0, 255, 0).astype(np.uint8))
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def decode_mask(text):
+    """encode_mask() back to a uint8 mask (255 = set)."""
+    m = cv2.imdecode(np.frombuffer(base64.b64decode(text), np.uint8), cv2.IMREAD_GRAYSCALE)
+    if m is None:
+        raise ValueError("bad ignore mask PNG")
+    return np.where(m > 127, 255, 0).astype(np.uint8)
+
+
+def camera_seen_mask(det, size):
+    """What the camera may look at, in camera-frame pixels (before the rotation), from test_camera.py's config:
+    inside the mirror circle ("mirror_crop": cx, cy, r) and not painted in the ignore mask ("ignore_mask": base64
+    PNG, 255 = ignore - the mirror mount bars, our own body...). uint8, 255 = seen. None = no crop and no mask."""
+    w, h = size
+    crop, ign = det.get("mirror_crop"), det.get("ignore_mask")
+    if not crop and not ign:
+        return None
+    seen = np.full((h, w), 255, np.uint8)
+    if crop:
+        seen[:] = 0
+        cv2.circle(seen, (int(round(crop["cx"])), int(round(crop["cy"]))), int(round(crop["r"])), 255, -1)
+    if ign:
+        m = decode_mask(ign["png"])
+        if m.shape != (h, w):
+            m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+        seen[m > 0] = 0
+    return seen
+
+
 class RobotVision:
     def __init__(self, path="robot_vision_config.json"):
         with open(path) as f:
@@ -394,8 +441,11 @@ class RobotVision:
             by = min(max(self.robot_centre[1], 0), bh - 1)
             self.centre = _rotate_point((bx, by), (bw, bh), self.rotation)
 
-        # ignore box: cm around the robot centre (new configs), or the old fixed pixel box
+        # ignore box: cm around the robot centre (older configs; now the robot body is painted in the ignore mask
+        # instead), or the old fixed pixel box
         ign = det.get("ignore_cm")
+        if ign and not any(ign.values()):
+            ign = None
         if ign and self._radial is not None:
             xs, ys = self.to_px(np.array([-ign["left"], ign["right"]], np.float64),
                                 np.array([ign["front"], -ign["back"]], np.float64))
@@ -405,11 +455,17 @@ class RobotVision:
             ppc = self.px_per_cm
             box = (cx - ign["left"] * ppc, cy - ign["front"] * ppc, cx + ign["right"] * ppc, cy + ign["back"] * ppc)
         else:
-            box = det["ignore_box"]                          # x1, y1, x2, y2 in the robot-aligned frame
+            box = det.get("ignore_box") or (0, 0, 0, 0)     # x1, y1, x2, y2 in the robot-aligned frame
         self.ignore_box = tuple(max(int(round(v)), 0) for v in box)
+
+        # mirror crop + painted ignore mask (test_camera.py): masked pixels never get a colour and don't count as seen
+        seen = camera_seen_mask(det, self.size)
+        self.seen = None if seen is None else self.warp.mask(seen)
 
         # pixels the camera actually sees (the top-down remap leaves black where there is no image)
         valid = self.warp.valid
+        if self.seen is not None:
+            valid = cv2.bitwise_and(valid, self.seen)
         if self._radial is not None:                        # only as far out as the distance calibration goes
             ring = np.zeros_like(valid)
             cv2.circle(ring, tuple(int(round(v)) for v in self.centre), int(self._radial[0][-1]), 255, -1)
@@ -443,7 +499,11 @@ class RobotVision:
         return ctrl
 
     def apply_camera(self, cam):
-        cam.set_controls(self.camera_controls)
+        ctrl = self.camera_controls
+        have = getattr(cam, "camera_controls", None)
+        if isinstance(have, dict) and have:   # e.g. no AfMode/LensPosition (focus) on the HQ camera
+            ctrl = {k: v for k, v in ctrl.items() if k in have}
+        cam.set_controls(ctrl)
 
     # ---- heading
     def effective_yaw(self, yaw_deg):
@@ -503,6 +563,8 @@ class RobotVision:
         labels = self.warp.labels(self.classify(raw[y:y + h, x:x + w]))
         x1, y1, x2, y2 = self.ignore_box
         labels[y1:y2, x1:x2] = 0                             # the robot's own body
+        if self.seen is not None:                            # mirror crop + painted ignore mask
+            labels = cv2.bitwise_and(labels, self.seen)
         if self._far_keep is not None:
             labels = cv2.bitwise_or(open_bits(labels, self.morph_kernel), cv2.bitwise_and(labels, self._far_keep))
         else:

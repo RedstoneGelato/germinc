@@ -30,6 +30,8 @@ TURN_DEADBAND = 0.03 # rad: closer than this to the wanted heading = stop turnin
 TURN_RESUME = 0.10   # ...and don't start again until it's this far off (no jitter / battery drain sitting still)
 PARK_ENTER = 2.0     # cm: this close to the target = stop moving (wheels off)...
 PARK_RESUME = 5.0    # ...until the target is this far away again (pose / ball noise moves it by a cm or two)
+BRAKE_LEAD = 12.0    # TUNE: cm the robot still travels at full speed (BASE_SPEED) before slowing down takes effect
+                     # (velocity smoothing + motor lag + camera delay): the line slowdown starts this much earlier
 
 
 def dribble_speed_multi(move, compass):
@@ -80,7 +82,9 @@ class Mover:
             rot = cfg.BASE_SPEED * turn_max * max(-1.0, min(1.0, heading_error / cfg.TURN_FULL_ERR))
 
         # ---- moving
-        desired_pos = limit_outward(desired_pos, pose) #slow down before the boundary (needs a confident pose)
+        # near the boundary only the part of the movement heading at the line slows down (limit_outward on `want`
+        # below), so the speed comes from the whole distance: sliding along the line stays full speed
+        reachable = limit_outward(desired_pos, pose) #where it can actually get to without going out (for parking)
         spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),110),0) # cm (was 220 old units)
         if spd_multi is None:
             spd_multi = 0.00004 * (spd_scale_helper ** 2) + 0.004 * spd_scale_helper + 0.1 #quadratic scaling of speed, further the bot wants to go, faster itll go
@@ -88,12 +92,15 @@ class Mover:
         speed = base_speed * spd_multi * line.speed_multi
         if dribbler_on:
             speed *= dribble_speed_multi(desired_pos, compass)
-        d = math.hypot(desired_pos[0], desired_pos[1])
+        d = math.hypot(reachable[0], reachable[1])
         if d < PARK_ENTER and not dribbler_on:
             self.parked = True
         elif d > PARK_RESUME or dribbler_on:
             self.parked = False           # (never parked with the ball: carrying / aiming needs fine moves)
-        want = [0.0, 0.0] if self.parked or d < 0.5 else [desired_pos[0] / d * speed, desired_pos[1] / d * speed]
+        dist = math.hypot(desired_pos[0], desired_pos[1])
+        want = [0.0, 0.0] if self.parked or d < 0.5 else [desired_pos[0] / dist * speed, desired_pos[1] / dist * speed]
+        lead = [v / cfg.BASE_SPEED * BRAKE_LEAD for v in self.vel]    # where our current speed takes us first
+        want = limit_outward(want, pose, lead) #slow only the part heading at the line: the more perpendicular to it, the slower
 
         if line.on_line and line.escape is not None:
             self.vel = [line.escape[0] * cfg.LINE_ESCAPE_SPEED, line.escape[1] * cfg.LINE_ESCAPE_SPEED]  # straight away from the line

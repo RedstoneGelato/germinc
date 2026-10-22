@@ -14,7 +14,7 @@ The work lives in:
 Before running: tune the camera in test_camera.py ON THIS ROBOT and press "Generate config file"
 (robot_vision_config.json is per robot), then check detections + localisation in test_localisation.py.
 """
-from common import CameraWatch
+from common import CameraWatch, own_goal_ahead
 from utils import wrap_pi
 from strategy import GoalieStrategy
 
@@ -60,10 +60,14 @@ class GoalieBrain:
 #            sensors -> world
 #----------------------------------------------------------------------
         pose = bot.loc.get()
+        if bot.check_heading(det, pose.dh): # goals say the compass is the wrong way round (put back after damage)
+            self.log("heading turned round from the goals")
+            pose = bot.loc.get()
         compass = wrap_pi(bot.imu.compass() + pose.dh) #bot heading, with localisation's correction from the lines
         mate = bot.comms.teammate() #other bot's latest message, None if the bots aren't connected
         world = bot.world
-        world.update(frame_id, det, pose, bot.attack, mate) #uses the teammate's ball when we can't see it
+        ir = bot.pcb.ir_snapshot() if hasattr(bot.pcb, "ir_snapshot") else None #IR ring (None = no IR)
+        world.update(frame_id, det, pose, bot.attack, mate, ir) #uses IR / the teammate's ball when we can't see it
         line = bot.lines.update(colours, compass, world.line_pts, pose) #LDR ring + camera + pose
 
 #----------------------------------------------------------------------
@@ -73,7 +77,8 @@ class GoalieBrain:
 
         speeds = bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed,
                                 dribbler_on=dribbler_on) #slower the more sideways/backwards it moves while dribbling
-        bot.actuate(speeds, dribbler_on, strategy.kick)
+        kick = strategy.kick and not own_goal_ahead(det, bot.attack) # never at our own goal, whatever the compass says
+        bot.actuate(speeds, dribbler_on, kick)
         if hasattr(strategy, "note_kick"):
             strategy.note_kick()
 
@@ -84,6 +89,7 @@ class GoalieBrain:
             "bot active": 1,
             "chasing": strategy.chasing, #going for the ball
             "has ball": world.ball_in_capture, #ball in our dribbler
+            "clear": getattr(strategy, "clear_plan", None), #goalie: [x, y, heading] of the clear kick it's about to do
             "pos": [round(pose.x), round(pose.y)] if pose.confident else None,
             "ball": [round(v) for v in world.ball_own_field] if world.ball_own_field else None, #own camera only
             "opps": [[round(v) for v in o] for o in world.opponents_own], #opponent robots our camera sees (centres)

@@ -13,7 +13,16 @@ import math
 TEAM_ID = "GERM_INC"
 COMMS_PORT = 5555
 
-SWITCH_PIN = 25            # on/off switch, GPIO to ground
+SWITCH_PIN = 25            # start/stop input: the referee's comms module (OUT1), or our own on/off switch (REF_MODULE)
+REF_MODULE = True          # True = SWITCH_PIN is wired to the RCJ comms module OUT1: 3.3 V = PLAY, 0 V = STOP. Pulled
+                           # down, so a loose wire / module off = stopped. False = our old switch, GPIO to ground, closed = paused
+ZERO_MAX_ERR = 0.17        # rad (10 deg) - while paused the heading is only re-zeroed if the robot already faces within
+                           # this of forward (put down facing the goal again), so a robot the referee stopped facing
+                           # sideways keeps its heading. See common.Robot.zero_heading.
+GOAL_SWITCH_PIN = 26       # attack-goal switch, wired the same way (GPIO to ground)
+GOAL_SWITCH_CLOSED = "yellow"   # goal we attack with the goal switch closed (pin to ground); open = the other goal.
+                                # Swap to "blue" if the robots go for the wrong goal.
+GOAL_FROM_CAMERA = False   # True = ignore the goal switch and work the goal out from the camera while paused (old way)
 
 VISION_CONFIG = "robot_vision_config.json"   # made by test_camera.py -> "Generate config file"
 VISION_MAX_FPS = 50        # TUNE: camera frame rate cap. Without one picamera2 runs the camera as fast as the sensor
@@ -32,6 +41,10 @@ ROBOT_RADIUS = 11.0                         # TUNE: centre to bumper
 # (sim, deck 4 cm: a ball in the dribbler is seen at y 13.9-14.2, |x| < 2; one 3 cm out of the dribbler at 15.3)
 CAPTURE_ZONE = (-5.0, 5.0, ROBOT_RADIUS - 3.0, ROBOT_RADIUS + 4.0)
 BALL_RADIUS = 2.1                          # cm - CHECK the ball you use
+BALL_BLIND_RING = 2.0                      # cm: the camera can't see the ball while its near edge is within this of our
+                                           # bumper (too close / camera angles), so it never sees one in the dribbler.
+                                           # perception.py then relies on the IR ring, or (no IR) assumes a ball that
+                                           # vanished out of the capture zone is still in the dribbler. 0 = it can see it
 
 # ---- out of bounds: a robot is only out once NO part of it touches the white line
 LINE_TOUCH_SAFETY = 6.0                    # cm of robot that must still be over the line at the furthest out we go
@@ -44,6 +57,15 @@ LDR_COUNT = 32
 LDR_LINE_THRESHOLD = 1500                  # reading below this = white line
 LDR_START_ANGLE = math.pi / 2              # sensor 0 is at the front, numbering goes anticlockwise
 LED_BRIGHTNESS_START = 40000               # 0 - 65535
+
+# ---- IR ball sensors (ring of TSSPs for the pulsed ball): bearing to the ball + a rough strength, also where the camera
+# can't see it (the ~2 cm blind ring right round the bumper, the mirror mount bars' slices, robots in the way)
+IR_COUNT = 12                              # CHECK: sensors evenly round the robot (the sim assumes 12: 3-4 see the ball)
+IR_START_ANGLE = math.pi / 2               # sensor 0 at the front, numbering goes anticlockwise (like the LDRs)
+IR_ON_PCB = False                          # True once the PCB sends the IR readings (hardware.PCBThread, command 0x02:
+                                           # IR_COUNT x uint16, 0 = sensor not picking the ball up, IR_RAW_MAX = strongest).
+                                           # False = no IR: the robot code keeps the last camera ball for a moment instead
+IR_RAW_MAX = 1000                          # TUNE: raw reading of a sensor with the ball right next to it
 
 # ---- motion
 BASE_SPEED = 80000000

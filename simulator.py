@@ -13,11 +13,13 @@ localisation, perception, line fusion, strategy and motion. Only the hardware is
              at CAM_RES pixels (so things far away get small and blurry like on the real camera). Robots, the ball
              and the goal walls stand up: they hide whatever is behind them, and our own deck hides the floor
              near us. Then the raw image (robot_vision "radial" mode) or its top-down view, the real
-             vision.py (masks -> detection) -> localisation.py
+             vision.py (masks -> detection) -> localisation.py. The ball isn't seen at all within BALL_BLIND_RING
+             (2 cm) of our bumper - so never in the dribbler
+    IR ring  cfg.IR_COUNT ball sensors: bearing + strength, 3-4 active, none while the ball is off the field (IR_*)
     LDRs     32 readings: white line under the sensor = low reading, green = high
     IMU      the true heading (+ drift with noise on)
     comms    the two robots' my_state handed straight to each other
-    switch   per robot, P key
+    switch   per robot, P key; the goal switch set for the goal each team attacks
     motors   the 4 motor speeds -> robot movement with an ideal omni-wheel model
     dribbler holds the ball in the capture notch while on (loses it when spinning / moving sideways or backwards
              too fast, or when an opponent touches it)
@@ -27,8 +29,8 @@ localisation, perception, line fusion, strategy and motion. Only the hardware is
              a robot fully out -> taken off as damaged for DAMAGED_TIME s or until the next kickoff
              (a robot only gets a dribbler / kicker if its hardware_attack.py / hardware_defense.py has one)
 
-NOT simulated (so test these on the real robot): mirror / lens / calibration errors, the mirror's mounting (rods or
-tube), the real image being left-right flipped by the mirror, real lighting, motor wiring/sign mistakes
+NOT simulated (so test these on the real robot): mirror / lens / calibration errors, glare off the mirror's mounting
+(its two bars DO block their slices of the view, MOUNT_BAR_*), the real image being left-right flipped by the mirror, real lighting, motor wiring/sign mistakes
 (the sim assumes VelocityToMotor's output moves the robot the way the code intends), real dribbler grip.
 
 Mouse:  left-drag  move the ball / a robot / an opponent
@@ -131,12 +133,32 @@ MIRROR_USE_HALF = 31.0       # deg, half-angle of the camera's view the mirror r
 MIRROR_RIM_ELEV = -3.0       # deg, rim ray from the viewpoint (below the horizon: the rim sees the floor ~4 m away)
 CAM_RES = 400                # px across the mirror circle in the image. ~784 in the 1536x864 binned mode, ~350 at
                              # 640x480. Far things are only a few px (a ball at 2 m is ~8 px at 784, ~4 px at 400)
+# camera mount: two vertical bars beside the mirror, front-to-back along the robot's left and right sides. With the
+# camera on the mirror's axis each bar blinds one fixed slice of the 360 deg view at every distance (things beyond
+# it in that direction are never seen), atan(w/2 / (R - w/2)) either side: 2.7 deg for 1 cm at 11 cm = 5.5 deg a bar.
+# The sim's vision config gets an ignore mask over those slices, like the one you paint in test_camera.py.
+MOUNT_BAR_W = 1.0            # cm, bar width (10 x 10 mm bars)
+MOUNT_BAR_R = 11.0           # cm, mirror axis to the bar's centre
+MOUNT_BAR_ANGLES = (90.0, -90.0)   # deg from the robot's front, + = left. () = no bars
+MOUNT_BAR_HALF = math.atan((MOUNT_BAR_W / 2) / (MOUNT_BAR_R - MOUNT_BAR_W / 2))   # rad, half the slice a bar blinds
+MOUNT_MASK_MARGIN = 0.5      # deg painted past each edge of a bar in the sim's ignore mask (a brush isn't exact)
 OWN_DECK_HEIGHT = 4.0        # cm, top of our own body around the mast. It hides the floor near the robot: out to
                              # ROBOT_RADIUS * H / (H - OWN_DECK_HEIGHT) from the centre (13.5 cm at 4 cm, 17.6 at 8).
                              # Above ~5 cm the camera can't see a ball in the dribbler at all (needs a ball sensor)
 ROBOT_HEIGHT = 18.0          # cm, other robots as solid cylinders this tall: they hide everything behind them (seen
                              # from the mirror's viewpoint ~21 cm up, a robot hides a long wedge of floor behind it)
 GOAL_HEIGHT = 10.0           # cm, goal walls (solid boxes, also hide what's behind them)
+BALL_BLIND_RING = cfg.BALL_BLIND_RING   # cm (robot_config): the camera never sees the ball while its near edge is
+                             # within this of our bumper (too close / too steep for the mirror): ball centre closer than ROBOT_RADIUS + BALL_BLIND_RING +
+                             # BALL_RADIUS (15.1 cm) to ours. So a ball in the dribbler (centre 13.1) is never seen - the
+                             # IR ring (IR_*) has to find it. 0 = off (the old sim: only the deck hid the ball)
+# IR ball sensors (the pulsed RCJ ball): cfg.IR_COUNT sensors evenly round the robot, numbered like the LDRs (sensor 0
+# at the front, anticlockwise). Bearing + strength only. The ball off the field = none active.
+IR_HALF_FOV = 55.0           # deg: a sensor picks the ball up within this either side of where it points (12 sensors:
+                             # 3 or 4 active at any time)
+IR_NEAR = 20.0               # cm: closer than this every active sensor reads full strength (1.0); further = IR_NEAR / d
+IR_NOISE = 0.1               # strength noise (x the reading)
+SIM_IR = True                # the sim robots have the IR ring (whatever cfg.IR_ON_PCB says). False = camera only
 TOPDOWN_PPC = 2.0            # px/cm of the top-down view handed to robot_vision (when robot_vision has no "radial"
                              # mode). Use >= 2 on the real robot too: at 1 px/cm a 4 cm ball is so small the noise
                              # filter removes it
@@ -253,18 +275,42 @@ def radial_calibration():
     return {"table_px": (MIRROR_FPX * np.tan(MIRROR_TH[keep])).tolist(), "table_cm": MIRROR_DIST[keep].tolist()}
 
 
+def bar_angle_off(az):
+    """How far (rad) direction(s) az (0 = robot front, + = left) are from the nearest mount bar's centre line."""
+    az = np.asarray(az, np.float64)
+    off = np.full(az.shape, np.inf)
+    for a in MOUNT_BAR_ANGLES:
+        off = np.minimum(off, np.abs((az - math.radians(a) + math.pi) % (2 * math.pi) - math.pi))
+    return off
+
+
+def bar_pixels(size, half):
+    """(size, size) bool: pixels of a centred radial image (the raw mirror image or its top-down view, front = up)
+    whose direction is within `half` rad of a mount bar."""
+    j, i = np.meshgrid(np.arange(size) + 0.5, np.arange(size) + 0.5)
+    dx, dy = j - size / 2.0, size / 2.0 - i
+    return bar_angle_off(np.arctan2(-dx, dy)) < half
+
+
 def sim_vision_config():
-    """robot_vision config for the sim camera. Uses the ignore box from your real config if there is one."""
+    """robot_vision config for the sim camera. Uses the ignore box from your real config if there is one, and an
+    ignore mask over the mount bars (what you'd paint in test_camera.py)."""
     ignore = {"left": 11.0, "right": 11.0, "back": 11.0, "front": 5.0}
     real = os.path.join(HERE, cfg.VISION_CONFIG)
     if os.path.exists(real):
         import json
         with open(real) as f:
-            ignore = json.load(f)["detection"].get("ignore_cm") or ignore
+            real_ign = json.load(f)["detection"].get("ignore_cm")
+        if real_ign and any(real_ign.values()):      # (a painted mask instead: keep the sim's box for our body)
+            ignore = real_ign
+    det = {"ignore_cm": ignore, "min_blob_area": 50, "morph_kernel": 3}
+    if MOUNT_BAR_ANGLES and hasattr(_vision_mod, "encode_mask"):
+        bars = bar_pixels(CAM_SIZE, MOUNT_BAR_HALF + math.radians(MOUNT_MASK_MARGIN))
+        det["ignore_mask"] = {"size": [CAM_SIZE, CAM_SIZE], "png": _vision_mod.encode_mask(bars.astype(np.uint8) * 255)}
     return {
         "version": 1, "capture_size": [CAM_SIZE, CAM_SIZE], "rotation": "NONE",
         "camera": {"controls": {}}, "hsv": SIM_HSV,
-        "detection": {"ignore_cm": ignore, "min_blob_area": 50, "morph_kernel": 3},
+        "detection": det,
         "lens": None, "undistort_view": {"balance": 1, "fov_scale": 1}, "topdown": None,
         "radial": radial_calibration() if RADIAL else None,
         "robot_centre": None, "heading": {"align_to_field": False, "invert": False, "offset_deg": 0},
@@ -279,6 +325,10 @@ def make_rv():
         json.dump(sim_vision_config(), f)
     rv = RobotVision(path)
     fov = np.zeros((CAM_SIZE, CAM_SIZE), np.uint8)
+    if MOUNT_BAR_ANGLES:     # (also for a robot_vision without ignore masks: at least don't call the bars obstacles)
+        bars = bar_pixels(CAM_SIZE, MOUNT_BAR_HALF + math.radians(MOUNT_MASK_MARGIN))
+        rv.valid = rv.valid.copy()
+        rv.valid[cv2.dilate(bars.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0] = 0
     if RADIAL:      # robot_vision works out the scale, ignore box and calibrated circle itself; add the mirror circle
         cv2.circle(fov, (CAM_SIZE // 2, CAM_SIZE // 2), int(rv.radius_px(VIEW_RADIUS)) - 2, 255, -1)
         rv.valid = cv2.bitwise_and(rv.valid, cv2.erode(fov, np.ones((5, 5), np.uint8)))
@@ -326,14 +376,19 @@ def box_shadow(corners, height):
     return np.vstack([corners, _lift(corners, height)])
 
 
-def ray_hidden(sim, r, pts, z=0.0, exclude=None):
+def ray_hidden(sim, r, pts, z=0.0, exclude=None, size=0.0):
     """Which robot-frame points (N, 2) at height z the mirror on robot r can't see because another robot is in the
     way (the ray from the viewpoint, VIEW_Z up, passes through a ROBOT_HEIGHT cylinder before reaching them) or
-    because our own deck hides them. Used by fast mode; the full camera renders the same thing."""
+    because our own deck hides them, or a mount bar does (size = the thing's radius, cm: a bar only hides it if all
+    of it is behind the bar). Used by fast mode; the full camera renders the same thing."""
     pts = np.asarray(pts, np.float64).reshape(-1, 2)
     dist = np.hypot(pts[:, 0], pts[:, 1])
     hidden = dist * (VIEW_Z - OWN_DECK_HEIGHT) / max(VIEW_Z - z, 1e-3) < cfg.ROBOT_RADIUS   # under our own deck line
     hidden |= dist > VIEW_RADIUS
+    if MOUNT_BAR_ANGLES:                                   # behind a mirror mount bar
+        half_size = np.arcsin(np.minimum(size / np.maximum(dist, 1e-6), 1.0))
+        bar_half = MOUNT_BAR_HALF + math.radians(MOUNT_MASK_MARGIN)       # (what the ignore mask blanks)
+        hidden |= (bar_angle_off(np.arctan2(-pts[:, 0], pts[:, 1])) + half_size < bar_half) & (dist > MOUNT_BAR_R)
     u = pts / np.maximum(dist, 1e-6)[:, None]
     for b in sim.on_field:
         if b is r or b is exclude:
@@ -349,6 +404,27 @@ def ray_hidden(sim, r, pts, z=0.0, exclude=None):
     return hidden
 
 
+def ball_view(sim, r):
+    """Why robot r's camera can or can't see the ball right now (from the truth): "off" (off the field), "ring" (in the
+    blind ring round our bumper, BALL_BLIND_RING), "range" (too far), "bar" (behind a mirror mount bar), "robot"
+    (behind another robot, or our own deck) or "clear" (it should be seen)."""
+    if sim.ball[0] > BALL_PARK[0] / 2:
+        return "off"
+    p = rotate([sim.ball[0] - r.x, sim.ball[1] - r.y], -r.h)
+    d = math.hypot(p[0], p[1])
+    if BALL_BLIND_RING > 0 and d - BALL_RADIUS < cfg.ROBOT_RADIUS + BALL_BLIND_RING:
+        return "ring"
+    if d > FAST_BALL_RANGE:
+        return "range"
+    if MOUNT_BAR_ANGLES and d > MOUNT_BAR_R:
+        half_size = math.asin(min(BALL_RADIUS / d, 1.0))
+        if bar_angle_off(np.array([math.atan2(-p[0], p[1])]))[0] + half_size < MOUNT_BAR_HALF + math.radians(MOUNT_MASK_MARGIN):
+            return "bar"
+    if ray_hidden(sim, r, [p], 2 * BALL_RADIUS)[0]:
+        return "robot"
+    return "clear"
+
+
 class OmniCamera:
     """Pi Camera Module 3 Wide looking up into the hyperbolic omni mirror. The mirror has a single viewpoint VIEW_Z
     up, so the image is that point's view in every direction: image angle = direction from the robot, image
@@ -359,7 +435,7 @@ class OmniCamera:
     painted on that, (3) a fixed remap to the mirror image. Then (only without radial mode) another fixed remap to
     the top-down view, like robot_vision's calibration.
     Not modelled: the mirror image is left-right flipped on the real camera (the sim's is already turned the right
-    way round), mirror mounting rods / tube glare, focus blur, robots' own colours (all drawn dark)."""
+    way round), glare off the mirror mount (its bars are drawn: MOUNT_BAR_*), focus blur, robots' own colours (all drawn dark)."""
     SS = 2   # supersampling when rendering the raw image (pixels average over their area, like a real sensor)
 
     def __init__(self):
@@ -402,6 +478,8 @@ class OmniCamera:
             map_x[fov == 0] = -10
             map_y[fov == 0] = -10
             self.top_maps = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
+        # the mount bars: dark slices of the image (things beyond a bar, in its direction, are never seen)
+        self.bar_px = bar_pixels(CAM_RES, MOUNT_BAR_HALF) if MOUNT_BAR_ANGLES else None
         self.goal_boxes = [("yellow" if y0 + y1 > 0 else "blue", np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float))
                            for x0, x1, y0, y1 in GOAL_WALLS]
 
@@ -442,6 +520,8 @@ class OmniCamera:
             cv2.fillConvexPoly(ego, hull, colour, cv2.LINE_8, shift=2)
         img = cv2.remap(ego, *self.lens_maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         img = cv2.resize(img, (CAM_RES, CAM_RES), interpolation=cv2.INTER_AREA)
+        if self.bar_px is not None:
+            img[self.bar_px & (img.max(axis=2) > 0)] = ROBOT     # (outside the mirror stays black)
         if noise_rng is not None:      # pixel noise: a random pick from a bank of noise frames, randomly shifted
             if not hasattr(self, "noise_bank"):
                 self.noise_bank = [noise_rng.normal(0, 8, img.shape).astype(np.int16) for _ in range(16)]
@@ -533,8 +613,8 @@ class SimIMU:
     def heading(self):
         return self.body.h + self.drift
 
-    def zero(self):
-        self.heading_offset = self.heading
+    def zero(self, facing=0.0):
+        self.heading_offset = self.heading - facing
 
     def compass(self):
         return wrap_pi(self.heading - self.heading_offset)
@@ -580,9 +660,13 @@ class SimKicker:
 class SimPCB:
     def __init__(self):
         self.colours = [LDR_GREEN] * cfg.LDR_COUNT
+        self.ir = [0.0] * getattr(cfg, "IR_COUNT", 0) if SIM_IR else []
 
     def snapshot(self):
         return list(self.colours)
+
+    def ir_snapshot(self):
+        return list(self.ir) if self.ir else None
 
     def set_brightness(self, value):
         pass
@@ -598,6 +682,19 @@ class SimComms:
         if self.enabled and self.partner is not None and self.partner.enabled:
             return dict(self.partner.my_state)
         return None
+
+
+class SimGoalSwitch:
+    """The attack-goal switch (common.Robot.goal_switch), set the way the team would set it: we attack yellow, the
+    opponents blue."""
+
+    def __init__(self, body):
+        self.body = body
+
+    @property
+    def is_active(self):
+        attack = "yellow" if self.body.team == "us" else "blue"
+        return attack == cfg.GOAL_SWITCH_CLOSED
 
 
 class SimVision:
@@ -618,6 +715,7 @@ class SimBot(Robot):
 
     def __init__(self, body, rv, hw, code):
         self.imu = SimIMU(body)
+        self.goal_switch = SimGoalSwitch(body)
         self.motors = SimMotors(hw.DRIBBLER is not None)
         self.kicker = None if hw.KICKER_PIN is None else SimKicker(hw.KICK_COOLDOWN)
         self.pcb = SimPCB()
@@ -744,6 +842,7 @@ class Sim:
         self.goal_timer = None
         self.loc_err = {r.name: [] for r in self.robots}
         self.rng = np.random.default_rng(seed)
+        self.ir_rng = np.random.default_rng(300 + seed)   # (its own stream: the IR ring doesn't change the other noise)
         self.faults = None        # faults.FaultInjector: break our robots on purpose (--faults)
         self.kickoff()
 
@@ -823,7 +922,7 @@ class Sim:
     def camera(self, img, robot):
         """Omni mirror image from the robot (robot front = up) -> what robot_vision gets from the real camera after
         its calibration: the raw mirror image (radial mode) or its top-down view."""
-        ball = None if self.ball[0] > BALL_PARK[0] / 2 else self.ball
+        ball = None if ball_view(self, robot) in ("off", "ring") else self.ball
         raw = self.cam.render(img, robot, self.rng if self.noise else None, self.on_field, ball)
         return self.cam.topdown(raw)        # (outside the mirror / fov circle is already black)
 
@@ -854,6 +953,41 @@ class Sim:
             out = out + np.array([int(n) for n in self.rng.normal(0, 150, len(out))])
         return [int(o) for o in out]
 
+    _IR_DIRS = None     # sensor directions (robot frame, rad, 0 = right, anticlockwise)
+
+    def ir(self, robot):
+        """IR ring readings, 0..1 per sensor (0 = not picking the ball up): every sensor pointing within IR_HALF_FOV of
+        the ball sees it, strongest near its axis, all full strength within IR_NEAR. Not modelled: robots in the way
+        (IR gets round / reflects more than visible light), reflections off the walls, sunlight."""
+        n = getattr(cfg, "IR_COUNT", 0)
+        if not n or not SIM_IR:
+            return []
+        if Sim._IR_DIRS is None:
+            Sim._IR_DIRS = np.array([cfg.IR_START_ANGLE + i * 2 * math.pi / n for i in range(n)])
+        if self.ball[0] > BALL_PARK[0] / 2:
+            return [0.0] * n
+        p = rotate([self.ball[0] - robot.x, self.ball[1] - robot.y], -robot.h)
+        d = max(math.hypot(p[0], p[1]), 1.0)
+        a = math.atan2(p[1], p[0])
+        off = np.abs((Sim._IR_DIRS - a + math.pi) % (2 * math.pi) - math.pi) / math.radians(IR_HALF_FOV)
+        s = min(1.0, IR_NEAR / d)
+        val = np.where(off < 1.0, s * (1.0 - 0.6 * off ** 2), 0.0)
+        if self.noise:
+            val = val * (1.0 + self.ir_rng.normal(0, IR_NOISE, n))
+        return [float(min(max(v, 0.0), 1.0)) for v in val]
+
+    def ball_stats(self):
+        """Per camera frame, for each of our robots: why it can / can't see the ball (ball_view), whether the camera
+        found it, and where the robot code's ball came from (World.ball_source) -> self.events "ballview ..."."""
+        for r in self.robots:
+            if r.paused or r.removed_until is not None or r.return_at is not None:
+                continue
+            why = ball_view(self, r)
+            seen = r.bot.vision.detections is not None and r.bot.vision.detections.ball is not None
+            self.count(f"ballview {r.name} {why} {'seen' if seen else 'unseen'}")
+            if why != "off":
+                self.count(f"ballview {r.name} {why} code:{getattr(r.bot.world, 'ball_source', '?')}")
+
     # ---- one tick
     def step(self):
         _SIM_T[0] += DT
@@ -882,6 +1016,7 @@ class Sim:
         if self.ticks % PCB_EVERY == 0:
             for r in self.players:
                 r.bot.pcb.colours = self.ldrs(r)
+                r.bot.pcb.ir = self.ir(r)
         if self.noise:
             for r in self.players:
                 r.bot.imu.drift += self.rng.normal(0, 0.0005)
@@ -892,6 +1027,8 @@ class Sim:
             else:
                 r.brain.tick(r.paused)       # <- the real robot code
             r.drive(DT)
+        if self.ticks % CAMERA_EVERY == 0:
+            self.ball_stats()
         self.move_opponents()
         self.physics()
         self.bookkeeping()
@@ -1313,16 +1450,17 @@ def fast_detect(sim, r, ignore):
     def to_robot(px, py):
         return rotate([px - r.x, py - r.y], -r.h)
 
-    def hidden(p, z=0.0, exclude=None):   # inside the ignore box (our own body), or something's in the way
+    def hidden(p, z=0.0, exclude=None, size=0.0):   # inside the ignore box (our own body), or something's in the way
         return (-ignore["left"] < p[0] < ignore["right"] and -ignore["back"] < p[1] < ignore["front"]) or \
-            bool(ray_hidden(sim, r, [p], z, exclude)[0])
+            bool(ray_hidden(sim, r, [p], z, exclude, size)[0])
 
     # ball: nearest point
     dx, dy = sim.ball[0] - r.x, sim.ball[1] - r.y
     d = math.hypot(dx, dy)
-    if 1e-6 < d < FAST_BALL_RANGE:
+    in_ring = BALL_BLIND_RING > 0 and d - BALL_RADIUS < cfg.ROBOT_RADIUS + BALL_BLIND_RING
+    if 1e-6 < d < FAST_BALL_RANGE and not in_ring:
         near = to_robot(sim.ball[0] - dx / d * BALL_RADIUS, sim.ball[1] - dy / d * BALL_RADIUS)
-        if not hidden(to_robot(*sim.ball), 2 * BALL_RADIUS):     # its top still shows = found
+        if not hidden(to_robot(*sim.ball), 2 * BALL_RADIUS, size=BALL_RADIUS):     # its top still shows = found
             s = 0.3 + 0.01 * d
             det.ball = [near[0] + rng.normal(0, s), near[1] + rng.normal(0, s)]
     # goals: nearest coloured point + centre
@@ -1343,7 +1481,7 @@ def fast_detect(sim, r, ignore):
             continue
         dx, dy = b.x - r.x, b.y - r.y
         d = math.hypot(dx, dy)
-        if b.r < d < 90.0 and not hidden(to_robot(b.x, b.y), ROBOT_HEIGHT, b):
+        if b.r < d < 90.0 and not hidden(to_robot(b.x, b.y), ROBOT_HEIGHT, b, b.r):
             near = to_robot(b.x - dx / d * b.r, b.y - dy / d * b.r)
             centre = to_robot(b.x, b.y)
             n = rng.normal(0, 1.0, 2)

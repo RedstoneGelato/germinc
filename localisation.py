@@ -43,6 +43,10 @@ RANDOM_FRACTION = 0.02         # particles re-spawned uniformly at each resample
 SEED_FRACTION = 0.2            # particles re-spawned around position_from_goals() when lost
 CONFIDENT_STD = 15.0           # cm spread below which the estimate is trusted
 LOST_STD = 40.0
+KIDNAP_DIST = 50.0             # cm: confident, but the goals put us this far off in y ...
+KIDNAP_FRAMES = 15             # ... this many frames in a row -> we were moved (referee: multiple defence, put on a
+                               # neutral spot while still running): start again from where the goals say
+KIDNAP_SPREAD = 25.0
 VEL_SMOOTH = 0.3               # velocity estimate smoothing (0..1, higher = faster response)
 VEL_MAX = 250.0                # cm/s
 # compass correction: the IMU is zeroed by hand ("facing forward" is never exactly forward) and drifts, and a few
@@ -87,6 +91,7 @@ class Localiser:
         self.vel = np.zeros(2)
         self.dh = 0.0                # compass correction (radians, + = turn the seen points CCW)
         self._settled = 0            # confident frames in a row
+        self._kidnap = 0             # frames in a row the goals have disagreed with a confident estimate
         self._last_est = None
         self._last_t = None
         self.reset_uniform()
@@ -236,7 +241,18 @@ class Localiser:
             self.correct_walls(*walls)
 
         x, y, std = self.estimate()
-        seed = position_from_goals(attack_near_rel, own_near_rel) if std > LOST_STD else None
+        from_goals = position_from_goals(attack_near_rel, own_near_rel)
+        if std < CONFIDENT_STD and from_goals is not None and abs(from_goals[1] - y) > KIDNAP_DIST:
+            self._kidnap += 1
+        else:
+            self._kidnap = 0
+        if self._kidnap >= KIDNAP_FRAMES:   # sure of the wrong place (the robust goal step can't pull it over)
+            self._kidnap = 0
+            self.reset_to(from_goals[0], from_goals[1], KIDNAP_SPREAD)
+            self._settled = 0
+            self._last_est = None
+            x, y, std = self.estimate()
+        seed = from_goals if std > LOST_STD else None
         self.resample_if_needed(seed)
         self._settled = self._settled + 1 if std < CONFIDENT_STD else 0
         if HEADING_FIX and self._settled > HEADING_SETTLE:

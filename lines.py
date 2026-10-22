@@ -32,6 +32,7 @@ IGNORE_INNER_LINES = False      # True: confident pose + far from the boundary -
 INNER_CLEARANCE = 15.0          # cm robot centre must be inside the boundary for an LDR hit to count as an inner line
 SLOW_START = 20.0               # cm (robot centre to the furthest-out allowed position): start limiting outward speed
 SLOW_STOP = 2.0                 # cm: outward speed is zero here
+OUTWARD_STD = 15.0              # pose spread (cm) below which limit_outward() slows down (localisation's CONFIDENT_STD)
 W_LDR, W_CAM, W_POSE = 1.0, 0.7, 1.0   # escape direction blend
 SPEED_MULTI = {0: 1, 1: 0.6, 2: 0.5, 3: 0.3, 4: 0.1}  # by number of line touches in the last 3 s
 
@@ -162,18 +163,24 @@ def out_limits(x):
             field.boundary_y(x, cfg.ROBOT_RADIUS) + cfg.MAX_OUT)
 
 
-def limit_outward(vec, pose):
+def limit_outward(vec, pose, lead=(0.0, 0.0)):
     """Scale down the part of a desired movement (relative) that heads out of the field when the robot gets close
-    to the furthest-out allowed position. Only with a precise pose; otherwise returns vec unchanged."""
-    if pose is None or pose.std >= cfg.PRECISE_STD:
+    to the furthest-out allowed position. lead = cm the robot will still travel (relative, field axes) before a
+    slower command takes effect (motion.Mover: its current velocity x BRAKE_LEAD): moving fast, the slowdown starts
+    that much earlier. With a precise pose up to the furthest-out position; with a pose that's only confident, its
+    spread beyond PRECISE_STD further in (slowing down is always safe; skipping it there let a fast robot run into the wall).
+    Without a confident pose returns vec unchanged."""
+    if pose is None or pose.std >= OUTWARD_STD:
         return vec
+    unsure = max(0.0, pose.std - cfg.PRECISE_STD)
     out = list(vec)
     lim_x, lim_y = out_limits(pose.x)
     for axis, lim in ((0, lim_x), (1, lim_y)):
         p = pose.x if axis == 0 else pose.y
         if out[axis] * p <= 0:          # moving inwards (or not at all) on this axis
             continue
-        gap = lim - abs(p)
+        ahead = max(0.0, lead[axis] * math.copysign(1.0, p))    # already moving outwards: will get this much closer
+        gap = lim - unsure - abs(p) - ahead
         f = min(max((gap - SLOW_STOP) / (SLOW_START - SLOW_STOP), 0.0), 1.0)
         out[axis] *= f
     return out

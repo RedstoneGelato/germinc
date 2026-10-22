@@ -217,7 +217,20 @@ def main():
         print("time per robot state (% of game):")
         for k, v in sorted(ph.items()):
             print(f"  {k:40s} {100 * v / total:5.1f}%")
-    print("events:", ", ".join(f"{k} {v:.0f}" for k, v in sorted(ev.items())))
+    print("events:", ", ".join(f"{k} {v:.0f}" for k, v in sorted(ev.items()) if not k.startswith("ballview ")))
+    for who in ("striker", "goalie"):   # simulator.Sim.ball_stats: why our robots' cameras could / couldn't see the ball
+        bv = {k[10 + len(who):]: v for k, v in ev.items() if k.startswith(f"ballview {who} ")}
+        frames = sum(v for k, v in bv.items() if k.endswith("seen"))
+        if not frames:
+            continue
+        print(f"ball vs our {who}'s camera (% of its camera frames while playing; code: where its robot code's ball came from):")
+        for why in ("clear", "ring", "bar", "robot", "range", "off"):
+            n = bv.get(f"{why} seen", 0) + bv.get(f"{why} unseen", 0)
+            if not n:
+                continue
+            src = "  ".join(f"{k.split(':')[1]} {100 * v / n:.0f}%" for k, v in sorted(bv.items())
+                            if k.startswith(f"{why} code:"))
+            print(f"  {why:6s} {100 * n / frames:5.1f}%  camera found it {100 * bv.get(f'{why} seen', 0) / n:3.0f}%   code: {src}")
     print(f"\nvs {os.path.basename(os.path.normpath(args.opp))}: goals {us}-{them}  W/D/L {w}/{d}/{len(results) - w - d}  "
           f"({len(results)} games x {args.seconds:.0f} s, {time.perf_counter() - t0:.0f} s)")
 

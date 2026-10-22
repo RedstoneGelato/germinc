@@ -404,7 +404,8 @@ is the robot's own code. Only the hardware is fake:
 
 | Real | Simulated |
 | --- | --- |
-| camera + omni mirror + distance calibration | the field as the camera sees it in the hyperbolic mirror (`MIRROR_*` settings, from `hardware/omni_mirror_calc.py`) at `CAM_RES` pixels across the mirror (far things get small and blurry like the real one). Robots (`ROBOT_HEIGHT`), the ball and the goal walls (`GOAL_HEIGHT`) are solid: they hide whatever is behind them, and our own deck (`OWN_DECK_HEIGHT`) hides the floor near us. The raw image goes to `vision.py`'s RobotVision radial mode with the pixels → cm curve worked out from the mirror (or, without radial mode, a `TOPDOWN_PPC` px/cm top-down view), then the real masks and `detect()`. Fast mode hides the same things |
+| camera + omni mirror + distance calibration | the field as the camera sees it in the hyperbolic mirror (`MIRROR_*` settings, from `hardware/omni_mirror_calc.py`) at `CAM_RES` pixels across the mirror (far things get small and blurry like the real one). Robots (`ROBOT_HEIGHT`), the ball and the goal walls (`GOAL_HEIGHT`) are solid: they hide whatever is behind them, and our own deck (`OWN_DECK_HEIGHT`) hides the floor near us. The raw image goes to `vision.py`'s RobotVision radial mode with the pixels → cm curve worked out from the mirror (or, without radial mode, a `TOPDOWN_PPC` px/cm top-down view), then the real masks and `detect()`. Fast mode hides the same things. The ball is never seen within `BALL_BLIND_RING` (2 cm) of our bumper, so not in the dribbler either |
+| IR ball ring | `robot_config.IR_COUNT` (12) sensors round the robot: each one within `IR_HALF_FOV` of the ball reads its strength (full within `IR_NEAR`), so 3-4 are active; none while the ball is off the field. `perception.py` uses the bearing whenever the camera loses the ball (blind ring, mount bars, robots in the way). `SIM_IR = False` = camera only |
 | dribbler | holds the ball in the capture notch while on; loses it when spinning faster than `DRIBBLE_MAX_SPIN`, moving sideways / backwards faster than `DRIBBLE_MAX_SIDE`, or when an opponent touches it. A ball squeezed between two robots: the contacts are handled in a random order each tick (a fixed order let one robot shove the other back at full speed) |
 | kicker | ball leaves at `KICK_SPEED` (+ robot speed), cooldown from the hardware file |
 | goals | solid side and back walls (`GOAL_WALL_T` thick): the ball bounces off them, robots can't drive through them, so goals only count through the front |
@@ -422,7 +423,7 @@ as `test_localisation.py` (`c` switches to the raw colour masks). The keys are l
 `simulator.py`. `r` picks up the selected robot and drops it somewhere random, to test relocalisation.
 
 Settings to make it match the real robots (top of `simulator.py`): `TOP_SPEED` / `TOP_SPIN` (measure them),
-`CAMERA_EVERY` (camera fps), `MIRROR_*` / `CAM_RES` (mirror and capture size), `OWN_DECK_HEIGHT` / `ROBOT_HEIGHT` (what hides what), `BALL_RADIUS`, `KICK_SPEED`,
+`CAMERA_EVERY` (camera fps), `MIRROR_*` / `CAM_RES` (mirror and capture size), `OWN_DECK_HEIGHT` / `ROBOT_HEIGHT` / `BALL_BLIND_RING` (what hides what), `SIM_IR` / `IR_*` (IR ball ring), `BALL_RADIUS`, `KICK_SPEED`,
 `LDR_PHYSICAL_OFFSET` (where LDR 0 physically is, see the comment there).
 
 **Many games at once (`arena.py`):** one game proves little (a lucky bounce decides it), so to check a strategy

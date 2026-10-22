@@ -28,7 +28,7 @@ Per robot:
 - Raspberry Pi 5 (active cooler installed)
 - Raspberry Pi HQ Camera
 - Adafruit BNO085 IMU
-- Custom PCB (IR ball sensors removed: the ball is found by the camera)
+- Custom PCB (LDR ring; IR ball ring for where the camera can't see the ball - robot_config.IR_*, IR_ON_PCB)
   - 1x STM32H503RBT6 Microcontroller
   - 32x KT-0603W LEDs
   - 32x ALS-PT19-315C/L177/TR8 LDRs

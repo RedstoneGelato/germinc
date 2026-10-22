@@ -2,18 +2,6 @@
 field.py - the field model used for localisation.
 
 Field frame: origin = field centre, +y = towards the goal we attack, +x = right when facing it, units = cm.
-
-Shape (field diagram, Oct 2026): the playing area is a rectangle. The white boundary line runs straight across the
-goal mouths. Each goal's mouth is on the INNER edge of that line (the goal line, 91.5 cm from the centre) and the goal
-reaches GOAL_DEPTH back from there, so its walls stand on the line and the back sticks out a little past it. The goal
-floor counts as part of the playing area:
-
-               +------+               <- goal back wall, GOAL_DEPTH behind the goal line
-   ------------|------|------------   <- white boundary line (outer edge at PLAY_L / 2), straight across the goal
-   |           +      +           |   <- goal line = inner edge of the white line, the goal posts are on it
-
-!! Check every number below against this year's RCJ Soccer rules AND measure the actual competition field.
-   Fields are often a few cm off, and that matters more than anything else in the localisation.
 """
 import math
 

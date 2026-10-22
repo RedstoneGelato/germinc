@@ -14,7 +14,7 @@ The work lives in:
 Before running: tune the camera in test_camera.py ON THIS ROBOT and press "Generate config file"
 (robot_vision_config.json is per robot: each camera has its own lens, mounting and robot centre).
 """
-from common import CameraWatch
+from common import CameraWatch, own_goal_ahead
 from utils import wrap_pi
 from strategy import StrikerStrategy
 
@@ -61,10 +61,14 @@ class StrikerBrain:
 #            sensors -> world
 #----------------------------------------------------------------------
         pose = bot.loc.get()
+        if bot.check_heading(det, pose.dh): # goals say the compass is the wrong way round (put back after damage)
+            self.log("heading turned round from the goals")
+            pose = bot.loc.get()
         compass = wrap_pi(bot.imu.compass() + pose.dh) #bot heading, with localisation's correction from the lines
         mate = bot.comms.teammate() #other bot's latest message, None if the bots aren't connected
         world = bot.world
-        world.update(frame_id, det, pose, bot.attack, mate) #uses the teammate's ball when we can't see it
+        ir = bot.pcb.ir_snapshot() if hasattr(bot.pcb, "ir_snapshot") else None #IR ring (None = no IR)
+        world.update(frame_id, det, pose, bot.attack, mate, ir) #uses IR / the teammate's ball when we can't see it
         line = bot.lines.update(colours, compass, world.line_pts, pose) #LDR ring + camera + pose
 
 #----------------------------------------------------------------------
@@ -74,7 +78,8 @@ class StrikerBrain:
 
         speeds = bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed,
                                 dribbler_on=dribbler_on) #slower the more sideways/backwards it moves while dribbling
-        bot.actuate(speeds, dribbler_on, strategy.kick)
+        kick = strategy.kick and not own_goal_ahead(det, bot.attack) # never at our own goal, whatever the compass says
+        bot.actuate(speeds, dribbler_on, kick)
 
 #----------------------------------------------------------------------
 #            comms to other bot

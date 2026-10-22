@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
 test_camera.py - headless camera test + calibration + colour-tuning tool for the soccer robot.
-
+ 
 Run on the Pi (no monitor needed):
     python3 test_camera.py                 # web UI on port 8000, reads the BNO08x over I2C
     python3 test_camera.py --port 8080 --imu-bitbang D6,D5     # IMU on bit-banged I2C (SCL,SDA board pins)
     python3 test_camera.py --no-imu        # no IMU: use the manual yaw slider
-
+ 
 Then on your laptop open  http://<pi-ip>:8000
 or, to get a real "localhost" URL, tunnel it:
     ssh -L 8000:localhost:8000 <user>@<pi-ip>     ->  http://localhost:8000
-
+ 
 There is no login on this server - only run it on a network you trust.
-
+ 
 Tabs
     Masks         annotated frame + one mask per colour (blue, yellow, white, green, orange)
     Detect        the annotated frame on its own (goal detection)
@@ -20,23 +20,29 @@ Tabs
     Calibrate     live checkerboard detection for fisheye calibration
     Undistorted   fisheye correction (balance / zoom-out sliders decide how much edge is kept)
     Top-down      ground-plane bird's-eye view, built straight from the raw fisheye image
-
+ 
 Pipeline on every frame:
     raw --(fisheye model + floor homography, ONE remap, nothing is cropped by undistortion)--> top-down
-        --> ROTATION (camera mounting) --> colour masks (ignore box = robot body, robot frame)
+        --> ROTATION (camera mounting) --> colour masks (minus the painted ignore mask and outside the mirror crop)
         --> rotate by IMU yaw about the robot centre (field-aligned) --> goal detection
-
+ 
+Ignore mask + mirror crop (panel "Ignore mask & mirror crop", on the Raw tab): paint over everything that must never
+be detected (the mirror mount bars, our own body), and crop the whole feed to a circle = the mirror, so nothing on
+the ceiling or past the mirror's rim is ever seen. Both are in raw camera pixels, so they follow the camera, not the
+field, and work in every mode (radial, top-down, undistorted).
+ 
 Export: the "Generate config file" button writes robot_vision_config.json, which vision.py (RobotVision) loads in the robot script.
-
+ 
 Heading: this script reads the BNO08x itself (adafruit_bno08x over I2C) and rotates the frame by its yaw.
 It owns the I2C bus, so don't run it next to the robot code. If the IMU can't be read, the manual
 yaw slider is used instead and the Live panel says why.
-
+ 
 All slider values are saved to settings.json next to this file and reloaded at start-up.
-
+ 
 Only needs: picamera2, opencv, numpy (web server is pure standard library).
 """
 import argparse
+import base64
 import copy
 import datetime
 import json
@@ -48,16 +54,16 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
-
+ 
 import cv2
 import numpy as np
 import picamera2
-
+ 
 # =============================== CONFIG ====================================
-
+ 
 CAPTURE_SIZE = (640, 480)
 ROTATION = cv2.ROTATE_90_CLOCKWISE  # camera mounting; applied after undistort/top-down
-
+ 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CALIB_FILE = os.path.join(HERE, "fisheye_calib.npz")
 CALIB_FRAMES_FILE = os.path.join(HERE, "calib_frames.npz")   # every captured board's corners (send it if calibration fails)
@@ -65,24 +71,23 @@ CAL_MAX_RMS = 3.0              # px: a worse fit is not saved or used (it blacke
 TOPDOWN_FILE = os.path.join(HERE, "topdown.npz")
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
 EXPORT_FILE = os.path.join(HERE, "robot_vision_config.json")   # made by the "Generate config file" button
-
-# Ignore box (the robot's own body): cm from the robot centre in each direction, front = up in the robot frame.
-# Applied in the ROBOT-ALIGNED frame (after ROTATION, before yaw alignment), so it follows the robot.
-# Keep "front" small so the ball in the capture zone stays visible. Tuned with the sliders, saved in settings.json.
-DEFAULT_IGNORE = {"left": 11.0, "right": 11.0, "back": 11.0, "front": 5.0}
-IGNORE_LIMITS = (0.0, 40.0)
-FALLBACK_PX_PER_CM = 1.0  # used for the ignore box when there is no top-down setup (raw/undistorted frames)
+ 
+# Ignore mask: painted in the web page over the RAW camera frame (255 = never detect anything there: the mirror mount
+# bars, our own body - keep the front clear so a ball in the dribbler is still seen). Mirror crop: only the inside of
+# this circle of the raw frame is used. Both saved in settings.json and exported to robot_vision_config.json.
+DEFAULT_CROP = {"enabled": False, "cx": CAPTURE_SIZE[0] / 2.0, "cy": CAPTURE_SIZE[1] / 2.0,
+                "r": min(CAPTURE_SIZE) / 2.0}
 MIN_BLOB_AREA = 280
 KERNEL = np.ones((3, 3), np.uint8)
-
+ 
 MAX_TOPDOWN_SIDE = 1600  # sanity limit for the top-down output image
 ALIGN_MAX_SIDE = 1000    # max side of the field-aligned canvas (keeps rotation cheap on the Pi)
-
+ 
 COLOURS = ["blue", "yellow", "white", "green", "orange"]
 # BGR colour each mask is painted with in the Masks tab
 MASK_BGR = {"blue": (255, 90, 0), "yellow": (0, 255, 255), "white": (255, 255, 255),
             "green": (0, 200, 0), "orange": (0, 140, 255)}
-
+ 
 # HSV in OpenCV units: H 0-179, S 0-255, V 0-255.  blue/yellow are your old values;
 # white/green/orange are just starting points - tune them with the sliders.
 DEFAULT_HSV = {
@@ -93,27 +98,31 @@ DEFAULT_HSV = {
     "orange": {"lo": [5, 150, 150],  "hi": [18, 255, 255]},
 }
 HSV_LIMITS = (179, 255, 255)
-
+ 
 # Same behaviour as your original script by default: auto exposure, manual white balance.
 # NOTE: libcamera's ColourGains order is (RED gain, BLUE gain).
+# Focus (Camera Module 3 only - ignored on cameras without autofocus, e.g. the HQ camera):
+#   af = continuous autofocus; off = lens held at lens_position, in dioptres = 1000 / focus distance in mm
+#   (12.5 = 80 mm, about where the mirror's image of the field sits; 0 = infinity).
 DEFAULT_CAMERA = {"ae": True, "awb": False,
                   "exposure_us": 10000, "analogue_gain": 1.0,
-                  "red_gain": 2.4, "blue_gain": 2.7}
+                  "red_gain": 2.4, "blue_gain": 2.7,
+                  "af": False, "lens_position": 12.5}
 CAMERA_LIMITS = {"exposure_us": (20, 100000), "analogue_gain": (1.0, 16.0),
-                 "red_gain": (0.1, 8.0), "blue_gain": (0.1, 8.0)}
-
+                 "red_gain": (0.1, 8.0), "blue_gain": (0.1, 8.0), "lens_position": (0.0, 15.0)}
+ 
 # How the Undistorted tab is cut out of the fisheye image (does NOT affect the top-down view).
 #   balance 0 = crop to the clean centre (edges lost), 1 = keep everything (black borders)
 #   fov_scale > 1 = zoom out further
 DEFAULT_UNDISTORT = {"balance": 1.0, "fov_scale": 1.0}
 UNDISTORT_LIMITS = {"balance": (0.0, 1.0), "fov_scale": (1.0, 4.0)}
-
+ 
 # Heading: enabled = rotate the frame by yaw; invert = flip the yaw sign; offset = degrees that count as "forward"
 DEFAULT_YAW = {"enabled": False, "invert": False, "offset": 0.0, "manual": 0.0}
-
+ 
 # ============================== SETTINGS ===================================
-
-
+ 
+ 
 def clean_hsv(entry):
     lo, hi = list(entry["lo"]), list(entry["hi"])
     if len(lo) != 3 or len(hi) != 3:
@@ -124,15 +133,15 @@ def clean_hsv(entry):
         if lo[i] > hi[i]:
             lo[i], hi[i] = hi[i], lo[i]
     return {"lo": lo, "hi": hi}
-
-
+ 
+ 
 def wrap180(a):
     return (a + 180.0) % 360.0 - 180.0
-
-
+ 
+ 
 class Config:
     """All tunable settings. Sub-dicts are replaced (never mutated) so other threads read consistent values."""
-
+ 
     def __init__(self):
         self.lock = threading.Lock()
         self.hsv = copy.deepcopy(DEFAULT_HSV)
@@ -140,16 +149,18 @@ class Config:
         self.undistort = dict(DEFAULT_UNDISTORT)
         self.yaw = dict(DEFAULT_YAW)
         self.robot = None   # [x, y] in the image that goes into ROTATION; None = image centre
-        self.ignore = dict(DEFAULT_IGNORE)
+        self.mask = None    # painted ignore mask: uint8 (h, w) raw-frame pixels, 255 = ignore; None = nothing painted
+        self.crop = dict(DEFAULT_CROP)
+        self.seen_ver = 0   # +1 every time the mask or crop changes (cached views of them are rebuilt)
         self.radial = {"points": [], "coeffs": None, "r_max_px": None, "rms_cm": None}   # distance calibration
         self.arrays = {}
         self.load()
         self._rebuild()
-
+ 
     def _rebuild(self):
         self.arrays = {n: (np.array(e["lo"], np.uint8), np.array(e["hi"], np.uint8))
                        for n, e in self.hsv.items()}
-
+ 
     def load(self):
         if not os.path.exists(SETTINGS_FILE):
             return
@@ -168,7 +179,9 @@ class Config:
                         "offset": float(y["offset"]), "manual": max(-180.0, min(float(y["manual"]), 180.0))}
             r = d.get("robot")
             self.robot = [float(r[0]), float(r[1])] if r else None
-            self.ignore = self._clamp_ignore({**DEFAULT_IGNORE, **d.get("ignore", {})})
+            if d.get("ignore_mask"):
+                self.mask = mask_from_png(base64.b64decode(d["ignore_mask"]))
+            self.crop = self._clamp_crop({**DEFAULT_CROP, **d.get("mirror_crop", {})})
             rd = d.get("radial")
             if rd:
                 self.radial = {"points": [[float(a), float(b)] for a, b in rd.get("points", [])],
@@ -176,16 +189,17 @@ class Config:
                                "r_max_px": rd.get("r_max_px"), "rms_cm": rd.get("rms_cm"), "model": rd.get("model")}
         except (OSError, ValueError, KeyError, TypeError, IndexError) as e:
             print(f"[warn] could not read {SETTINGS_FILE}: {e!r} - using defaults for what failed")
-
+ 
     def save(self):
         with self.lock:
             data = {"hsv": self.hsv, "camera": self.camera, "undistort": self.undistort,
-                    "yaw": self.yaw, "robot": self.robot, "ignore": self.ignore, "radial": self.radial}
+                    "yaw": self.yaw, "robot": self.robot, "radial": self.radial, "mirror_crop": self.crop,
+                    "ignore_mask": None if self.mask is None else mask_b64(self.mask)}
         tmp = SETTINGS_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, SETTINGS_FILE)
-
+ 
     # ---- HSV
     def set_hsv(self, name, lo, hi):
         entry = clean_hsv({"lo": lo, "hi": hi})
@@ -193,15 +207,15 @@ class Config:
             self.hsv[name] = entry
             self._rebuild()
         return entry
-
+ 
     def reset_hsv(self, name):
         return self.set_hsv(name, DEFAULT_HSV[name]["lo"], DEFAULT_HSV[name]["hi"])
-
+ 
     # ---- camera
     def set_camera(self, partial):
         with self.lock:
             cam = dict(self.camera)
-            for k in ("ae", "awb"):
+            for k in ("ae", "awb", "af"):
                 if k in partial:
                     cam[k] = bool(partial[k])
             for k, (lo, hi) in CAMERA_LIMITS.items():
@@ -210,17 +224,17 @@ class Config:
             cam["exposure_us"] = int(cam["exposure_us"])
             self.camera = cam
             return dict(cam)
-
+ 
     # ---- undistort view
     @staticmethod
     def _clamp_undistort(u):
         return {k: max(lo, min(float(u[k]), hi)) for k, (lo, hi) in UNDISTORT_LIMITS.items()}
-
+ 
     def set_undistort(self, partial):
         with self.lock:
             self.undistort = self._clamp_undistort({**self.undistort, **partial})
             return dict(self.undistort)
-
+ 
     # ---- heading
     def set_yaw(self, partial):
         with self.lock:
@@ -234,26 +248,67 @@ class Config:
                 y["offset"] = wrap180(float(partial["offset"]))
             self.yaw = y
             return dict(y)
-
+ 
     def set_robot(self, xy):
         with self.lock:
             self.robot = None if xy is None else [float(xy[0]), float(xy[1])]
-
-    # ---- ignore box (robot body)
+ 
+    # ---- ignore mask + mirror crop (raw frame pixels)
     @staticmethod
-    def _clamp_ignore(ign):
-        lo, hi = IGNORE_LIMITS
-        return {k: max(lo, min(float(ign[k]), hi)) for k in DEFAULT_IGNORE}
-
-    def set_ignore(self, partial):
+    def _clamp_crop(c):
+        w, h = CAPTURE_SIZE
+        return {"enabled": bool(c["enabled"]), "cx": max(0.0, min(float(c["cx"]), w)),
+                "cy": max(0.0, min(float(c["cy"]), h)), "r": max(5.0, min(float(c["r"]), max(w, h)))}
+ 
+    def set_crop(self, partial):
         with self.lock:
-            self.ignore = self._clamp_ignore({**self.ignore, **partial})
-            return dict(self.ignore)
-
-
+            self.crop = self._clamp_crop({**self.crop, **partial})
+            self.seen_ver += 1
+            return dict(self.crop)
+ 
+    def set_mask(self, mask):
+        with self.lock:
+            self.mask = None if mask is None or not mask.any() else mask
+            self.seen_ver += 1
+ 
+    def seen_raw(self):
+        """(version, uint8 raw-frame mask: 255 = used, 0 = painted or outside the mirror crop) or (version, None)."""
+        with self.lock:
+            mask, crop, ver = self.mask, dict(self.crop), self.seen_ver
+        if mask is None and not crop["enabled"]:
+            return ver, None
+        w, h = CAPTURE_SIZE
+        seen = np.full((h, w), 255, np.uint8)
+        if crop["enabled"]:
+            seen[:] = 0
+            cv2.circle(seen, (int(round(crop["cx"])), int(round(crop["cy"]))), int(round(crop["r"])), 255, -1)
+        if mask is not None:
+            seen[mask > 0] = 0
+        return ver, seen
+ 
+ 
+def mask_from_png(data):
+    """PNG bytes -> uint8 CAPTURE_SIZE mask, 255 = ignore. A PNG with transparency (the web page's paint layer) uses its
+    alpha, otherwise its brightness."""
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError("not a PNG image")
+    if img.ndim == 3:
+        img = img[:, :, 3] if img.shape[2] == 4 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if (img.shape[1], img.shape[0]) != CAPTURE_SIZE:
+        img = cv2.resize(img, CAPTURE_SIZE, interpolation=cv2.INTER_NEAREST)
+    return np.where(img > 127, 255, 0).astype(np.uint8)
+ 
+ 
+def mask_b64(mask):
+    """uint8 mask -> base64 PNG text (the format vision.py's decode_mask() reads)."""
+    ok, buf = cv2.imencode(".png", mask)
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+ 
+ 
 CFG = Config()
-
-
+ 
+ 
 def camera_controls(c):
     ctrl = {"AeEnable": bool(c["ae"]), "AwbEnable": bool(c["awb"])}
     if not c["ae"]:
@@ -261,9 +316,26 @@ def camera_controls(c):
         ctrl["AnalogueGain"] = float(c["analogue_gain"])
     if not c["awb"]:
         ctrl["ColourGains"] = (float(c["red_gain"]), float(c["blue_gain"]))
+    # AfMode: 0 = manual (lens stays at LensPosition), 2 = continuous autofocus
+    ctrl["AfMode"] = 2 if c["af"] else 0
+    if not c["af"]:
+        ctrl["LensPosition"] = float(c["lens_position"])
     return ctrl
-
-
+ 
+ 
+def supported_controls(cam, ctrl):
+    """Drop controls this camera doesn't have (no AfMode/LensPosition on the HQ camera), so set_controls won't fail."""
+    have = getattr(cam, "camera_controls", None)
+    if not isinstance(have, dict) or not have:
+        return ctrl
+    return {k: v for k, v in ctrl.items() if k in have}
+ 
+ 
+def has_focus(cam):
+    have = getattr(cam, "camera_controls", None)
+    return isinstance(have, dict) and "LensPosition" in have
+ 
+ 
 def python_snippet():
     with CFG.lock:
         hsv = copy.deepcopy(CFG.hsv)
@@ -272,50 +344,51 @@ def python_snippet():
     for n in COLOURS:
         lines.append(f"LOWER_{n.upper()} = np.array({hsv[n]['lo']})")
         lines.append(f"UPPER_{n.upper()} = np.array({hsv[n]['hi']})")
-    lines += ["", "# camera (picamera2); ColourGains order is (red_gain, blue_gain)",
+    lines += ["", "# camera (picamera2); ColourGains order is (red_gain, blue_gain); AfMode 0 = manual focus at",
+              "# LensPosition dioptres (1000 / mm), 2 = continuous autofocus. Drop AfMode/LensPosition on the HQ camera.",
               f"cam.set_controls({camera_controls(cam)!r})"]
     return "\n".join(lines)
-
+ 
 # ================================ HEADING ==================================
-
-
+ 
+ 
 class Heading:
     """Latest yaw from the IMU thread. Falls back to the manual slider when there is no fresh reading."""
     LIVE_TIMEOUT = 1.0
-
+ 
     def __init__(self):
         self.lock = threading.Lock()
         self.live = None
         self.t = 0.0
-
+ 
     def push(self, deg):
         with self.lock:
             self.live, self.t = float(deg), time.time()
-
+ 
     def read(self, manual):
         with self.lock:
             live, t = self.live, self.t
         if live is not None and time.time() - t < self.LIVE_TIMEOUT:
             return live, "imu"
         return manual, "manual"
-
-
+ 
+ 
 HEADING = Heading()
-
-
+ 
+ 
 def effective_yaw(raw_deg, ycfg):
     sign = -1.0 if ycfg["invert"] else 1.0
     return wrap180(sign * raw_deg - ycfg["offset"])
-
-
+ 
+ 
 IMU_STATE = {"state": "off", "msg": "not started"}
-
-
+ 
+ 
 def quat_to_yaw_deg(x, y, z, w):
     """Yaw (rotation about the vertical axis) in degrees, counter-clockwise positive, range -180..180."""
     return math.degrees(math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
-
-
+ 
+ 
 def imu_loop(addr, bitbang, report):
     """Reads the BNO08x and pushes its yaw into HEADING. Runs in its own thread and is the only user of the I2C bus.
     report: "game" = game rotation vector (gyro+accel, relative to power-on, immune to magnets/motors)
@@ -351,11 +424,11 @@ def imu_loop(addr, bitbang, report):
             time.sleep(0.1)
             continue
         time.sleep(0.01)
-
-
+ 
+ 
 # ============================ COLOUR / GOAL DETECTION ======================
-
-
+ 
+ 
 def merge_blobs(mask, min_size):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     x_min = y_min = float('inf')
@@ -371,44 +444,29 @@ def merge_blobs(mask, min_size):
     if x_min < x_max and y_min < y_max:
         return [x_min, y_min, x_max - x_min, y_max - y_min]
     return [0, 0, 0, 0]
-
-
-def ignore_rect(centre, px_per_cm, ign, shape):
-    """Ignore box (x1, y1, x2, y2) in pixels of the robot-aligned frame, from cm offsets around the robot centre."""
-    h, w = shape[:2]
-    cx, cy = centre
-    x1 = int(round(cx - ign["left"] * px_per_cm))
-    x2 = int(round(cx + ign["right"] * px_per_cm))
-    y1 = int(round(cy - ign["front"] * px_per_cm))
-    y2 = int(round(cy + ign["back"] * px_per_cm))
-    return max(x1, 0), max(y1, 0), min(max(x2, 0), w), min(max(y2, 0), h)
-
-
-def ignore_rect_radial(centre, radial, ign, shape):
-    """ignore_rect() for the raw fisheye: each side's cm turned into pixels with the distance calibration curve
-    (the same box vision.py's RobotVision uses in its "radial" mode)."""
-    h, w = shape[:2]
-    cx, cy = centre
-    tp, tc = np.array(radial["table_px"]), np.maximum.accumulate(np.array(radial["table_cm"]))
-    px = {k: float(np.interp(v, tc, tp)) for k, v in ign.items()}
-    x1, x2 = int(round(cx - px["left"])), int(round(cx + px["right"]))
-    y1, y2 = int(round(cy - px["front"])), int(round(cy + px["back"]))
-    return max(x1, 0), max(y1, 0), min(max(x2, 0), w), min(max(y2, 0), h)
-
-
-def compute_masks(frame, hsv_cfg, rect):
-    """Masks in the robot-aligned frame (ignore box applied here, so it follows the robot body)."""
+ 
+ 
+def compute_masks(frame, hsv_cfg, seen):
+    """Masks in the robot-aligned frame. seen = uint8 in the same frame, 0 = ignore mask / outside the mirror crop
+    (None = use everything)."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    x1, y1, x2, y2 = rect
     masks = {}
     for name in COLOURS:
         lo, hi = hsv_cfg[name]
         m = cv2.inRange(hsv, lo, hi)
-        m[y1:y2, x1:x2] = 0
+        if seen is not None:
+            m = cv2.bitwise_and(m, seen)
         masks[name] = cv2.morphologyEx(m, cv2.MORPH_OPEN, KERNEL)
     return masks
-
-
+ 
+ 
+def shade_unseen(img, unseen):
+    """Ignored pixels (painted / outside the mirror crop) dark red, so the Masks / Detect tabs show what's left out."""
+    if unseen is not None:
+        img[unseen > 0] = (img[unseen > 0] // 4) + np.uint8([0, 0, 70])
+    return img
+ 
+ 
 def rotate_point(pt, size, code):
     """Where pixel `pt` of a (w,h) image ends up after cv2.rotate(img, code)."""
     x, y = pt
@@ -420,15 +478,15 @@ def rotate_point(pt, size, code):
     if code == cv2.ROTATE_90_COUNTERCLOCKWISE:
         return (y, w - 1 - x)
     return (x, y)
-
-
+ 
+ 
 def robot_base_point(shape, robot):
     h, w = shape[:2]
     if robot is None:
         return (w / 2.0, h / 2.0)
     return (min(max(robot[0], 0), w - 1), min(max(robot[1], 0), h - 1))
-
-
+ 
+ 
 def make_align(shape, centre, angle, enabled):
     """Affine matrix that rotates the robot frame about the robot centre by `angle` degrees
     (counter-clockwise positive) onto a canvas where the robot sits in the middle.
@@ -444,30 +502,24 @@ def make_align(shape, centre, angle, enabled):
     M[0, 2] += side / 2.0 - cx
     M[1, 2] += side / 2.0 - cy
     return M, (side, side), (side / 2.0, side / 2.0)
-
-
-def analyse(frame, masks, centre, M, ignore):
+ 
+ 
+def analyse(frame, masks, centre, M, unseen):
     """Goal detection + annotation on the (possibly field-aligned) frame.
-    ignore = (x1, y1, x2, y2) ignore box in the robot-aligned frame.
-    Returns (annotated, goalpos, own_goalpos, ignore_polygon)."""
+    unseen = uint8 in the same frame, 255 = ignore mask / outside the mirror crop (or None).
+    Returns (annotated, goalpos, own_goalpos)."""
     cx, cy = centre
     blue_box = merge_blobs(masks["blue"], MIN_BLOB_AREA)
     yellow_box = merge_blobs(masks["yellow"], MIN_BLOB_AREA)
-
-    annotated = frame.copy()
-    x1, y1, x2, y2 = ignore
-    rect = np.float64([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
-    poly = np.round(rect @ M[:, :2].T + M[:, 2]).astype(np.int32)
-    cv2.polylines(annotated, [poly], True, (0, 0, 255), 1)
-    tx, ty = int(poly[0][0]), int(poly[0][1])
-    cv2.putText(annotated, "ignore", (max(tx, 0), max(ty - 4, 10)), cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 0, 255), 1)
-
+ 
+    annotated = shade_unseen(frame.copy(), unseen)
+ 
     # robot centre + "front" arrow (points where the robot is facing; use it to check the yaw sign)
     cv2.drawMarker(annotated, (int(cx), int(cy)), (0, 255, 0), cv2.MARKER_CROSS, 8, 1)
     v = M[:, :2] @ np.float64([0, -1])
     cv2.arrowedLine(annotated, (int(cx), int(cy)), (int(cx + 30 * v[0]), int(cy + 30 * v[1])),
                     (0, 255, 0), 1, tipLength=0.3)
-
+ 
     if blue_box != [0, 0, 0, 0]:
         x, y, bw, bh = blue_box
         cv2.rectangle(annotated, (x, y), (x + bw, y + bh), (255, 0, 0), 1)
@@ -476,7 +528,7 @@ def analyse(frame, masks, centre, M, ignore):
         x, y, bw, bh = yellow_box
         cv2.rectangle(annotated, (x, y), (x + bw, y + bh), (255, 0, 255), 1)
         cv2.putText(annotated, "yellow", (x, max(y - 4, 10)), cv2.FONT_HERSHEY_PLAIN, 0.8, (255, 0, 255), 1)
-
+ 
     if yellow_box == [0, 0, 0, 0]:
         goalpos = [0, 200]
     else:
@@ -485,43 +537,43 @@ def analyse(frame, masks, centre, M, ignore):
         own_goalpos = [0, -200]
     else:
         own_goalpos = [blue_box[0] + blue_box[2] - cx, cy - (blue_box[1] + blue_box[3] / 2)]
-    return annotated, goalpos, own_goalpos, poly
-
-
+    return annotated, goalpos, own_goalpos
+ 
+ 
 def tag(img, text):
     """Readable label on any background."""
     cv2.putText(img, text, (4, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 0, 0), 3)
     cv2.putText(img, text, (4, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), 1)
     return img
-
-
-def build_montage(final, annotated, masks, show_bg, poly):
+ 
+ 
+def build_montage(final, annotated, masks, show_bg, unseen):
     """3x2 grid: annotated frame + one painted mask per colour."""
     h, w = annotated.shape[:2]
     scale = min(1.0, 320.0 / max(w, h))
     tw, th = max(1, int(w * scale)), max(1, int(h * scale))
-
+ 
     def fit(img, interp):
         return img if scale == 1.0 else cv2.resize(img, (tw, th), interpolation=interp)
-
+ 
     def border(img):
         cv2.rectangle(img, (0, 0), (img.shape[1] - 1, img.shape[0] - 1), (90, 90, 90), 1)
         return img
-
+ 
     tiles = [border(tag(fit(annotated, cv2.INTER_AREA).copy(), "annotated"))]
     total = float(w * h)
     for name in COLOURS:
         m = masks[name]
         tile = ((final // 4) if show_bg else np.zeros_like(final)).copy()
         tile[m > 0] = MASK_BGR[name]
-        cv2.polylines(tile, [poly], True, (0, 0, 255), 1)
+        shade_unseen(tile, unseen)
         pct = 100.0 * cv2.countNonZero(m) / total
         tiles.append(border(tag(fit(tile, cv2.INTER_NEAREST), f"{name} {pct:.1f}%")))
     return np.vstack([np.hstack(tiles[0:3]), np.hstack(tiles[3:6])])
-
+ 
 # ============================ IMAGE PIPELINE ===============================
-
-
+ 
+ 
 def build_topdown_maps(Hn, out_size, K, D):
     """For every top-down pixel: floor homography -> normalised camera ray -> fisheye model -> RAW pixel.
     One remap straight from the raw fisheye image, so nothing is lost to a rectilinear undistort."""
@@ -540,18 +592,18 @@ def build_topdown_maps(Hn, out_size, K, D):
     mx[bad] = -1
     my[bad] = -1
     return cv2.convertMaps(mx, my, cv2.CV_16SC2)
-
-
+ 
+ 
 class Pipeline:
     """Lens calibration + undistort view + top-down mapping. Safe to swap while running."""
-
+ 
     def __init__(self):
         self.K = self.D = None
         self.und = None       # (map1, map2, new_K) - only for the Undistorted tab
         self.topdown = None   # (map1, map2, out_size, px_per_cm)
         self.Hn = None        # floor homography behind `topdown` (kept so it can be exported)
         self.load()
-
+ 
     def load(self):
         if os.path.exists(CALIB_FILE):
             d = np.load(CALIB_FILE)
@@ -568,11 +620,11 @@ class Pipeline:
                 print(f"[warn] {TOPDOWN_FILE} needs fisheye_calib.npz - ignoring it.")
             else:
                 self.set_topdown(d["Hn"], tuple(int(v) for v in d["out_size"]), float(d["px_per_cm"]), save=False)
-
+ 
     def set_calibration(self, K, D):
         self.K, self.D = K, D
         self.rebuild_undistort()
-
+ 
     def rebuild_undistort(self):
         if self.K is None:
             return
@@ -582,33 +634,33 @@ class Pipeline:
         m1, m2 = cv2.fisheye.initUndistortRectifyMap(
             self.K, self.D, np.eye(3), new_K, CAPTURE_SIZE, cv2.CV_16SC2)
         self.und = (m1, m2, new_K)
-
+ 
     def set_topdown(self, Hn, out_size, px_per_cm, save=True):
         m1, m2 = build_topdown_maps(Hn, out_size, self.K, self.D)
         self.topdown = (m1, m2, out_size, px_per_cm)
         self.Hn = Hn
         if save:
             np.savez(TOPDOWN_FILE, Hn=Hn, out_size=np.array(out_size), px_per_cm=px_per_cm)
-
+ 
     def clear_topdown(self):
         self.topdown = None
         self.Hn = None
         if os.path.exists(TOPDOWN_FILE):
             os.remove(TOPDOWN_FILE)
-
+ 
     def undistort(self, raw):
         u = self.und
         if u is None:
             return None
         return cv2.remap(raw, u[0], u[1], cv2.INTER_LINEAR)
-
+ 
     def to_topdown(self, raw):
         td = self.topdown
         if td is None:
             return None
         return cv2.remap(raw, td[0], td[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-
-
+ 
+ 
 class Shared:
     def __init__(self):
         self.lock = threading.Lock()
@@ -616,8 +668,7 @@ class Shared:
         self.fps = 0.0
         self.raw = self.undist = self.topdown = self.final = self.detect_img = None
         self.masks = None
-        self.poly = None
-        self.ignore_px = None  # ignore box (x1, y1, x2, y2) in the robot-aligned frame, last frame
+        self.unseen = None     # 255 = ignore mask / outside the mirror crop, in the final frame (or None)
         self.goalpos = self.own_goalpos = None
         self.meta = {}        # what the camera is actually using right now
         self.yaw_info = {}
@@ -629,13 +680,33 @@ class Shared:
         self.rms = None
         # frozen RAW frame used for picking the 4 floor points
         self.snapshot = None
-
-
+ 
+ 
 P = Pipeline()
 S = Shared()
 CAM = None
-
-
+ 
+ 
+_SEEN_CACHE = {"key": None, "mask": None}
+ 
+ 
+def seen_in_robot_frame(kind):
+    """The raw-frame ignore mask + mirror crop (CFG.seen_raw) taken through the same geometry as the colour frame
+    (kind: "raw" / "radial" = as it is, "topdown" / "undistort" = their remap), then ROTATION. Cached."""
+    ver, seen = CFG.seen_raw()
+    maps = {"topdown": P.topdown, "undistort": P.und}.get(kind)
+    key = (ver, kind, id(maps))
+    if _SEEN_CACHE["key"] != key:
+        out = None
+        if seen is not None:
+            if maps is not None:
+                seen = cv2.remap(seen, maps[0], maps[1], cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
+                                 borderValue=0)
+            out = cv2.rotate(seen, ROTATION)
+        _SEEN_CACHE.update(key=key, mask=out)
+    return _SEEN_CACHE["mask"]
+ 
+ 
 def capture_loop(cam):
     n, t0 = 0, time.time()
     while True:
@@ -645,17 +716,21 @@ def capture_loop(cam):
             md = req.get_metadata()
         finally:
             req.release()
-
+ 
         und = P.undistort(raw)
         td = P.to_topdown(raw)
         with CFG.lock:
             radial = CFG.radial if CFG.radial.get("table_px") else None
         if radial is not None:
-            base = raw          # distance calibration: the raw fisheye frame, like the robot (no lens / top-down)
+            base, kind = raw, "radial"   # distance calibration: the raw fisheye frame, like the robot (no lens / top-down)
+        elif td is not None:
+            base, kind = td, "topdown"
+        elif und is not None:
+            base, kind = und, "undistort"
         else:
-            base = td if td is not None else (und if und is not None else raw)
+            base, kind = raw, "raw"
         robot_frame = cv2.rotate(base, ROTATION)
-
+ 
         # robot centre in the robot-aligned frame
         rh, rw = robot_frame.shape[:2]
         rcfg = CFG.robot
@@ -664,15 +739,10 @@ def capture_loop(cam):
         else:
             bx, by = robot_base_point(base.shape, rcfg)
             centre = rotate_point((bx, by), (base.shape[1], base.shape[0]), ROTATION)
-
-        tdc = P.topdown
-        if radial is not None:
-            ign = ignore_rect_radial(centre, radial, CFG.ignore, robot_frame.shape)
-        else:
-            ppc = tdc[3] if (td is not None and tdc is not None) else FALLBACK_PX_PER_CM
-            ign = ignore_rect(centre, ppc, CFG.ignore, robot_frame.shape)
-        masks_r = compute_masks(robot_frame, CFG.arrays, ign)
-
+ 
+        seen = seen_in_robot_frame(kind)
+        masks_r = compute_masks(robot_frame, CFG.arrays, seen)
+ 
         # field alignment from IMU yaw
         ycfg = CFG.yaw
         yaw_raw, yaw_src = HEADING.read(ycfg["manual"])
@@ -681,20 +751,21 @@ def capture_loop(cam):
         if ycfg["enabled"]:
             final = cv2.warpAffine(robot_frame, M, size, flags=cv2.INTER_LINEAR)
             masks = {k: cv2.warpAffine(v, M, size, flags=cv2.INTER_NEAREST) for k, v in masks_r.items()}
+            unseen = None if seen is None else cv2.warpAffine(cv2.bitwise_not(seen), M, size, flags=cv2.INTER_NEAREST)
         else:
             final, masks = robot_frame, masks_r
-        annotated, goalpos, own_goalpos, poly = analyse(final, masks, centre_a, M, ign)
-
+            unseen = None if seen is None else cv2.bitwise_not(seen)
+        annotated, goalpos, own_goalpos = analyse(final, masks, centre_a, M, unseen)
+ 
         gains = md.get("ColourGains") or (None, None)
         meta = {"exposure_us": md.get("ExposureTime"), "analogue_gain": md.get("AnalogueGain"),
-                "red_gain": gains[0], "blue_gain": gains[1]}
-
+                "red_gain": gains[0], "blue_gain": gains[1], "lens_position": md.get("LensPosition")}
+ 
         n += 1
         now = time.time()
         with S.lock:
             S.raw, S.undist, S.topdown = raw, und, td
-            S.final, S.detect_img, S.masks, S.poly = final, annotated, masks, poly
-            S.ignore_px = ign
+            S.final, S.detect_img, S.masks, S.unseen = final, annotated, masks, unseen
             S.goalpos, S.own_goalpos, S.meta = goalpos, own_goalpos, meta
             S.yaw_info = {"raw": yaw_raw, "source": yaw_src, "effective": yaw_eff, "enabled": ycfg["enabled"]}
             S.canvas = [size[0], size[1]]
@@ -702,27 +773,29 @@ def capture_loop(cam):
             if now - t0 >= 1.0:
                 S.fps = n / (now - t0)
                 n, t0 = 0, now
-
-
+ 
+ 
 def make_camera():
     cam = picamera2.Picamera2()
     config = cam.create_preview_configuration(main={"size": CAPTURE_SIZE, "format": "RGB888"})
     cam.configure(config)
-    cam.set_controls(camera_controls(CFG.camera))
+    cam.set_controls(supported_controls(cam, camera_controls(CFG.camera)))
+    print("[camera] focus:", ("autofocus" if CFG.camera["af"] else f"manual {CFG.camera['lens_position']:.2f} dioptres")
+          if has_focus(cam) else "this camera has no focus control (setting ignored)")
     cam.start()
     return cam
-
+ 
 # ============================== CALIBRATION ================================
-
+ 
 SUBPIX = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
-
+ 
+ 
 def label(img, text):
     out = img.copy()
     cv2.putText(out, text, (6, 16), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 0, 255), 1)
     return out
-
-
+ 
+ 
 def find_board(gray, cols, rows, fast=False):
     """Find the checkerboard's inner corners. Tries the classic detector, then the more robust sector-based one
     (findChessboardCornersSB), each also on a 2x upscaled image: at low resolution the squares are only a few pixels across,
@@ -747,8 +820,8 @@ def find_board(gray, cols, rows, fast=False):
     if found:
         return True, (corners / 2.0).astype(np.float32)
     return False, None
-
-
+ 
+ 
 def cal_add(cols, rows):
     with S.lock:
         raw = S.raw
@@ -758,13 +831,13 @@ def cal_add(cols, rows):
         return {"ok": False, "msg": "No frame yet."}
     if have and board != (cols, rows):
         return {"ok": False, "msg": f"Board size changed (was {board[0]}x{board[1]}). Press Reset first."}
-
+ 
     gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
     found, corners = find_board(gray, cols, rows)
     if not found:
         return {"ok": False, "msg": "Checkerboard not detected - not saved."}
     corners = cv2.cornerSubPix(gray, corners, (3, 3), (-1, -1), SUBPIX)
-
+ 
     objp = np.zeros((1, cols * rows, 3), np.float32)
     objp[0, :, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2)
     with S.lock:
@@ -778,30 +851,30 @@ def cal_add(cols, rows):
         S.board = (cols, rows)
         n = len(S.obj)
     return {"ok": True, "msg": f"Saved frame {n}."}
-
-
+ 
+ 
 CAL_CRIT = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
 CAL_FLAGS = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW + cv2.fisheye.CALIB_USE_INTRINSIC_GUESS
-
-
+ 
+ 
 CAL_F_SCALES = (1.0, 0.7, 1.4, 0.5, 2.0)   # starting focal lengths tried, x (short side / pi)
-
-
+ 
+ 
 def _cal_guess_K(scale=1.0):
     """Starting guess for the lens: the image circle about as wide as the short side, ~180 degrees across (without a
     guess OpenCV's own often failed on this wide lens - "InitExtrinsics ... norm_u1 > 0"), times `scale`."""
     f = scale * min(CAPTURE_SIZE) / np.pi
     return np.array([[f, 0, CAPTURE_SIZE[0] / 2], [0, f, CAPTURE_SIZE[1] / 2], [0, 0, 1]], np.float64)
-
-
+ 
+ 
 _CAL_SCALE = [1.0]   # the starting guess currently being tried (_robust_calibrate is run once per guess)
-
-
+ 
+ 
 def _cal(obj, img):
     return cv2.fisheye.calibrate(obj, img, CAPTURE_SIZE, _cal_guess_K(_CAL_SCALE[0]), np.zeros((4, 1)), None, None,
                                  CAL_FLAGS, CAL_CRIT)
-
-
+ 
+ 
 def _robust_calibrate(obj, img, min_frames=8):
     """Calibrate, dropping frames OpenCV can't use (alone first, then the one whose removal makes it work) and frames
     whose reprojection error is far above the rest. Returns (rms, K, D, kept indices) or None."""
@@ -836,8 +909,8 @@ def _robust_calibrate(obj, img, min_frames=8):
             continue
         return rms, K, D, keep
     return None
-
-
+ 
+ 
 def cal_run():
     with S.lock:
         obj, img = list(S.obj), list(S.img)
@@ -861,7 +934,7 @@ def cal_run():
     rms, K, D, keep = res
     dropped = len(obj) - len(keep)
     obj, img = [obj[i] for i in keep], [img[i] for i in keep]
-
+ 
     np.savez(CALIB_FILE, K=K, D=D, size=np.array(CAPTURE_SIZE))
     P.set_calibration(K, D)
     had_topdown = P.topdown is not None
@@ -874,8 +947,8 @@ def cal_run():
     if had_topdown:
         msg += " Old top-down setup was cleared - redo it."
     return {"ok": True, "msg": msg}
-
-
+ 
+ 
 def td_apply(body):
     if P.K is None:
         return {"ok": False, "msg": "Calibrate the lens first."}
@@ -893,13 +966,13 @@ def td_apply(body):
         return {"ok": False, "msg": "Need exactly 4 points."}
     if min(w_cm, h_cm, ppc) <= 0 or margin_cm < 0:
         return {"ok": False, "msg": "Width, height and px/cm must be positive."}
-
+ 
     m, w, h = margin_cm * ppc, w_cm * ppc, h_cm * ppc
     out_size = (int(w + 2 * m), int(h + 2 * m))
     if max(out_size) > MAX_TOPDOWN_SIDE:
         return {"ok": False, "msg": f"Output would be {out_size[0]}x{out_size[1]} px - lower px/cm or margin."}
     dst = np.float64([[m, m], [m + w, m], [m + w, m + h], [m, m + h]])
-
+ 
     # clicked pixels (on the RAW fisheye snapshot) -> normalised camera coordinates via the lens model
     norm = cv2.fisheye.undistortPoints(pts.reshape(-1, 1, 2), P.K, P.D).reshape(-1, 2)
     Hn, _ = cv2.findHomography(dst, norm, 0)   # top-down pixel -> normalised camera ray
@@ -916,10 +989,10 @@ def td_apply(body):
     CFG.save()
     return {"ok": True, "msg": f"Top-down saved: {out_size[0]}x{out_size[1]} px at {ppc} px/cm. "
                                "Robot centre reset to the image centre - set it in the Heading panel."}
-
+ 
 # ============================ HSV / CAMERA / HEADING API ===================
-
-
+ 
+ 
 def api_hsv(body):
     name = body.get("name")
     if name not in COLOURS:
@@ -931,8 +1004,8 @@ def api_hsv(body):
     if body.get("save"):
         CFG.save()
     return {"ok": True, "hsv": entry}
-
-
+ 
+ 
 def api_hsv_reset(body):
     name = body.get("name")
     if name not in COLOURS:
@@ -940,15 +1013,15 @@ def api_hsv_reset(body):
     entry = CFG.reset_hsv(name)
     CFG.save()
     return {"ok": True, "hsv": entry, "msg": f"{name} reset to defaults."}
-
-
+ 
+ 
 def api_camera(body):
     partial = {k: v for k, v in body.items() if k in DEFAULT_CAMERA}
     with CFG.lock:
         cur = dict(CFG.camera)
     with S.lock:
         meta = dict(S.meta)
-
+ 
     # Switching auto -> manual: start from whatever the camera is using right now,
     # so the image doesn't jump. (Handy trick: let auto settle, then switch it off.)
     if partial.get("ae") is False and cur["ae"]:
@@ -959,20 +1032,24 @@ def api_camera(body):
         for k in ("red_gain", "blue_gain"):
             if k not in partial and meta.get(k):
                 partial[k] = meta[k]
-
+    # same for focus: untick autofocus once it's sharp and the lens stays where it is
+    if partial.get("af") is False and cur["af"] and "lens_position" not in partial \
+            and meta.get("lens_position") is not None:
+        partial["lens_position"] = meta["lens_position"]
+ 
     try:
         new = CFG.set_camera(partial)
     except (ValueError, TypeError):
         return {"ok": False, "msg": "Bad camera values."}
     try:
-        CAM.set_controls(camera_controls(new))
+        CAM.set_controls(supported_controls(CAM, camera_controls(new)))
     except Exception as e:  # keep the server alive
         return {"ok": False, "msg": f"Camera rejected controls: {e!r}", "camera": new}
     if body.get("save"):
         CFG.save()
     return {"ok": True, "camera": new}
-
-
+ 
+ 
 def api_undistort(body):
     try:
         u = CFG.set_undistort({k: body[k] for k in UNDISTORT_LIMITS if k in body})
@@ -982,8 +1059,8 @@ def api_undistort(body):
     if body.get("save"):
         CFG.save()
     return {"ok": True, "undistort": u}
-
-
+ 
+ 
 def api_heading(body):
     try:
         y = CFG.set_yaw({k: body[k] for k in ("enabled", "invert", "manual") if k in body})
@@ -992,8 +1069,8 @@ def api_heading(body):
     if body.get("save"):
         CFG.save()
     return {"ok": True, "yaw": y}
-
-
+ 
+ 
 def api_heading_zero():
     ycfg = CFG.yaw
     raw, src = HEADING.read(ycfg["manual"])
@@ -1001,18 +1078,54 @@ def api_heading_zero():
     CFG.set_yaw({"offset": sign * raw})
     CFG.save()
     return {"ok": True, "msg": f"Current heading ({raw:.1f} deg, {src}) is now 'forward'."}
-
-
-def api_ignore(body):
+ 
+ 
+def api_mask(body):
+    """Painted ignore mask from the web page: {"png": data URL of the paint layer (alpha = painted)}, or {"clear": true}."""
+    if body.get("clear"):
+        CFG.set_mask(None)
+        CFG.save()
+        return {"ok": True, "msg": "Ignore mask cleared."}
     try:
-        ign = CFG.set_ignore({k: body[k] for k in DEFAULT_IGNORE if k in body})
+        data = base64.b64decode(str(body["png"]).split(",", 1)[-1])
+        mask = mask_from_png(data)
+    except (KeyError, ValueError, TypeError) as e:
+        return {"ok": False, "msg": f"Bad mask image: {e}"}
+    CFG.set_mask(mask)
+    CFG.save()
+    return {"ok": True, "share": float(np.count_nonzero(mask)) / mask.size}
+ 
+ 
+def mask_png():
+    """The ignore mask as the web page's paint layer: red, alpha = painted."""
+    w, h = CAPTURE_SIZE
+    with CFG.lock:
+        mask = CFG.mask
+    img = np.zeros((h, w, 4), np.uint8)
+    if mask is not None:
+        img[mask > 0] = (0, 0, 255, 255)
+    ok, buf = cv2.imencode(".png", img)
+    return buf.tobytes()
+ 
+ 
+def api_crop(body):
+    partial = {k: body[k] for k in ("enabled", "cx", "cy", "r") if k in body}
+    if body.get("centre"):          # centre it on the robot centre (radial mode: that one is picked on the Raw tab)
+        with CFG.lock:
+            robot, radial = CFG.robot, CFG.radial.get("table_px")
+        if robot and radial:
+            partial["cx"], partial["cy"] = robot
+        else:
+            partial["cx"], partial["cy"] = CAPTURE_SIZE[0] / 2.0, CAPTURE_SIZE[1] / 2.0
+    try:
+        crop = CFG.set_crop(partial)
     except (ValueError, TypeError):
         return {"ok": False, "msg": "Bad values."}
     if body.get("save"):
         CFG.save()
-    return {"ok": True, "ignore": ign}
-
-
+    return {"ok": True, "crop": crop}
+ 
+ 
 def api_robot(body):
     if body.get("reset"):
         CFG.set_robot(None)
@@ -1025,20 +1138,20 @@ def api_robot(body):
     CFG.set_robot([x, y])
     CFG.save()
     return {"ok": True, "msg": f"Robot centre set to ({x:.0f}, {y:.0f}) in the top-down image."}
-
+ 
 RADIAL_DEGREE = 3          # distance calibration: polynomial degree of cm(pixels) (fewer points: n - 1)
-
-
+ 
+ 
 def _raw_centre(raw):
     """Robot centre in the RAW frame (no lens / top-down in radial mode, so the picked centre is in raw pixels)."""
     with CFG.lock:
         robot = CFG.robot
     return robot_base_point(raw.shape, robot)
-
-
+ 
+ 
 BALL_RADIUS_CM = 2.1        # same as robot_config.BALL_RADIUS
-
-
+ 
+ 
 def api_radial_add(body):
     """Ball at a measured distance from the robot centre: record how far out (pixels) it is in the raw frame.
     The curve is for points ON THE FLOOR (lines, where robots and goals touch it): the ball's centre is BALL_RADIUS_CM
@@ -1059,6 +1172,9 @@ def api_radial_add(body):
     with CFG.lock:
         lo, hi = CFG.arrays["orange"]
     mask = cv2.inRange(cv2.cvtColor(raw, cv2.COLOR_BGR2HSV), lo, hi)
+    _, seen = CFG.seen_raw()
+    if seen is not None:
+        mask = cv2.bitwise_and(mask, seen)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, KERNEL)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -1076,24 +1192,24 @@ def api_radial_add(body):
     CFG.save()
     return {"ok": True, "msg": f"Point {len(pts)}: {float(body['cm']):.1f} cm ball = {cm:.1f} cm on the floor = "
                                f"{r_px:.1f} px from the robot centre."}
-
-
+ 
+ 
 def api_radial_undo():
     with CFG.lock:
         pts = CFG.radial["points"][:-1]
         CFG.radial = {**CFG.radial, "points": pts}
     CFG.save()
     return {"ok": True, "msg": f"{len(pts)} point(s) left."}
-
-
+ 
+ 
 def api_radial_reset():
     with CFG.lock:
         CFG.radial = {"points": [], "coeffs": None, "table_px": None, "table_cm": None, "r_max_px": None,
                       "rms_cm": None, "model": None}
     CFG.save()
     return {"ok": True, "msg": "Distance calibration cleared."}
-
-
+ 
+ 
 def _fit_tan(r, d):
     """Fisheye-shaped regression: cm = a * tan(b * px) (a camera looking down through a fisheye: the floor distance
     grows like tan of the angle, and the angle grows ~ in step with the pixel radius). Best (a, b) by least squares:
@@ -1107,8 +1223,8 @@ def _fit_tan(r, d):
         if best is None or sse < best[0]:
             best = (sse, a, float(b))
     return best
-
-
+ 
+ 
 def api_radial_fit():
     """Fit cm(pixels) through the points (the regression curve) - the fisheye shape cm = a*tan(b*px), or a polynomial
     if that fits better - and store it as a lookup table."""
@@ -1137,8 +1253,8 @@ def api_radial_fit():
     return {"ok": True, "msg": f"Fitted ({name}) through {len(pts)} points: {rms:.1f} cm off on average (worst: point "
                                f"{worst + 1}, {abs(fit[worst] - d[worst]):.1f} cm). Valid out to {r_max:.0f} px "
                                f"= {table[-1]:.0f} cm. Press Generate config file to use it on the robot."}
-
-
+ 
+ 
 def radial_rings(img, robot_centre_xy):
     """Draw the fitted distances (every 20 cm) on a raw frame, if the distance calibration is fitted."""
     with CFG.lock:
@@ -1154,12 +1270,12 @@ def radial_rings(img, robot_centre_xy):
     for r_px, cm in rd["points"]:
         cv2.circle(img, (cx, cy), int(round(r_px)), (255, 0, 255), 1)
     return img
-
-
+ 
+ 
 ROTATION_NAMES = {cv2.ROTATE_90_CLOCKWISE: "90_CLOCKWISE", cv2.ROTATE_180: "180",
                   cv2.ROTATE_90_COUNTERCLOCKWISE: "90_COUNTERCLOCKWISE"}
-
-
+ 
+ 
 def build_export():
     """Everything the robot script needs, in one JSON-able dict (read it with vision.py's RobotVision)."""
     with CFG.lock:
@@ -1168,11 +1284,10 @@ def build_export():
         und = dict(CFG.undistort)
         yaw = dict(CFG.yaw)
         robot = CFG.robot
-        ign = dict(CFG.ignore)
         radial = dict(CFG.radial)
+        mask = CFG.mask
+        crop = dict(CFG.crop)
     td = P.topdown
-    with S.lock:
-        ign_px = S.ignore_px
     controls = {k: (list(v) if isinstance(v, tuple) else v) for k, v in camera_controls(cam).items()}
     return {
         "version": 1,
@@ -1181,8 +1296,11 @@ def build_export():
         "rotation": ROTATION_NAMES[ROTATION],
         "camera": {**cam, "controls": controls},
         "hsv": hsv,
-        "detection": {"ignore_cm": ign,
-                      "ignore_box": list(ign_px) if ign_px else None,   # same box in px, as it was when exported
+        # ignore mask + mirror crop: raw camera-frame pixels (before the rotation); the old ignore box is gone (paint
+        # the robot body into the mask instead)
+        "detection": {"ignore_cm": None, "ignore_box": None,
+                      "ignore_mask": None if mask is None else {"size": list(CAPTURE_SIZE), "png": mask_b64(mask)},
+                      "mirror_crop": None if not crop["enabled"] else {k: crop[k] for k in ("cx", "cy", "r")},
                       "min_blob_area": MIN_BLOB_AREA, "morph_kernel": int(KERNEL.shape[0])},
         "lens": None if P.K is None else {"K": P.K.tolist(), "D": P.D.tolist(), "size": list(CAPTURE_SIZE)},
         "undistort_view": und,
@@ -1193,16 +1311,20 @@ def build_export():
                                                            "r_max_px": radial["r_max_px"], "model": radial.get("model")},
         "heading": {"align_to_field": yaw["enabled"], "invert": yaw["invert"], "offset_deg": yaw["offset"]},
     }
-
-
+ 
+ 
 def api_export():
     data = build_export()
     tmp = EXPORT_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, EXPORT_FILE)
-    parts = ["HSV (5 colours)", "camera exposure/white balance", "ignore box (cm) + blob size", "heading settings"]
+    parts = ["HSV (5 colours)", "camera exposure/white balance/focus", "blob size", "heading settings"]
     notes = []
+    det = data["detection"]
+    parts.append("painted ignore mask" if det["ignore_mask"] else "no ignore mask (nothing painted)")
+    if det["mirror_crop"]:
+        parts.append("mirror crop")
     if data["radial"]:
         parts.append("distance calibration (raw fisheye: direction + calibrated distance, no undistortion)")
         return {"ok": True, "msg": f"Wrote {EXPORT_FILE} with: {', '.join(parts)}."}
@@ -1218,10 +1340,10 @@ def api_export():
     if notes:
         msg += " Missing: " + "; ".join(notes) + "."
     return {"ok": True, "msg": msg}
-
-
+ 
+ 
 # ================================ WEB UI ===================================
-
+ 
 PAGE = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Robot camera test</title>
 <style>
@@ -1232,6 +1354,7 @@ PAGE = r"""<!doctype html>
  #view{width:100%;display:block}
  #ov{position:absolute;left:0;top:0;pointer-events:none}
  #wrap.pick{cursor:crosshair;outline:2px solid #f80}
+ #wrap.paint{cursor:none;outline:2px solid #f33;touch-action:none}
  #right{flex:0 0 360px;display:flex;flex-direction:column;gap:10px}
  .tabs button{padding:6px 10px;margin:0 4px 0 0;background:#222;color:#eee;border:1px solid #444;border-radius:4px;cursor:pointer}
  .tabs button.on{background:#2a6;border-color:#2a6}
@@ -1269,10 +1392,12 @@ PAGE = r"""<!doctype html>
   <button class="a" onclick="showSnippet()">Python snippet</button>
   <textarea id="snip" readonly onclick="this.select()"></textarea>
  </details>
- <details open><summary>Camera: white balance &amp; exposure</summary>
-  <div class="dim">Tip: leave auto on until the image looks right, then untick - it freezes at the current values.</div>
+ <details open><summary>Camera: white balance, exposure &amp; focus</summary>
+  <div class="dim">Tip: leave auto on until the image looks right, then untick - it freezes at the current values.
+   Focus is in dioptres = 1000 / distance in mm (12.5 = 80 mm, the mirror's image; 0 = infinity). Camera Module 3 only.</div>
   <div class="row"><label><input type="checkbox" id="ae"> Auto exposure</label>
-   <label><input type="checkbox" id="awb"> Auto white balance</label></div>
+   <label><input type="checkbox" id="awb"> Auto white balance</label>
+   <label><input type="checkbox" id="af"> Autofocus</label></div>
   <div id="cambox"></div>
  </details>
  <details open><summary>Heading (IMU yaw) &amp; robot centre</summary>
@@ -1285,9 +1410,21 @@ PAGE = r"""<!doctype html>
   <div class="dim">Check the sign: turn the robot by hand. In the Detect tab the field should stay still while the green arrow (robot front) turns. If the field spins instead, tick Invert, then press 'Current heading = forward' again.</div>
   <button class="a" onclick="pickRobotCentre()">Set robot centre (click Top-down)</button>
   <button class="a" onclick="post('/api/robot',{reset:true})">Reset centre</button>
-  <div class="dim" style="margin-top:6px">Ignore box (robot body), cm from the robot centre. Red box in the Masks/Detect tabs.
-   Keep 'front' small enough that a ball sitting in the capture zone is still outside the box.</div>
-  <div id="ignbox"></div>
+ </details>
+ <details open><summary>Ignore mask &amp; mirror crop</summary>
+  <div class="dim">Paint over everything the robot must never detect: the mirror mount bars and our own body (leave
+   the front clear, so a ball in the dribbler is still seen). Paints on the <b>Raw</b> tab, red = ignored, saved when
+   you let go. Ignored pixels show dark red in the Masks / Detect tabs.</div>
+  <label><input type="checkbox" id="paint"> Brush on</label>
+  <label><input type="radio" name="pm" id="pm_paint" checked> paint</label>
+  <label><input type="radio" name="pm" id="pm_erase"> erase</label>
+  <div class="row"><span class="n">Brush px</span><input type="range" id="brush" min="2" max="80" step="1" value="14"><output id="brush_o"></output></div>
+  <button class="a" onclick="clearMask()">Clear mask</button>
+  <div class="dim" style="margin-top:6px">Mirror crop: only the inside of the cyan circle (Raw tab) is used, so nothing
+   past the mirror's rim - the ceiling, the mount - is ever looked at. Fit it just inside the mirror's edge.</div>
+  <label><input type="checkbox" id="crop_en"> Crop to the mirror</label>
+  <div id="cropbox"></div>
+  <button class="a" onclick="cropCentre()">Centre on robot centre</button>
  </details>
  <details open><summary>Distance calibration (no undistortion)</summary>
   <div class="dim">Instead of flattening the fisheye: measure how far out (pixels) the ball looks at known distances and fit a
@@ -1305,7 +1442,7 @@ PAGE = r"""<!doctype html>
   <button class="a" onclick="post('/api/radial/fit')">Fit</button>
  </details>
  <details open><summary>Export for the robot script</summary>
-  <div class="dim">Bundles the HSV ranges, exposure/white balance, lens calibration, top-down mapping, ignore box and heading settings into one file the robot script loads with vision.py.</div>
+  <div class="dim">Bundles the HSV ranges, exposure/white balance, lens calibration, top-down mapping, ignore mask, mirror crop and heading settings into one file the robot script loads with vision.py.</div>
   <button class="a" onclick="exportCfg()">Generate config file</button>
   <a id="dl" href="/api/export/download" style="color:#9cf;display:none">Download robot_vision_config.json</a>
  </details>
@@ -1343,30 +1480,32 @@ const MODES=[['masks','Masks'],['detect','Detect'],['raw','Raw'],['calib','Calib
 const HINTS={
  masks:'Annotated frame (top-left) + one mask per colour. Tune the HSV sliders on the right and watch the masks change.',
  detect:'Final frame after ROTATION (and yaw alignment if on) with goal detection - what the robot code sees. Green cross = robot centre, green arrow = robot front.',
- raw:'Raw camera frame (not rotated).',
+ raw:'Raw camera frame (not rotated). Red = painted ignore mask, cyan circle = mirror crop. Tick Brush on (Ignore mask panel) to paint here.',
  calib:'Live checkerboard detection. Coloured corners = detected; press Capture.',
  undistorted:'Fisheye-corrected frame (not rotated). Straight lines should look straight. Use the balance / zoom-out sliders to keep the edges.',
  topdown:'Bird\'s-eye view (before ROTATION), built directly from the raw fisheye image. Green cross = robot centre.'};
 const SWATCH={blue:'#38f',yellow:'#fd2',white:'#fff',green:'#3b3',orange:'#f80'};
 const CH=[['H',0,179],['S',0,255],['V',0,255]];
 const CAMS=[['exposure_us','Exposure µs',100,33000,100,'ae'],['analogue_gain','Gain',1,16,0.1,'ae'],
-            ['red_gain','Red gain',0.5,8,0.05,'awb'],['blue_gain','Blue gain',0.5,8,0.05,'awb']];
+            ['red_gain','Red gain',0.5,8,0.05,'awb'],['blue_gain','Blue gain',0.5,8,0.05,'awb'],
+            ['lens_position','Focus dpt',0,15,0.1,'af']];
 const $=id=>document.getElementById(id);
 const JH={'Content-Type':'application/json'};
 let mode='masks',picking=false,robotPick=false,points=[],cfg=null,cur='blue';
 const view=$('view'),ov=$('ov'),wrap=$('wrap');
-
+ 
 // ---------- tabs / stream ----------
 MODES.forEach(([m,t])=>{const b=document.createElement('button');b.textContent=t;b.id='tab_'+m;b.onclick=()=>setMode(m);$('tabs').appendChild(b)});
 function setMode(m){
   mode=m;picking=false;robotPick=false;points=[];wrap.classList.remove('pick');
+  wrap.classList.toggle('paint',painting&&m==='raw');
   MODES.forEach(([k])=>$('tab_'+k).classList.toggle('on',k===m));
   $('hint').textContent=HINTS[m];
   $('bgl').style.display=m==='masks'?'':'none';
   view.src='/stream?mode='+m+'&cols='+$('cols').value+'&rows='+$('rows').value+'&bg='+($('bg').checked?1:0)+'&t='+Date.now();
   draw()}
 $('bg').onchange=()=>setMode('masks');
-
+ 
 // ---------- logging / posting ----------
 function log(msg,ok){const d=$('log');const s=document.createElement('div');s.className=ok===true?'ok':ok===false?'bad':'';s.textContent=msg;d.appendChild(s);d.scrollTop=d.scrollHeight}
 async function post(path,body){
@@ -1380,9 +1519,8 @@ function sender(path,ms){
       return fetch(path,{method:'POST',headers:JH,body:JSON.stringify(b)})};
     if(save){clearTimeout(t);return go()}
     if(!t)t=setTimeout(go,ms)}}
-const sendYaw=sender('/api/heading',80), sendUnd=sender('/api/undistort',80), sendIgn=sender('/api/ignore',80);
-const IGN=['front','back','left','right'];
-
+const sendYaw=sender('/api/heading',80), sendUnd=sender('/api/undistort',80), sendCrop=sender('/api/crop',80);
+ 
 // ---------- HSV sliders ----------
 function buildColours(){
   COLOURS_.forEach(n=>{const b=document.createElement('button');b.style.background=SWATCH[n];b.title=n;b.id='sw_'+n;b.onclick=()=>selectColour(n);$('sw').appendChild(b)})}
@@ -1415,7 +1553,7 @@ async function resetColour(){
 async function showSnippet(){
   const t=await (await fetch('/api/snippet')).text();
   const a=$('snip');a.value=t;a.style.display='block';a.select()}
-
+ 
 // ---------- camera sliders ----------
 function buildCam(){
   const box=$('cambox');
@@ -1427,10 +1565,13 @@ function buildCam(){
     s.oninput=()=>{cfg.camera[k]=+s.value;fmtCam(k);camSend({[k]:+s.value},false)};
     s.onchange=()=>camSend({[k]:+s.value},true)});
   $('ae').onchange=()=>camSend({ae:$('ae').checked},true);
-  $('awb').onchange=()=>camSend({awb:$('awb').checked},true)}
-function fmtCam(k){const v=cfg.camera[k];$('co_'+k).textContent=k==='exposure_us'?Math.round(v):(+v).toFixed(2)}
+  $('awb').onchange=()=>camSend({awb:$('awb').checked},true);
+  $('af').onchange=()=>camSend({af:$('af').checked},true)}
+const focusMm=d=>d>0?Math.round(1000/d)+' mm':'inf';
+function fmtCam(k){const v=cfg.camera[k];$('co_'+k).textContent=k==='exposure_us'?Math.round(v):
+  k==='lens_position'?(+v).toFixed(1)+' ('+focusMm(+v)+')':(+v).toFixed(2)}
 function refreshCam(){
-  const c=cfg.camera;$('ae').checked=c.ae;$('awb').checked=c.awb;
+  const c=cfg.camera;$('ae').checked=c.ae;$('awb').checked=c.awb;$('af').checked=c.af;
   CAMS.forEach(([k,,,,,auto])=>{$('c_'+k).value=c[k];$('c_'+k).disabled=c[auto];fmtCam(k)})}
 let camPending={},camTimer=null;
 async function camSend(p,save){
@@ -1439,9 +1580,9 @@ async function camSend(p,save){
     const j=await (await fetch('/api/camera',{method:'POST',headers:JH,body:JSON.stringify(body)})).json();
     if(j.msg&&!j.ok)log(j.msg,false);
     // only re-sync the sliders after a toggle, otherwise they'd fight the user's finger
-    if(j.camera&&('ae' in body||'awb' in body)){cfg.camera=j.camera;refreshCam()}};
+    if(j.camera&&('ae' in body||'awb' in body||'af' in body)){cfg.camera=j.camera;refreshCam()}};
   if(save){clearTimeout(camTimer);return go()}else if(!camTimer){camTimer=setTimeout(go,100)}}
-
+ 
 // ---------- heading / robot centre / undistort view ----------
 function refreshYaw(){
   const y=cfg.yaw;$('yaw_en').checked=y.enabled;$('yaw_inv').checked=y.invert;
@@ -1458,17 +1599,52 @@ function pickRobotCentre(){
   s.oninput=()=>{$('uo_'+k).textContent=(+s.value).toFixed(2);sendUnd({[k]:+s.value},false)};
   s.onchange=()=>sendUnd({[k]:+s.value},true)});
 async function exportCfg(){const j=await post('/api/export');if(j.ok)$('dl').style.display='inline'}
-function buildIgn(){
-  IGN.forEach(k=>{
+// ---------- ignore mask (painted on the Raw tab, raw frame pixels) + mirror crop ----------
+const maskCv=document.createElement('canvas');   // paint layer at camera resolution: red, alpha = ignored
+let painting=false,stroke=false,lastPt=null,cursorPt=null;
+async function loadMask(){
+  maskCv.width=cfg.capture[0];maskCv.height=cfg.capture[1];
+  const c=maskCv.getContext('2d');c.clearRect(0,0,maskCv.width,maskCv.height);
+  if(cfg.has_mask){const im=new Image();im.src='/api/mask.png?t='+Date.now();await im.decode();c.drawImage(im,0,0)}
+  draw()}
+function viewXY(e){const r=view.getBoundingClientRect();
+  return [(e.clientX-r.left)/r.width*view.naturalWidth,(e.clientY-r.top)/r.height*view.naturalHeight]}
+function dab(p){
+  const c=maskCv.getContext('2d'),b=+$('brush').value;
+  c.globalCompositeOperation=$('pm_erase').checked?'destination-out':'source-over';
+  c.fillStyle=c.strokeStyle='#f00';c.lineWidth=b;c.lineCap='round';
+  if(lastPt){c.beginPath();c.moveTo(lastPt[0],lastPt[1]);c.lineTo(p[0],p[1]);c.stroke()}
+  c.beginPath();c.arc(p[0],p[1],b/2,0,7);c.fill();lastPt=p}
+function paintOn(){return painting&&mode==='raw'}
+$('paint').onchange=()=>{painting=$('paint').checked;if(painting&&mode!=='raw')setMode('raw');
+  wrap.classList.toggle('paint',paintOn());draw()};
+$('brush').oninput=()=>{$('brush_o').textContent=$('brush').value;draw()};
+wrap.addEventListener('pointerdown',e=>{if(!paintOn())return;e.preventDefault();wrap.setPointerCapture(e.pointerId);
+  stroke=true;lastPt=null;cursorPt=viewXY(e);dab(cursorPt);draw()});
+wrap.addEventListener('pointermove',e=>{if(!paintOn())return;cursorPt=viewXY(e);if(stroke)dab(cursorPt);draw()});
+wrap.addEventListener('pointerleave',()=>{cursorPt=null;draw()});
+const endStroke=()=>{if(!stroke)return;stroke=false;lastPt=null;
+  post('/api/mask',{png:maskCv.toDataURL('image/png')}).then(j=>{if(j.ok)cfg.has_mask=j.share>0})};
+wrap.addEventListener('pointerup',endStroke);wrap.addEventListener('pointercancel',endStroke);
+async function clearMask(){maskCv.getContext('2d').clearRect(0,0,maskCv.width,maskCv.height);
+  await post('/api/mask',{clear:true});cfg.has_mask=false;draw()}
+const CROP=[['cx','Centre x',0],['cy','Centre y',1],['r','Radius',2]];
+function buildCrop(){
+  CROP.forEach(([k,lab,i])=>{
+    const mx=i<2?cfg.capture[i]:Math.max(...cfg.capture);
     const row=document.createElement('div');row.className='row';
-    row.innerHTML=`<span class="n">${k} cm</span><input type="range" id="i_${k}" min="0" max="40" step="0.5"><output id="io_${k}"></output>`;
-    $('ignbox').appendChild(row);
+    row.innerHTML=`<span class="n">${lab} px</span><input type="range" id="k_${k}" min="${i<2?0:5}" max="${mx}" step="1"><output id="ko_${k}"></output>`;
+    $('cropbox').appendChild(row);
     const s=row.querySelector('input');
-    s.oninput=()=>{$('io_'+k).textContent=s.value;sendIgn({[k]:+s.value},false)};
-    s.onchange=()=>sendIgn({[k]:+s.value},true)})}
-function refreshIgn(){IGN.forEach(k=>{$('i_'+k).value=cfg.ignore[k];$('io_'+k).textContent=cfg.ignore[k]})}
+    s.oninput=()=>{cfg.crop[k]=+s.value;$('ko_'+k).textContent=s.value;sendCrop({[k]:+s.value},false);draw()};
+    s.onchange=()=>sendCrop({[k]:+s.value},true)});
+  $('crop_en').onchange=()=>{cfg.crop.enabled=$('crop_en').checked;sendCrop({enabled:cfg.crop.enabled},true);
+    if(cfg.crop.enabled&&mode!=='raw')setMode('raw');draw()}}
+function refreshCrop(){$('crop_en').checked=cfg.crop.enabled;
+  CROP.forEach(([k])=>{$('k_'+k).value=cfg.crop[k];$('ko_'+k).textContent=Math.round(cfg.crop[k])})}
+async function cropCentre(){const j=await post('/api/crop',{centre:true,save:true});if(j.crop){cfg.crop=j.crop;refreshCrop();draw()}}
 function refreshUnd(){['balance','fov_scale'].forEach(k=>{$('u_'+k).value=cfg.undistort[k];$('uo_'+k).textContent=(+cfg.undistort[k]).toFixed(2)})}
-
+ 
 // ---------- calibration / top-down ----------
 async function calAdd(){await post('/api/cal/add',{cols:+$('cols').value,rows:+$('rows').value})}
 async function freeze(){
@@ -1482,6 +1658,7 @@ async function applyTd(){
   const j=await post('/api/td/apply',{points,w_cm:+$('w_cm').value,h_cm:+$('h_cm').value,px_per_cm:+$('ppc').value,margin_cm:+$('margin').value});
   if(j.ok)setMode('topdown')}
 wrap.addEventListener('click',e=>{
+  if(paintOn())return;
   const r=view.getBoundingClientRect();
   const x=(e.clientX-r.left)/r.width*view.naturalWidth,y=(e.clientY-r.top)/r.height*view.naturalHeight;
   if(robotPick){robotPick=false;wrap.classList.remove('pick');$('hint').textContent=HINTS[mode];post('/api/robot',{x,y});return}
@@ -1490,8 +1667,18 @@ wrap.addEventListener('click',e=>{
 function draw(){
   const w=view.clientWidth,h=view.clientHeight;ov.width=w;ov.height=h;
   const c=ov.getContext('2d');c.clearRect(0,0,w,h);
-  if(!picking||!view.naturalWidth)return;
+  if(!view.naturalWidth)return;
   const sx=w/view.naturalWidth,sy=h/view.naturalHeight;
+  if(mode==='raw'&&cfg&&!picking){        // ignore mask (red) + mirror crop (cyan circle, outside dimmed)
+    c.globalAlpha=0.45;c.drawImage(maskCv,0,0,w,h);c.globalAlpha=1;
+    const k=cfg.crop;
+    if(k&&k.enabled){
+      c.fillStyle='rgba(0,0,0,0.55)';c.beginPath();c.rect(0,0,w,h);c.ellipse(k.cx*sx,k.cy*sy,k.r*sx,k.r*sy,0,0,7);c.fill('evenodd');
+      c.strokeStyle='#0ff';c.lineWidth=1.5;c.beginPath();c.ellipse(k.cx*sx,k.cy*sy,k.r*sx,k.r*sy,0,0,7);c.stroke()}
+    if(paintOn()&&cursorPt){const b=+$('brush').value/2;
+      c.strokeStyle=$('pm_erase').checked?'#0f0':'#fff';c.lineWidth=1;
+      c.beginPath();c.ellipse(cursorPt[0]*sx,cursorPt[1]*sy,b*sx,b*sy,0,0,7);c.stroke()}}
+  if(!picking)return;
   c.strokeStyle='#f80';c.fillStyle='#f33';c.lineWidth=1.5;c.font='bold 14px sans-serif';
   c.beginPath();points.forEach(([x,y],i)=>i?c.lineTo(x*sx,y*sy):c.moveTo(x*sx,y*sy));
   if(points.length===4)c.closePath();c.stroke();
@@ -1500,7 +1687,7 @@ view.addEventListener('load',draw);window.addEventListener('resize',draw);
 document.addEventListener('keydown',e=>{
   if(e.code==='Space'&&mode==='calib'&&e.target.tagName!=='INPUT'){e.preventDefault();calAdd()}});
 $('cols').onchange=$('rows').onchange=()=>{if(mode==='calib')setMode('calib')};
-
+ 
 // ---------- live status ----------
 async function poll(){
   try{
@@ -1509,7 +1696,7 @@ async function poll(){
     $('status').textContent=
      `fps: ${s.fps.toFixed(1)}   frame: ${s.size[0]}x${s.size[1]}   final: ${s.canvas?s.canvas.join('x'):'-'}\n`+
      `camera now: exp ${f(m.exposure_us,0)}us  gain ${f(m.analogue_gain,2)}\n`+
-     `            R ${f(m.red_gain,2)}  B ${f(m.blue_gain,2)}\n`+
+     `            R ${f(m.red_gain,2)}  B ${f(m.blue_gain,2)}  focus ${m.lens_position==null?'-':f(m.lens_position,2)+' dpt ('+focusMm(+m.lens_position)+')'}\n`+
      `yaw: raw ${f(y.raw,1)} (${y.source||'-'})  -> ${f(y.effective,1)} deg  align ${y.enabled?'ON':'off'}\n`+
      `imu: ${(s.imu||{}).state||'-'} ${(s.imu||{}).msg||''}\n`+
      `lens calibrated: ${s.calibrated}${s.rms!=null?'  (RMS '+s.rms.toFixed(3)+')':''}\n`+
@@ -1520,23 +1707,24 @@ async function poll(){
      `own goal:        ${s.own_goalpos.map(v=>v.toFixed(1))}`;
   }catch(e){}
   setTimeout(poll,500)}
-
+ 
 let COLOURS_=[];
 (async()=>{
   cfg=await (await fetch('/api/settings')).json();
   COLOURS_=cfg.colours;
-  buildColours();buildHsv();buildCam();selectColour('blue');refreshCam();refreshYaw();refreshUnd();buildIgn();refreshIgn();
-  setMode('masks');poll()})();
+  buildColours();buildHsv();buildCam();selectColour('blue');refreshCam();refreshYaw();refreshUnd();buildCrop();refreshCrop();
+  $('brush_o').textContent=$('brush').value;
+  setMode('masks');loadMask();poll()})();
 </script></body></html>
 """
-
+ 
 # ================================ SERVER ===================================
-
+ 
 def get_view(mode, cols, rows, show_bg):
     with S.lock:
         fid = S.fid
         raw, und, td = S.raw, S.undist, S.topdown
-        final, det, masks, poly = S.final, S.detect_img, S.masks, S.poly
+        final, det, masks, unseen = S.final, S.detect_img, S.masks, S.unseen
         saved = len(S.obj)
     if raw is None:
         return fid, None
@@ -1563,23 +1751,23 @@ def get_view(mode, cols, rows, show_bg):
         else:
             img = label(raw, "NOT CALIBRATED YET")
     elif mode == "masks":
-        img = None if masks is None else build_montage(final, det, masks, show_bg, poly)
+        img = None if masks is None else build_montage(final, det, masks, show_bg, unseen)
     else:
         img = det
     return fid, img
-
-
+ 
+ 
 def jpeg(img):
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
     return buf.tobytes() if ok else None
-
-
+ 
+ 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-
+ 
     def log_message(self, *a):
         pass
-
+ 
     # ---- helpers
     def send_bytes(self, data, ctype, code=200):
         self.send_response(code)
@@ -1588,10 +1776,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
-
+ 
     def send_json(self, obj, code=200):
         self.send_bytes(json.dumps(obj).encode(), "application/json", code)
-
+ 
     # ---- GET
     def do_GET(self):
         u = urlparse(self.path)
@@ -1617,7 +1805,8 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/settings":
                 with CFG.lock:
                     self.send_json({"hsv": CFG.hsv, "camera": CFG.camera, "undistort": CFG.undistort,
-                                    "yaw": CFG.yaw, "robot": CFG.robot, "ignore": CFG.ignore,
+                                    "yaw": CFG.yaw, "robot": CFG.robot, "crop": CFG.crop,
+                                    "has_mask": CFG.mask is not None, "capture": list(CAPTURE_SIZE),
                                     "colours": COLOURS})
             elif u.path == "/api/export/download":
                 if os.path.exists(EXPORT_FILE):
@@ -1631,13 +1820,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(data)
                 else:
                     self.send_bytes(b"nothing generated yet", "text/plain", 404)
+            elif u.path == "/api/mask.png":
+                self.send_bytes(mask_png(), "image/png")
             elif u.path == "/api/snippet":
                 self.send_bytes(python_snippet().encode(), "text/plain; charset=utf-8")
             else:
                 self.send_bytes(b"not found", "text/plain", 404)
         except (BrokenPipeError, ConnectionResetError):
             pass
-
+ 
     def stream(self, mode, cols, rows, show_bg):
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
@@ -1655,7 +1846,7 @@ class Handler(BaseHTTPRequestHandler):
             data = jpeg(img)
             self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                              + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n")
-
+ 
     def status(self):
         td = P.topdown
         with S.lock:
@@ -1674,14 +1865,14 @@ class Handler(BaseHTTPRequestHandler):
                 "yaw": S.yaw_info,
                 "imu": dict(IMU_STATE),
             }
-
+ 
     # ---- POST
     def do_POST(self):
         try:
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
             path = urlparse(self.path).path
-
+ 
             if path == "/api/cal/add":
                 res = cal_add(int(body.get("cols", 7)), int(body.get("rows", 6)))
             elif path == "/api/cal/undo":
@@ -1732,8 +1923,10 @@ class Handler(BaseHTTPRequestHandler):
                 res = api_radial_reset()
             elif path == "/api/radial/fit":
                 res = api_radial_fit()
-            elif path == "/api/ignore":
-                res = api_ignore(body)
+            elif path == "/api/mask":
+                res = api_mask(body)
+            elif path == "/api/crop":
+                res = api_crop(body)
             else:
                 return self.send_json({"ok": False, "msg": "unknown endpoint"}, 404)
             self.send_json(res)
@@ -1741,8 +1934,8 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as e:  # keep the server alive, show the error in the UI log
             self.send_json({"ok": False, "msg": f"Server error: {e!r}"}, 500)
-
-
+ 
+ 
 def local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1752,8 +1945,8 @@ def local_ip():
         return ip
     except OSError:
         return socket.gethostname()
-
-
+ 
+ 
 def main():
     global CAM
     ap = argparse.ArgumentParser()
@@ -1765,17 +1958,17 @@ def main():
     ap.add_argument("--imu-report", choices=["game", "rotation"], default="game",
                     help="game = no magnetometer (default), rotation = with magnetometer")
     args = ap.parse_args()
-
+ 
     if args.no_imu:
         IMU_STATE.update(state="off", msg="disabled with --no-imu")
     else:
         threading.Thread(target=imu_loop, args=(args.imu_addr, args.imu_bitbang, args.imu_report), daemon=True).start()
-
+ 
     CAM = make_camera()
     threading.Thread(target=capture_loop, args=(CAM,), daemon=True).start()
     while S.raw is None:
         time.sleep(0.05)
-
+ 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     server.daemon_threads = True
     print(f"Capturing at {CAPTURE_SIZE}.  lens calibrated: {P.K is not None}  "
@@ -1791,7 +1984,7 @@ def main():
     finally:
         server.server_close()
         CAM.stop()
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
