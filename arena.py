@@ -16,7 +16,7 @@ versions fairly play both ways round - each one as "us" once - and add the resul
 Each game uses a different seed (sensor noise on, kickoff positions jittered a few cm), so a change is only
 better if it wins over many seeds, not just one lucky game. Our robots always attack yellow.
 
-To keep an old version to play against:   git worktree add ../lightweight_v1 <commit>
+To get another version to play against:   git worktree add ../lightweight_v1 <commit>
 (or copy the .py files into a folder). simulator.load_code() imports it next to the current code.
 """
 import argparse

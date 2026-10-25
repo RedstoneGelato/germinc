@@ -161,7 +161,7 @@ class GoalieFallback:
 class StrikerFallback:
     """botstate 0 = no ball, goalie on    -> wait in front of their goal (or drive up-field)
        botstate 1 = ball in the dribbler  -> carry it at their goal, kick when facing it close enough
-       botstate 2 = ball seen             -> chase it (TS-style, like strategy.chase())
+       botstate 2 = ball seen             -> chase it (like strategy.chase())
        botstate 3 = no ball, goalie off   -> stand in front of our goal
     command (sent to the goalie): always 0 (the goalie decides by itself)."""
 

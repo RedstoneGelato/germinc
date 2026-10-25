@@ -15,7 +15,7 @@ class TeammateLinkThread(threading.Thread): #comms between bots
         self.robot_id = robot_id #1 = striker, 2 = goalie
         self.daemon = True
         self.running = True
-        self.enabled = True  # set False to satisfy rule 4.2.6 (referee-requested disable)
+        self.enabled = True  # set False to disable comms (referee request)
 
         self.send_interval = send_interval
 

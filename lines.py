@@ -21,14 +21,13 @@ import field
 import robot_config as cfg
 
 # ---- TUNE
-LDR_VECTOR_IS_ESCAPE = True     # the LDR sum vector was used as the escape direction at the comp. If the robot
-                                # drives INTO the line on the bench test, set this to False to flip it.
+LDR_VECTOR_IS_ESCAPE = True     # the LDR sum vector is the escape direction. If the robot drives INTO the line on
+                                # the bench test, set this to False to flip it.
 CAM_NEAR = cfg.ROBOT_RADIUS + 10.0   # camera line points closer than this count as "about to touch"
 CAM_MIN_POINTS = 4
 BOUNDARY_BAND = field.LINE_W + 0.5   # cm: field-frame line points within this of the boundary are boundary lines
-                                     # (kept tight, so only the boundary counts if inner white markings get added)
-IGNORE_INNER_LINES = False      # True: confident pose + far from the boundary -> ignore LDR hits (only useful if the
-                                # field has white lines inside it; ours doesn't, so it could only hide a real boundary)
+IGNORE_INNER_LINES = False      # True: confident pose + far from the boundary -> ignore LDR hits (for a field with
+                                # white lines inside it)
 INNER_CLEARANCE = 15.0          # cm robot centre must be inside the boundary for an LDR hit to count as an inner line
 SLOW_START = 20.0               # cm (robot centre to the furthest-out allowed position): start limiting outward speed
 SLOW_STOP = 2.0                 # cm: outward speed is zero here
@@ -145,7 +144,7 @@ class LineFusion:
             s.escape = _unit([ex, ey]) or ldr_escape or pose_escape
             s.source = "+".join(src)
 
-        # repeated touches -> slow down (same as before)
+        # repeated touches -> slow down
         now = time.monotonic()
         if s.on_line and not self.was_on_line:
             self.touch_times.append(now)
@@ -168,7 +167,7 @@ def limit_outward(vec, pose, lead=(0.0, 0.0)):
     to the furthest-out allowed position. lead = cm the robot will still travel (relative, field axes) before a
     slower command takes effect (motion.Mover: its current velocity x BRAKE_LEAD): moving fast, the slowdown starts
     that much earlier. With a precise pose up to the furthest-out position; with a pose that's only confident, its
-    spread beyond PRECISE_STD further in (slowing down is always safe; skipping it there let a fast robot run into the wall).
+    spread beyond PRECISE_STD further in.
     Without a confident pose returns vec unchanged."""
     if pose is None or pose.std >= OUTWARD_STD:
         return vec

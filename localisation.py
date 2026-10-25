@@ -8,9 +8,9 @@ The IMU gives the heading, so only x, y (field frame, cm) are estimated. Three l
 2. Line matching: white line points from the camera, rotated into field axes, are compared with the field
    model's distance map (field.py). A pose is good when the seen points land on the drawn lines.
 3. Particle filter: a few hundred guesses of (x, y), moved each frame, re-weighted by how well the lines and goals
-   match, resampled. Handles "I can only see one straight line so I could be anywhere along it".
+   match, resampled.
 
-Later: correct_walls() takes the 8 ultrasonic distances to the wall. It is written and ready, nothing calls it yet.
+correct_walls() takes the 8 ultrasonic distances to the wall (nothing calls it).
 
 Field frame: origin = centre, +y = goal we attack. "relative" = robot -> thing vector with field axes.
 """
@@ -44,22 +44,19 @@ SEED_FRACTION = 0.2            # particles re-spawned around position_from_goals
 CONFIDENT_STD = 15.0           # cm spread below which the estimate is trusted
 LOST_STD = 40.0
 KIDNAP_DIST = 50.0             # cm: confident, but the goals put us this far off in y ...
-KIDNAP_FRAMES = 15             # ... this many frames in a row -> we were moved (referee: multiple defence, put on a
-                               # neutral spot while still running): start again from where the goals say
+KIDNAP_FRAMES = 15             # ... this many frames in a row -> we were moved: start again from where the goals say
 KIDNAP_SPREAD = 25.0
 VEL_SMOOTH = 0.3               # velocity estimate smoothing (0..1, higher = faster response)
 VEL_MAX = 250.0                # cm/s
-# compass correction: the IMU is zeroed by hand ("facing forward" is never exactly forward) and drifts, and a few
-# degrees off turns every line point 1 m away by several cm. Each confident frame the line points are also tried
-# turned a little either way; whichever fits the field lines best nudges the correction (dh) towards it.
+# compass correction: each confident frame the line points are also tried turned a little either way; whichever fits
+# the field lines best nudges the correction (dh) towards it.
 HEADING_FIX = True
 HEADING_MIN_POINTS = 30        # white points needed to judge the heading
 HEADING_TRY = math.radians(1.5)     # tried turns: -2, -1, 0, +1, +2 x this
 HEADING_SHIFT = 3.0            # cm: each tried turn may also shift by this much (a turn and a shift look alike)
 HEADING_GAIN = 0.15            # fraction of the best turn applied per frame (averages out noisy frames)
 HEADING_MAX = math.radians(25.0)    # never correct more than this
-HEADING_FIT = 1.5              # only when the lines fit well: RMS distance <= this x LINE_SIGMA (a wrong pose fits
-                               # badly, and turning the points to suit it would make the compass wrong too)
+HEADING_FIT = 1.5              # only when the lines fit well: RMS distance <= this x LINE_SIGMA
 HEADING_SETTLE = 15            # confident frames in a row (after a start / pickup) before the heading is judged
 
 
@@ -142,12 +139,11 @@ class Localiser:
         ex, ey = gx - self.p[:, 0], gy - self.p[:, 1]
         sigma = GOAL_SIGMA + GOAL_SIGMA_PER_CM * math.hypot(*near_rel)
         err2 = (ex - near_rel[0]) ** 2 + (ey - near_rel[1]) ** 2
-        # robust: a goal half hidden behind a robot gives a near point far from the real one, so a big miss only
-        # costs as much as GOAL_OUTLIER says, instead of dragging every particle towards it
+        # robust: a big miss only costs as much as GOAL_OUTLIER says
         self.logw += np.log(np.exp(-err2 / (2 * sigma ** 2)) + GOAL_OUTLIER)
 
     def correct_walls(self, ranges, angles_rel, sensor_radius=0.0):
-        """Ultrasonic ring (for later). ranges = cm from each sensor (None = no reading),
+        """Ultrasonic ring. ranges = cm from each sensor (None = no reading),
         angles_rel = each sensor's pointing direction in FIELD axes (robot-frame angle + compass, 0 = +x, CCW)."""
         for r, a in zip(ranges, angles_rel):
             if r is None or r <= 0 or r > WALL_MAX_RANGE:
@@ -246,7 +242,7 @@ class Localiser:
             self._kidnap += 1
         else:
             self._kidnap = 0
-        if self._kidnap >= KIDNAP_FRAMES:   # sure of the wrong place (the robust goal step can't pull it over)
+        if self._kidnap >= KIDNAP_FRAMES:   # sure of the wrong place
             self._kidnap = 0
             self.reset_to(from_goals[0], from_goals[1], KIDNAP_SPREAD)
             self._settled = 0
@@ -299,8 +295,7 @@ class LocalisationThread(threading.Thread):
         self._reset = False
 
     def relocalise(self):
-        """Call when the robot is picked up / put down somewhere new. Also forgets the compass correction: while
-        paused, common.standby() zeroes the IMU again, so the old correction no longer applies."""
+        """Call when the robot is picked up / put down somewhere new. Also forgets the compass correction."""
         self._reset = True
 
     def run(self):
@@ -312,7 +307,7 @@ class LocalisationThread(threading.Thread):
                 if det is not None:
                     self.process(det)
                 errors = 0
-            except Exception as e:     # a bad frame must not end localisation for the rest of the game
+            except Exception as e:     # a bad frame is skipped
                 errors += 1
                 if errors == 1:
                     print(f"[localisation] frame failed: {e!r}")

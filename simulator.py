@@ -74,7 +74,7 @@ from vision import RobotVision, analyse_frame  # noqa: E402
 import common as _common, lines as _lines, localisation as _localisation, main as _main  # noqa: E402,E401
 import main_attack as _main_attack, motion as _motion, perception as _perception  # noqa: E402,E401
 
-# everything SimBot builds from the robot code, so an older version of it can play against this one
+# everything SimBot builds from the robot code, so another version of it can play against this one
 CODE_MODULES = ["field", "robot_config", "utils", "robot_vision", "detection", "vision", "localisation", "perception",
                 "lines", "motion", "comms", "common", "strategy_fallback", "strategy", "main", "main_attack"]
 
@@ -106,13 +106,13 @@ def code_folder(name):
 
 def load_code(folder):
     """Import another copy of the robot code (a folder with the same .py files: one of past_versions/, or e.g. an
-    old commit from `git worktree add`) next to the current one, without the two mixing. Returns a Code."""
+    commit from `git worktree add`) next to the current one, without the two mixing. Returns a Code."""
     import importlib
     folder = code_folder(folder)
     saved = {k: sys.modules.pop(k) for k in CODE_MODULES if k in sys.modules}
     sys.path.insert(0, os.path.abspath(folder))
     try:
-        mods = {k: importlib.import_module(k) for k in CODE_MODULES   # (older versions don't have every file)
+        mods = {k: importlib.import_module(k) for k in CODE_MODULES   # (not every version has every file)
                 if os.path.isfile(os.path.join(folder, k + ".py"))}
     finally:
         sys.path.pop(0)
@@ -151,7 +151,7 @@ GOAL_HEIGHT = 10.0           # cm, goal walls (solid boxes, also hide what's beh
 BALL_BLIND_RING = cfg.BALL_BLIND_RING   # cm (robot_config): the camera never sees the ball while its near edge is
                              # within this of our bumper (too close / too steep for the mirror): ball centre closer than ROBOT_RADIUS + BALL_BLIND_RING +
                              # BALL_RADIUS (15.1 cm) to ours. So a ball in the dribbler (centre 13.1) is never seen - the
-                             # IR ring (IR_*) has to find it. 0 = off (the old sim: only the deck hid the ball)
+                             # IR ring (IR_*) has to find it. 0 = off (only the deck hides the ball)
 # IR ball sensors (the pulsed RCJ ball): cfg.IR_COUNT sensors evenly round the robot, numbered like the LDRs (sensor 0
 # at the front, anticlockwise). Bearing + strength only. The ball off the field = none active.
 IR_HALF_FOV = 55.0           # deg: a sensor picks the ball up within this either side of where it points (12 sensors:
@@ -160,8 +160,7 @@ IR_NEAR = 20.0               # cm: closer than this every active sensor reads fu
 IR_NOISE = 0.1               # strength noise (x the reading)
 SIM_IR = True                # the sim robots have the IR ring (whatever cfg.IR_ON_PCB says). False = camera only
 TOPDOWN_PPC = 2.0            # px/cm of the top-down view handed to robot_vision (when robot_vision has no "radial"
-                             # mode). Use >= 2 on the real robot too: at 1 px/cm a 4 cm ball is so small the noise
-                             # filter removes it
+                             # mode). Use >= 2 on the real robot too
 TOPDOWN_RADIUS = 150.0       # cm of floor the top-down view covers (only without radial mode; bigger = slower)
 
 TOP_SPEED = 200.0            # cm/s when the motors get BASE_SPEED - MEASURE on the real robot
@@ -199,8 +198,8 @@ PARK = (1e4, 1e4)            # where a taken-off robot is kept (far off the fiel
 
 LDR_RING_RADIUS = cfg.ROBOT_RADIUS - 3.0
 # Where LDR number i physically sits = the angle lines.py computes for it + this offset.
-# The comp code escaped lines correctly using the LDR vector as the escape direction, which only works if the
-# sensors are physically opposite to the computed angle, hence pi. Set 0 to test the layout the comments describe.
+# pi: the sensors sit opposite the computed angle (lines.LDR_VECTOR_IS_ESCAPE). Set 0 to test the layout the comments
+# describe.
 LDR_PHYSICAL_OFFSET = math.pi
 LDR_WHITE, LDR_GREEN = 800, 3200
 
@@ -929,8 +928,8 @@ class Sim:
     _LDR_RING = None    # (N, 2) robot-frame LDR positions (computed once)
 
     def ldrs(self, robot):
-        """LDR readings: white / green under each sensor (+ noise). Vectorised (it was a big share of a fast-mode
-        game); same values and random numbers as reading them one by one."""
+        """LDR readings: white / green under each sensor (+ noise). Vectorised; same values and random numbers as
+        reading them one by one."""
         if Sim._LDR_RING is None:
             ring = []
             for i in range(cfg.LDR_COUNT):
@@ -1161,8 +1160,8 @@ class Sim:
                 vx -= (1 + BALL_BOUNCE) * vn * n[0]
                 vy -= (1 + BALL_BOUNCE) * vn * n[1]
         contact_order = list(bodies)
-        self.rng.shuffle(contact_order)          # no robot gets the last push every tick (in a squeeze between two
-        for b in contact_order:                  # robots the last one won: it shoved the other back at full speed)
+        self.rng.shuffle(contact_order)          # no robot gets the last push every tick
+        for b in contact_order:
             if b is self.held_by:
                 continue
             hit = self.ball_overlap(b, bx, by, rest_y, notch_x)

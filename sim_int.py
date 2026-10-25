@@ -9,7 +9,7 @@ strategy_int.py. simulator.py and arena.py themselves are unchanged (still RCJA)
     python sim_int.py --rcja-strategy --arena ...       # our RCJA strategy.py on this field instead, to compare
     python sim_int.py --opp-as-is --arena --opp ba ...  # opponents NOT kept legal in the penalty areas (see below)
 
-The referee follows the RCJ Soccer 2026 rules instead of the RCJA ones:
+The referee follows the international rules instead of the RCJA ones:
     2.5  the ball is never out at the line: it's live up to the walls
     2.7  lack of progress -> nearest free neutral spot (after NO_PROGRESS_TIME)
     2.8  a robot touching a wall or COMPLETELY inside a penalty area is out: off for 1 minute (or till the next
@@ -19,9 +19,7 @@ The referee follows the RCJ Soccer 2026 rules instead of the RCJA ones:
     2.6  multiple defense: two robots of a team even partly in a penalty area (any time) -> the one further from
          the ball goes to the free neutral spot furthest from the ball
 Opponents loaded with --opp play on this field too (their own strategy, with MAX_OUT for these walls). Their moves
-also go through strategy_int's penalty area guard (legal_opponent()), as if they'd been adapted to these rules: a
-team that won here doesn't park its goalie completely inside the area. Without that (--opp-as-is) the RCJA-built
-opponents spend much of each game a robot down (ba: ~3.5 outs + ~3 multiple defences a game).
+also go through strategy_int's penalty area guard (legal_opponent()), unless --opp-as-is.
 """
 import math
 import os
@@ -86,8 +84,8 @@ def load_code(folder):
 
 def legal_opponent(mod):
     """Wrap another version's GoalieStrategy / StrikerStrategy update() in strategy_int's penalty area guard: never
-    completely inside an area, and (attacking, teammate on) not in its own area at all. A robot with a .role (the
-    Bodensee port switches roles) defends when its role is "defender"."""
+    completely inside an area, and (attacking, teammate on) not in its own area at all. A robot with a .role
+    defends when its role is "defender"."""
     import strategy_int as SI
     for name, goalie in (("GoalieStrategy", True), ("StrikerStrategy", False)):
         cls = getattr(mod, name, None)
@@ -155,7 +153,7 @@ def _out_dir(b, why):
 def pushed_out(self, b, why):
     """Pushed out by an opponent: it touched an opponent within
     PUSHED_TIME, and either it wasn't driving out itself (PUSHED_OUT_SPEED) or an opponent touching it is driving it
-    that way (PUSHER_OUT_SPEED) - shoved out while both pushed used to count as going out on its own."""
+    that way (PUSHER_OUT_SPEED)."""
     if self.t - b.opp_contact_t > S.PUSHED_TIME:
         return False
     n = _out_dir(b, why)
@@ -342,9 +340,7 @@ _kickoff = S.Sim.kickoff
 
 def kickoff(self):
     """simulator's kickoff, then the striker of the team that isn't kicking off (it just scored) stands just outside
-    the centre circle on the line to its own goal (KICKOFF_BLOCK: against Bodensee, shots straight from their kickoff
-    were the most common goal against), or else at least out of its own penalty area (RCJA: touching its front - with
-    its goalie partly in there too that's multiple defense here, rule 2.6)."""
+    the centre circle on the line to its own goal (KICKOFF_BLOCK), or else at least out of its own penalty area."""
     self._push_since = None
     _kickoff(self)
     for b in self.robots + self.opponents:
@@ -353,7 +349,7 @@ def kickoff(self):
         sgn = _sgn_of(b.team)
         if KICKOFF_BLOCK and self.last_scorer == b.team:
             # the other team kicks off: stand on the line from the centre spot to our goal, just outside the centre
-            # circle (rule 2.3.1: 30 cm from the ball, outside the circle) - in the way of a shot straight from it
+            # circle (30 cm from the ball)
             jitter = b.x - math.copysign(S.KICKOFF_SIDE, b.x)       # (kickoff() placed it KICKOFF_SIDE to the side)
             b.place(jitter, sgn * (KICKOFF_CIRCLE_R + b.r + 2))
         elif field.partly_in_penalty(b.x, b.y, b.r, sgn):

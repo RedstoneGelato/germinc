@@ -1,5 +1,5 @@
 """
-main_int.py - the goalie (main.py) on the INTERNATIONAL rules (RCJ Singapore): field_int.py + strategy_int.py instead
+main_int.py - the goalie (main.py) on the INTERNATIONAL rules: field_int.py + strategy_int.py instead
 of field.py + strategy.py. Run this instead of main.py there (deploy/germinc.service runs main.py: point it here).
 """
 import sys

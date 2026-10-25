@@ -9,11 +9,10 @@ script runs, the main process's I2C connections are already closed
 by the OS, so this script opens its own fresh connections and does
 not depend on any state from the process that just died.
 
-Every hardware step is wrapped individually so a single failure
+Every hardware step is wrapped individually, so a single failure
 (e.g. a board that's already lost power, or an I2C bus that's in a
-bad state) can't stop the rest from being attempted. This script
-never raises past main() and always exits 0, so it can't leave the
-systemd unit hanging or in a failed state during a competition.
+bad state) doesn't stop the rest from being attempted. This script
+never raises past main() and always exits 0.
 """
 
 import sys
@@ -31,8 +30,7 @@ logging.basicConfig(
 log = logging.getLogger("robot_stop")
 
 # Same I2C addresses as DRIVE_MOTORS / DRIBBLER_ADDR in hardware_attack.py - keep the two files
-# in sync if the wiring/addresses ever change. (Written out here on purpose: this script must still work
-# when the robot code is broken, so it doesn't import anything from it.)
+# in sync if the wiring/addresses ever change. (This script doesn't import anything from the robot code.)
 MOTOR_ADDRESSES = {
     "motor1": 26,
     "motor2": 25,
@@ -100,8 +98,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        # Never let this script itself raise unhandled - systemd should
-        # always be able to consider the stop sequence "done" so it
-        # doesn't hang or block a restart mid-competition.
+        # never raise past here
         log.error(f"Unexpected top-level error: {e}")
     sys.exit(0)

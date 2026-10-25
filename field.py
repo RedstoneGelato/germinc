@@ -10,7 +10,7 @@ import numpy as np
 
 # ---- dimensions (cm) - VERIFY
 PLAY_W = 132.0          # width of the playing area, measured between the outer edges of the white lines (x)
-                        # (field diagram, Oct 2026: 1820 x 2430 outer, 250 outer area, 50 lines, centre -> goal line 915)
+                        # (field diagram, mm: 1820 x 2430 outer, 250 outer area, 50 lines, centre -> goal line 915)
 PLAY_L = 193.0          # length of the playing area (y, goal to goal)
 OUTER = 25.0            # outer area: white line -> wall
 LINE_W = 5.0            # white line thickness

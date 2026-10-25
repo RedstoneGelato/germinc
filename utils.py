@@ -68,7 +68,7 @@ class Hysteresis: #used for decision smoothing and ignore flickers, instant ente
 
         return self.current
 
-    def reset(self): #clear state so that unpause doesnt jitter
+    def reset(self): #clear state
         self.current = None
         self._pending = None
         self._pending_since = None
@@ -76,7 +76,7 @@ class Hysteresis: #used for decision smoothing and ignore flickers, instant ente
 
 class PointTracker:
     """Smooths a 2D position that is sometimes missing.
-    - keeps a short history and averages it (like the old GoalTracker)
+    - keeps a short history and averages it
     - a reading far from the average counts as 'unconcordant'; enough of those in a row = it really moved
     - keeps the last value for `lost_time` seconds after it disappears, then reports None"""
 
@@ -122,10 +122,8 @@ class PointTracker:
 
 
 class HeadingFilter:
-    """Removes sudden jumps from a heading. The BNO08x's game rotation vector restarts at 0 wherever the robot is
-    facing whenever the sensor resets (I2C glitch, re-init after an error), and a robot can't really turn more than
-    MAX_SPIN rad/s, so any faster change is a sensor jump: it's absorbed into an offset and the heading carries on
-    from where it was."""
+    """Removes sudden jumps from a heading: any change faster than MAX_SPIN rad/s is a sensor jump, absorbed into
+    an offset, and the heading carries on from where it was."""
     MAX_SPIN = 20.0       # rad/s (the robot spins ~6 rad/s flat out)
     MARGIN = 0.3          # rad allowed on top of MAX_SPIN * dt
 

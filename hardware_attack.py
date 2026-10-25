@@ -16,8 +16,8 @@ DRIVE_MOTORS = [
 ]
 
 # dribbler: (i2c address, ELECANGLEOFFSET, SINCOSCENTRE), or None if this robot has no dribbler
-DRIBBLER = (32, 1431223552, 1245)   # calibration from the Oct 3 code - CHECK it's still this driver
-DRIBBLER_SPEED = 200000000          # speed while on; flip the sign if it spins the ball away (the old code flipped it a few times)
+DRIBBLER = (32, 1431223552, 1245)   # CHECK it's this driver's calibration
+DRIBBLER_SPEED = 200000000          # speed while on; flip the sign if it spins the ball away
 
 # kicker: solenoid GPIO pin (test_solenoid.py), or None if this robot has no kicker
 KICKER_PIN = 17

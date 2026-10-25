@@ -67,7 +67,7 @@ ROTATION = cv2.ROTATE_90_CLOCKWISE  # camera mounting; applied after undistort/t
 HERE = os.path.dirname(os.path.abspath(__file__))
 CALIB_FILE = os.path.join(HERE, "fisheye_calib.npz")
 CALIB_FRAMES_FILE = os.path.join(HERE, "calib_frames.npz")   # every captured board's corners (send it if calibration fails)
-CAL_MAX_RMS = 3.0              # px: a worse fit is not saved or used (it blacked out the undistorted view)
+CAL_MAX_RMS = 3.0              # px: a worse fit is not saved or used
 TOPDOWN_FILE = os.path.join(HERE, "topdown.npz")
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
 EXPORT_FILE = os.path.join(HERE, "robot_vision_config.json")   # made by the "Generate config file" button
@@ -88,8 +88,7 @@ COLOURS = ["blue", "yellow", "white", "green", "orange"]
 MASK_BGR = {"blue": (255, 90, 0), "yellow": (0, 255, 255), "white": (255, 255, 255),
             "green": (0, 200, 0), "orange": (0, 140, 255)}
  
-# HSV in OpenCV units: H 0-179, S 0-255, V 0-255.  blue/yellow are your old values;
-# white/green/orange are just starting points - tune them with the sliders.
+# HSV in OpenCV units: H 0-179, S 0-255, V 0-255. Starting points - tune them with the sliders.
 DEFAULT_HSV = {
     "blue":   {"lo": [90, 200, 100], "hi": [110, 255, 255]},
     "yellow": {"lo": [20, 100, 100], "hi": [40, 255, 255]},
@@ -99,7 +98,7 @@ DEFAULT_HSV = {
 }
 HSV_LIMITS = (179, 255, 255)
  
-# Same behaviour as your original script by default: auto exposure, manual white balance.
+# Defaults: auto exposure, manual white balance.
 # NOTE: libcamera's ColourGains order is (RED gain, BLUE gain).
 # Focus (Camera Module 3 only - ignored on cameras without autofocus, e.g. the HQ camera):
 #   af = continuous autofocus; off = lens held at lens_position, in dioptres = 1000 / focus distance in mm
@@ -1296,8 +1295,8 @@ def build_export():
         "rotation": ROTATION_NAMES[ROTATION],
         "camera": {**cam, "controls": controls},
         "hsv": hsv,
-        # ignore mask + mirror crop: raw camera-frame pixels (before the rotation); the old ignore box is gone (paint
-        # the robot body into the mask instead)
+        # ignore mask + mirror crop: raw camera-frame pixels (before the rotation); the robot body is painted into
+        # the mask
         "detection": {"ignore_cm": None, "ignore_box": None,
                       "ignore_mask": None if mask is None else {"size": list(CAPTURE_SIZE), "png": mask_b64(mask)},
                       "mirror_crop": None if not crop["enabled"] else {k: crop[k] for k in ("cx", "cy", "r")},

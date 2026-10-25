@@ -24,7 +24,7 @@ from utils import rotate
 # ====================================================================================================
 # 1. RobotVision - camera calibration + colour masks
 # ====================================================================================================
-# Camera calibration + colour masks (was robot_vision.py) - use the settings tuned in test_camera.py inside the robot script.
+# Camera calibration + colour masks - use the settings tuned in test_camera.py inside the robot script.
 #
 # 1. Tune everything in test_camera.py's web page, then press "Generate config file".
 #    That writes robot_vision_config.json next to test_camera.py.
@@ -310,13 +310,13 @@ RADIAL_REF_CM = 80.0       # radial mode: the single px/cm used for blob areas /
                            # so this keeps the minimum sizes small enough for far balls / robots)
 RADIAL_KEEP_BITS = ("orange",)   # radial mode: colours NOT cleaned by the noise opening far away (see below)
 RADIAL_KEEP_BALL_PX = 2.0  # ...far away = where a ball is less than this many kernels across along the radius.
-                           # The opening removes anything thinner than the kernel, and a fisheye squashes far things
-                           # along the radius: with a 3 px kernel at 640x480 every ball past ~60 cm was wiped out
+                           # (The opening removes anything thinner than the kernel, and a fisheye squashes far things
+                           # along the radius.)
 
 
 def radial_table(radial):
     """Radial calibration (test_camera.py "Distance calibration") -> (pixel radii, cm) lookup table, increasing.
-    radial = {"table_px", "table_cm": the fitted pixels -> cm curve, sampled} (or "coeffs": a polynomial, older files)."""
+    radial = {"table_px", "table_cm": the fitted pixels -> cm curve, sampled} (or "coeffs": a polynomial)."""
     if radial.get("table_px"):
         r = np.array(radial["table_px"], np.float64)
         d = np.array(radial["table_cm"], np.float64)
@@ -441,8 +441,7 @@ class RobotVision:
             by = min(max(self.robot_centre[1], 0), bh - 1)
             self.centre = _rotate_point((bx, by), (bw, bh), self.rotation)
 
-        # ignore box: cm around the robot centre (older configs; now the robot body is painted in the ignore mask
-        # instead), or the old fixed pixel box
+        # ignore box: cm around the robot centre, or a fixed pixel box
         ign = det.get("ignore_cm")
         if ign and not any(ign.values()):
             ign = None
@@ -595,7 +594,7 @@ class RobotVision:
 # ====================================================================================================
 # 2. Detection - colour masks -> things in cm
 # ====================================================================================================
-# Detection (was detection.py) - turns the colour masks from RobotVision into things in cm (robot frame).
+# Detection - turns the colour masks from RobotVision into things in cm (robot frame).
 #
 #     orange -> ball
 #     yellow / blue -> goals
@@ -619,16 +618,14 @@ HULL_MARGIN = 6.0              # cm the field hull is grown by before filtering 
 LINE_MAX_POINTS = 250          # white pixels are subsampled to at most this many
 LINE_MAX_RANGE = 120.0         # cm; far points are less accurate in the top-down view
 OBSTACLE_MIN_AREA = 40.0
-OBSTACLE_MIN_SIZE = 12.0       # cm across (sqrt of the blob area): a robot is never smaller, even 90 cm away; smaller
-                               # blobs far away were the field corners (black outer area + blur), not robots
+OBSTACLE_MIN_SIZE = 12.0       # cm across (sqrt of the blob area): smaller blobs aren't robots
 OBSTACLE_KERNEL = field.PENALTY_LINE_W + 2.0   # cm; opening of the "unknown colour" mask: removes anything thinner,
                                               # i.e. the black penalty box line (robots are ~20 cm across)
 OBSTACLE_BODY_MARGIN = 2.0     # cm past our own body (ROBOT_RADIUS circle + ignore box) where obstacles are ignored
 OBSTACLE_LINE_MARGIN = 3.0     # cm around white lines that never counts as obstacle (blurry line edges)...
-OBSTACLE_LINE_MARGIN_FAR = 6.0 # ...this much further than OBSTACLE_FAR from us (the lens blurs far lines into grey,
-OBSTACLE_FAR = 60.0            # which isn't white or green: the far side lines showed up as robots)
-OBSTACLE_MAX_RANGE = 82.0      # cm: further than this the camera resolution is too low to tell robots from blur (the far
-                               # ends of the black penalty line and the white lines blur into robot-sized blobs)
+OBSTACLE_LINE_MARGIN_FAR = 6.0 # ...this much further than OBSTACLE_FAR from us
+OBSTACLE_FAR = 60.0
+OBSTACLE_MAX_RANGE = 82.0      # cm: no obstacles further than this
 OBSTACLE_GRID_PPC = 2.0        # radial mode: px/cm of the top-down grid the obstacle mask is redrawn on (see _ObstacleGrid)
 OBSTACLE_SPLIT_BIN = math.radians(3.0)   # robots touching (as we see them) make one blob: it's split by direction
 OBSTACLE_SPLIT_JUMP = 6.0      # cm: ...where the blob's nearest distance jumps by more than this from one direction to
@@ -802,9 +799,7 @@ def _split_obstacle(g, contour, cover):
 class _ObstacleGrid:
     """Radial mode: the "unknown colour" mask redrawn on a small top-down grid (OBSTACLE_GRID_PPC px/cm, robot in
     the middle, out to OBSTACLE_MAX_RANGE + a robot), so the opening that removes thin things is the same size in cm
-    everywhere. (In the raw mirror image a cm is ~4 px next to us and ~0.6 px at 80 cm, and the opening is sized for
-    far away: close up it left the black penalty line in, which then joined onto a robot standing near it, and the
-    robot was reported at the line.) Has the same to_cm() / px_per_cm as RobotVision, so the helpers above work on
+    everywhere. Has the same to_cm() / px_per_cm as RobotVision, so the helpers above work on
     it; built once per RobotVision (cached on rv)."""
 
     def __init__(self, rv):
@@ -924,8 +919,7 @@ def detect(rv, res, t, compass):
         else:
             known = m["green"] | white_grown | m["orange"] | m["yellow"] | m["blue"]
         unknown = cv2.bitwise_and(field, cv2.bitwise_not(known))
-        # our own body: the ignore box no longer covers the front (so the ball in the dribbler stays visible),
-        # so blank a circle the size of the robot too
+        # our own body: blank a circle the size of the robot too
         x1, y1, x2, y2 = rv.ignore_box
         pad = int(round(OBSTACLE_BODY_MARGIN * ppc))
         unknown[max(y1 - pad, 0):y2 + pad, max(x1 - pad, 0):x2 + pad] = 0

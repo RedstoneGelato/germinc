@@ -1,7 +1,6 @@
 """
-field_int.py - the field model for the INTERNATIONAL RoboCupJunior Soccer rules (RCJ Soccer 2026 rules + "Technical
-Specification For Soccer Fields 2026"), the rules RCJ Singapore plays. Same names and functions as field.py (the
-RCJA field), so any module can use it in place of field.py.
+field_int.py - the field model for the international RoboCupJunior Soccer rules. Same names and functions as
+field.py (the RCJA field), so any module can use it in place of field.py.
 
 To run the robot code on this field use main_int.py / main_attack_int.py (they call install() first, so every module
 that does `import field` gets this one). sim_int.py does the same for the simulator.
@@ -43,8 +42,8 @@ OWN_GOAL_Y = -ATTACK_GOAL_Y
 GOAL_BACK_Y = ATTACK_GOAL_Y + GOAL_DEPTH  # inside of the goal back walls (attacking end; the own goal's is at -this)
 
 # ---- rules (international)
-BALL_OUT_AT_LINE = False   # the ball is live everywhere inside the walls (rule 2.5)
-LINE_IS_OUT = False        # crossing the white line isn't out for a robot, touching a wall is (rule 2.8)
+BALL_OUT_AT_LINE = False   # the ball is live everywhere inside the walls
+LINE_IS_OUT = False        # crossing the white line isn't out for a robot, touching a wall is
 WALL_GAP = 2.0             # cm our robot's edge keeps from the walls at the furthest out it goes (touching one = out)
 
 MAP_RES = 1.0           # distance-map pixels per cm
@@ -175,7 +174,7 @@ def boundary_y(x, inset=0.0):
 
 
 def touches_wall(x, y, r, gap=0.0):
-    """A robot (centre x, y, radius r) within `gap` cm of touching an outer wall (rule 2.8: out of bounds)."""
+    """A robot (centre x, y, radius r) within `gap` cm of touching an outer wall (out of bounds)."""
     return abs(x) >= WALL_W / 2 - r - gap or abs(y) >= WALL_L / 2 - r - gap
 
 
@@ -183,7 +182,7 @@ def penalty_depth(x, y, sgn):
     """How far (cm) point (x, y) is inside a penalty area (sgn=+1 the one at the attacking end, -1 ours), measured to
     its front and side lines' outer edges, the rounded corners included. Negative = outside it, by that much.
     The goal line end is left open (counted as going on behind the goal line): a robot hanging over the goal line
-    into the goal isn't treated as having a part outside the area - the safe reading of "completely inside"."""
+    into the goal isn't treated as having a part outside the area."""
     ax = abs(x)
     d = ATTACK_GOAL_Y - sgn * y                     # distance in front of that goal line
     cx, cd = PENALTY_W / 2 - PENALTY_CORNER_R, PENALTY_D - PENALTY_CORNER_R
@@ -193,12 +192,12 @@ def penalty_depth(x, y, sgn):
 
 
 def fully_in_penalty(x, y, r, sgn):
-    """A robot (centre x, y, radius r) completely inside that penalty area (rule 2.6 / 2.8: out of bounds)."""
+    """A robot (centre x, y, radius r) completely inside that penalty area (out of bounds)."""
     return penalty_depth(x, y, sgn) >= r
 
 
 def partly_in_penalty(x, y, r, sgn):
-    """Any part of a robot (centre x, y, radius r) in that penalty area (rule 2.6: two of a team = multiple defense)."""
+    """Any part of a robot (centre x, y, radius r) in that penalty area (two of a team = multiple defense)."""
     return penalty_depth(x, y, sgn) > -r
 
 

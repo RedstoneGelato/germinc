@@ -21,14 +21,13 @@ BALL_VEL_MAX = 400.0          # cm/s: faster than this between two frames = a de
 OBSTACLE_MATCH = 20.0         # cm: same obstacle as last frame if this close
 OBSTACLE_MIN_HITS = 3         # frames in a row before an obstacle is believed
 OBSTACLE_LOST_TIME = 0.3
-OBSTACLE_MEMORY = 0.4         # s an obstacle is remembered (field frame) after it drops out of view (longer: robots
-                              # that had moved on stayed behind as ghosts)...
+OBSTACLE_MEMORY = 0.4         # s an obstacle is remembered (field frame) after it drops out of view...
 OBSTACLE_VISIBLE = 70.0       # ...unless it's closer than this (cm), where the camera would definitely still see it
 MATE_MATCH = cfg.ROBOT_RADIUS + 15.0   # cm: an obstacle this close to where the teammate says it is = the teammate
 OPP_MATCH = 15.0              # cm: an opponent this close to where its track was last = the same robot (velocity)
-OPP_VEL_WINDOW = 0.3          # s: opponent velocity = straight-line fit through its positions over this long (frame to
-OPP_VEL_MIN_SPAN = 0.1        # frame differences were mostly noise: +-30 cm/s for a robot standing still); 0 until
-OPP_TRACK_LOST = 0.3          # it's been tracked this long (s). A track not matched for OPP_TRACK_LOST s is dropped
+OPP_VEL_WINDOW = 0.3          # s: opponent velocity = straight-line fit through its positions over this long; 0 until
+OPP_VEL_MIN_SPAN = 0.1        # it's been tracked OPP_VEL_MIN_SPAN s. A track not matched for OPP_TRACK_LOST s is
+OPP_TRACK_LOST = 0.3          # dropped
 OPP_MERGE = 15.0              # cm: a teammate's opponent this close to one of ours = the same robot
 # the ball where the camera can't see it: the ~2 cm blind ring right round our bumper (a ball in the dribbler is never
 # seen), the mirror mount bars' slices, robots in the way. With the IR ring (robot_config.IR_*) its bearing is used,
@@ -40,7 +39,7 @@ IR_RING_R = cfg.ROBOT_RADIUS + 1.0       # cm, near point of a ball IR says is c
 IR_CAPTURE_ANGLE = math.radians(20)      # ...and this near straight ahead = in the dribbler
 IR_CAPTURE_R = cfg.ROBOT_RADIUS + 3.0    # (cm, as long as its estimated near point is within this)
 NEAR_HOLD_DIST = 25.0         # no IR: a ball last seen this close (cm) that vanishes is in the blind ring, not gone -
-NEAR_HOLD_TIME = 0.6          # kept where it was (robot frame: we're usually pushing it) for this long (s)
+NEAR_HOLD_TIME = 0.6          # kept where it was (robot frame) for this long (s)
 NO_IR_CAPTURE_MAX = 3.0       # no IR: s a ball that vanished out of the capture zone still counts as in the dribbler
 
 
@@ -234,8 +233,7 @@ class World:
         self.obstacles = self.obstacle_tracker.update([(rotate(front_of(o), c), o.size) for o in det.obstacles], now)
 
         # field-frame copies when we know where we are (anything from the teammate needs this too)
-        # a paused / taken-off teammate still sends its last ball and opponents (only "bot active" turns 0): stale,
-        # e.g. the ball where it was when it went off - the goalie chased that over our goal line
+        # a paused / taken-off teammate's ball and opponents aren't used (its "bot active" is 0)
         mate_on = bool(mate) and mate.get("bot active") == 1
         mate_ball = mate.get("ball") if mate_on else None
         self.mate_pos = mate.get("pos") if mate else None
@@ -276,11 +274,11 @@ class World:
 
     def hidden_ball(self, has_ir, pose, c, now):
         """Where the ball is while the camera can't see it (robot frame, its near point like the camera gives), or None
-        (then the tracker's last position is kept for BALL_LOST_TIME as before). Sets .ball_hidden to "ir" / "hold".
+        (then the tracker's last position is kept for BALL_LOST_TIME). Sets .ball_hidden to "ir" / "hold".
         - IR ring: along the IR bearing, at the range of the last camera ball (moved on by its velocity, IR_RANGE_MEMORY)
           kept within what the IR strength allows; strong IR + unseen = in the blind ring (IR_RING_R)
         - no IR (and cfg.BALL_BLIND_RING): a ball that vanished within NEAR_HOLD_DIST is in the blind ring - it stays where it was (robot frame)
-          for NEAR_HOLD_TIME instead of being lost (we drive onto it, we don't back off or go searching)"""
+          for NEAR_HOLD_TIME"""
         last = self.last_cam_ball
         recent = last is not None and now - last[2] < IR_RANGE_MEMORY
         confident = pose is not None and pose.confident
@@ -325,8 +323,7 @@ class World:
 
     def opponent_velocities(self, now):
         """Each opponent's velocity (field frame cm/s): it's matched to the nearest track (its recent positions), and
-        the velocity is the slope of a straight-line fit through the last OPP_VEL_WINDOW s of them - averaging over
-        many frames instead of differencing two (a few mm of position noise per frame was tens of cm/s)."""
+        the velocity is the slope of a straight-line fit through the last OPP_VEL_WINDOW s of them."""
         tracks = [t for t in self.opp_tracks if now - t[-1][0] < OPP_TRACK_LOST]
         free = list(range(len(tracks)))
         vels = []
@@ -363,7 +360,7 @@ class World:
 
     def remember_obstacles(self, seen, pose, now):
         """Field-frame obstacles: the ones seen now, plus ones seen in the last OBSTACLE_MEMORY seconds that are now
-        out of view (far away / at the edge of the camera). Stops planning from flip-flopping when an obstacle flickers."""
+        out of view (far away / at the edge of the camera)."""
         mem = self.obstacle_memory
         for p, size in seen:
             match = min(mem, key=lambda m: math.hypot(m[0][0] - p[0], m[0][1] - p[1]), default=None)

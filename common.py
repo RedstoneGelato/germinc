@@ -200,17 +200,12 @@ class Robot:
         self.zero_heading(det) #calibrate imu heading, if the robot was put down facing the goal we attack
 
     def zero_heading(self, det=None):
-        """Facing forward = facing the goal we attack - but only when the robot was really put down that way. The
-        referee's module stops robots where they stand (fouls, damage, stopping play) and nobody turns them to face
-        the goal, so zeroing on every pause would make a sideways robot think sideways is forward. Zeroes:
+        """Facing forward = facing the goal we attack - but only when the robot was really put down that way. Zeroes:
             - whatever way it faces, on the first pause after start-up and when the attack goal changes (half-time:
               put down facing the other goal), for that whole pause
-            - otherwise only while it faces within ZERO_MAX_ERR of forward (put down facing the goal again: clears
-              the IMU drift). Measured from the heading before this pause, so slowly turning a paused robot can't
-              drag compass 0 round with it.
-        And whatever the IMU says, the goals the camera sees win when they put us facing the other way: a damaged
-        robot comes back on facing its OWN goal (RCJ rule 2.8), or the program restarted while it was off the field
-        and carried on from an old heading. Zeroing that as forward would make it attack its own goal."""
+            - otherwise only while it faces within ZERO_MAX_ERR of forward (put down facing the goal again).
+              Measured from the heading before this pause.
+        And whatever the IMU says, the goals the camera sees win when they put us facing the other way."""
         before = wrap_pi(self.imu.compass() + self._pause_shift) # heading as it was before this pause's zeroing
         if self.zeroed_for != self.attack:
             self._free_zero = True
@@ -260,7 +255,7 @@ class Robot:
     def shutdown(self):
         print("Shutting down safely...")
 
-        def attempt(what, fn):     # one step failing mustn't stop the rest (above all the motors stopping)
+        def attempt(what, fn):     # one step failing doesn't stop the rest
             try:
                 fn()
             except Exception as e:
@@ -292,8 +287,7 @@ class Robot:
 
 class CameraWatch:
     """No new camera frame for CAMERA_BLIND s (camera frozen / restarting) = blind. The ball, goals and the pose are
-    all from the last frame then, and they're relative to where the robot WAS, so driving on them pushes the ball
-    the wrong way (in the simulator with faults.py it scored own goals): the brains stand still instead."""
+    all from the last frame then, relative to where the robot WAS: the brains stand still."""
 
     def __init__(self):
         self.frame_id = None
@@ -431,8 +425,7 @@ def goal_colour_from_view(det, current):
 def heading_from_goals(det, attack, both_only=False):
     """Our heading (0 = facing the goal we attack, CCW +) from where the goals are in the camera, without the IMU, or
     None. Both goals seen: exact, from the line own goal -> attack goal. One goal: from the direction to it - off by up
-    to ~40 deg when we're off to the side of it, so a heading near 0 / 180 deg is snapped to that (robots are put
-    down square: facing the goal they attack at kickoff, their own goal coming back on after damage)."""
+    to ~40 deg when we're off to the side of it, so a heading near 0 / 180 deg is snapped to that."""
     if det is None:
         return None
     own = "blue" if attack == "yellow" else "yellow"

@@ -1,5 +1,5 @@
 """
-main_attack_int.py - the striker (main_attack.py) on the INTERNATIONAL rules (RCJ Singapore): field_int.py +
+main_attack_int.py - the striker (main_attack.py) on the INTERNATIONAL rules: field_int.py +
 strategy_int.py instead of field.py + strategy.py. Run this instead of main_attack.py there (deploy/germinc.service
 runs main_attack.py: point it here).
 """

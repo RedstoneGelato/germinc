@@ -1,6 +1,6 @@
 """
 motion.py - desired movement (relative vector + heading) -> four motor speeds.
-Same maths as the old main loop; distances are now cm instead of camera pixels / IR units.
+Distances are in cm.
 """
 import math
 
@@ -27,16 +27,16 @@ def VelocityToMotor(xvel, yvel, rot, maxspd): #convert variables into specific m
 BRAKE_SMOOTH = 0.5   # velocity smoothing when the new direction is the opposite of the current one (blends from
                      # `smooth` when it's the same): sharp changes of direction / slowing down react much faster
 TURN_DEADBAND = 0.03 # rad: closer than this to the wanted heading = stop turning...
-TURN_RESUME = 0.10   # ...and don't start again until it's this far off (no jitter / battery drain sitting still)
+TURN_RESUME = 0.10   # ...and don't start again until it's this far off
 PARK_ENTER = 2.0     # cm: this close to the target = stop moving (wheels off)...
-PARK_RESUME = 5.0    # ...until the target is this far away again (pose / ball noise moves it by a cm or two)
+PARK_RESUME = 5.0    # ...until the target is this far away again
 BRAKE_LEAD = 12.0    # TUNE: cm the robot still travels at full speed (BASE_SPEED) before slowing down takes effect
                      # (velocity smoothing + motor lag + camera delay): the line slowdown starts this much earlier
 
 
 def dribble_speed_multi(move, compass):
     """Speed multiplier with the ball: 1 straight forwards; otherwise capped so the sideways and the backwards part
-    of the movement each stay below cfg.DRIBBLE_SPEED_MIN (those lose the ball - braking / accelerating doesn't).
+    of the movement each stay below cfg.DRIBBLE_SPEED_MIN.
     move = relative movement vector, compass = robot heading."""
     if math.hypot(move[0], move[1]) < 1e-6:
         return 1.0
@@ -63,10 +63,8 @@ class Mover:
             base_speed  speed at full distance, spd_min  slowest multiplier when close,
             spd_multi   if set, use this multiplier instead of the distance-based one (striker shooting),
             smooth      how much of each new velocity is taken per loop when going the same way (0.1 = smooth but
-                        ~0.1 s behind; the goalie uses more to react to shots). Changing direction / slowing down
-                        takes more of it (up to BRAKE_SMOOTH), so the robot doesn't drift on sharp turns.
-        Turning has its own speed, proportional to the heading error (cfg.TURN_MAX, cfg.TURN_FULL_ERR), so a robot
-        that moves slowly still turns quickly.
+                        ~0.1 s behind). Changing direction / slowing down takes more of it (up to BRAKE_SMOOTH).
+        Turning has its own speed, proportional to the heading error (cfg.TURN_MAX, cfg.TURN_FULL_ERR).
         dribbler_on: slow down the more the movement direction is off the facing direction (cfg.DRIBBLE_SPEED_MIN),
         turn at most cfg.DRIBBLE_TURN_MAX and change wheel speeds gently (cfg.DRIBBLE_MAX_ACCEL)."""
         # ---- turning: faster the further off the wanted heading
@@ -75,7 +73,7 @@ class Mover:
         if abs(heading_error) < TURN_DEADBAND:
             self.turn_parked = True
         elif abs(heading_error) > TURN_RESUME or not self.parked or dribbler_on:
-            self.turn_parked = False    # (the wider turning tolerance is only for sitting still: aiming needs precision)
+            self.turn_parked = False    # (the wider turning tolerance is only for sitting still)
         if self.turn_parked: #dont spin if difference too small
             rot = 0.0
         else:
@@ -85,7 +83,7 @@ class Mover:
         # near the boundary only the part of the movement heading at the line slows down (limit_outward on `want`
         # below), so the speed comes from the whole distance: sliding along the line stays full speed
         reachable = limit_outward(desired_pos, pose) #where it can actually get to without going out (for parking)
-        spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),110),0) # cm (was 220 old units)
+        spd_scale_helper = max(min(abs(desired_pos[0]) + abs(desired_pos[1]),110),0) # cm
         if spd_multi is None:
             spd_multi = 0.00004 * (spd_scale_helper ** 2) + 0.004 * spd_scale_helper + 0.1 #quadratic scaling of speed, further the bot wants to go, faster itll go
             spd_multi = max(min(spd_multi,1),spd_min)
@@ -96,7 +94,7 @@ class Mover:
         if d < PARK_ENTER and not dribbler_on:
             self.parked = True
         elif d > PARK_RESUME or dribbler_on:
-            self.parked = False           # (never parked with the ball: carrying / aiming needs fine moves)
+            self.parked = False           # (never parked with the ball)
         dist = math.hypot(desired_pos[0], desired_pos[1])
         want = [0.0, 0.0] if self.parked or d < 0.5 else [desired_pos[0] / dist * speed, desired_pos[1] / dist * speed]
         lead = [v / cfg.BASE_SPEED * BRAKE_LEAD for v in self.vel]    # where our current speed takes us first
@@ -127,7 +125,7 @@ class Mover:
         if biggest > cfg.MOTOR_MAX:                                                # too much: scale everything down
             speeds = [m * cfg.MOTOR_MAX / biggest for m in speeds]
         speeds = tuple(int(m) for m in speeds)
-        if dribbler_on and not line.on_line: #limit how fast the wheel speeds change so the ball isn't jerked out of the dribbler
+        if dribbler_on and not line.on_line: #limit how fast the wheel speeds change
             step = cfg.DRIBBLE_MAX_ACCEL * cfg.BASE_SPEED * cfg.CONTROL_PERIOD
             change = [new - old for new, old in zip(speeds, self.last_speeds)]
             biggest = max(abs(c) for c in change)
