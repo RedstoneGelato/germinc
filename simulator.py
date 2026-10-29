@@ -201,14 +201,17 @@ LDR_RING_RADIUS = cfg.ROBOT_RADIUS - 3.0
 # pi: the sensors sit opposite the computed angle (lines.LDR_VECTOR_IS_ESCAPE). Set 0 to test the layout the comments
 # describe.
 LDR_PHYSICAL_OFFSET = math.pi
-LDR_WHITE, LDR_GREEN = 800, 3200
+LDR_WHITE, LDR_GREEN, LDR_GREY = 800, 3200, 2400
+GREY_CARPET = False          # True = the field is drawn grey (no green for the camera, LDRs read LDR_GREY)
 
 FIELD_PPC = 2.0              # sim field image resolution (px/cm)
 UI_PPC = 2.4                 # window scale (px/cm)
 MARGIN = 10.0                # cm drawn around the walls
 
-GREEN, WHITE, WALL = (40, 150, 40), (250, 250, 250), (25, 25, 25)
+GREEN, GREY, WHITE, WALL = (40, 150, 40), (120, 120, 120), (250, 250, 250), (25, 25, 25)
 YELLOW, BLUE, ORANGE, ROBOT = (0, 220, 255), (220, 70, 0), (0, 120, 255), (45, 45, 45)
+THEIR_ROBOT = ROBOT          # colour the other team's robots are drawn in (full mode only), e.g. (235, 235, 235) = white
+THEIR_DARK_BASE = 0.0        # cm: ...with their bottom this high drawn ROBOT colour (dark wheels / bumper). 0 = all one colour
 GOAL_BGR = {"yellow": YELLOW, "blue": BLUE}
 
 MASK_BGR = {"blue": (255, 90, 0), "yellow": (0, 255, 255), "white": (255, 255, 255),   # masks view
@@ -434,7 +437,8 @@ class OmniCamera:
     painted on that, (3) a fixed remap to the mirror image. Then (only without radial mode) another fixed remap to
     the top-down view, like robot_vision's calibration.
     Not modelled: the mirror image is left-right flipped on the real camera (the sim's is already turned the right
-    way round), glare off the mirror mount (its bars are drawn: MOUNT_BAR_*), focus blur, robots' own colours (all drawn dark)."""
+    way round), glare off the mirror mount (its bars are drawn: MOUNT_BAR_*), focus blur, robots' own colours (all drawn dark, except
+    the other team's: THEIR_ROBOT)."""
     SS = 2   # supersampling when rendering the raw image (pixels average over their area, like a real sensor)
 
     def __init__(self):
@@ -495,7 +499,10 @@ class OmniCamera:
             if b is robot:
                 continue
             bx, by = to_robot([b.x, b.y])
-            items.append((math.hypot(bx, by) - b.r, ROBOT, cylinder_shadow(bx, by, b.r, ROBOT_HEIGHT)))
+            colour = ROBOT if b.team == robot.team else THEIR_ROBOT
+            items.append((math.hypot(bx, by) - b.r, colour, cylinder_shadow(bx, by, b.r, ROBOT_HEIGHT)))
+            if colour != ROBOT and THEIR_DARK_BASE > 0:      # (sorted by the first item: stays on top of the body)
+                items.append((math.hypot(bx, by) - b.r - 1e-6, ROBOT, cylinder_shadow(bx, by, b.r, THEIR_DARK_BASE)))
         if ball is not None:
             bx, by = to_robot(ball)
             items.append((math.hypot(bx, by) - BALL_RADIUS, ORANGE, ball_shadow(bx, by)))
@@ -545,7 +552,8 @@ class FieldImage:
         self.ppc = ppc
         self.size = (int(round(self.W * ppc)), int(round(self.L * ppc)))
         img = np.full((self.size[1], self.size[0], 3), WALL, np.uint8)
-        cv2.rectangle(img, self.px(-field.WALL_W / 2, field.WALL_L / 2), self.px(field.WALL_W / 2, -field.WALL_L / 2), GREEN, -1)
+        cv2.rectangle(img, self.px(-field.WALL_W / 2, field.WALL_L / 2), self.px(field.WALL_W / 2, -field.WALL_L / 2),
+                      GREY if GREY_CARPET else GREEN, -1)
         # goals: the floor under the coloured walls (the camera draws the walls standing up, see OmniCamera); the
         # goal floor is green with the white line on it
         for x0, x1, y0, y1 in GOAL_WALLS:
@@ -658,7 +666,7 @@ class SimKicker:
 
 class SimPCB:
     def __init__(self):
-        self.colours = [LDR_GREEN] * cfg.LDR_COUNT
+        self.colours = [LDR_GREY if GREY_CARPET else LDR_GREEN] * cfg.LDR_COUNT
         self.ir = [0.0] * getattr(cfg, "IR_COUNT", 0) if SIM_IR else []
 
     def snapshot(self):
@@ -947,7 +955,7 @@ class Sim:
         ok = (u >= 0) & (u < w) & (v >= 0) & (v < h)
         white = np.zeros(len(u), bool)
         white[ok] = f.white[v[ok], u[ok]] > 0
-        out = np.where(white, LDR_WHITE, LDR_GREEN)
+        out = np.where(white, LDR_WHITE, LDR_GREY if GREY_CARPET else LDR_GREEN)
         if self.noise:
             out = out + np.array([int(n) for n in self.rng.normal(0, 150, len(out))])
         return [int(o) for o in out]
@@ -1444,7 +1452,7 @@ def fast_detect(sim, r, ignore):
     from vision import Detections, Goal, Obstacle
     rng = sim.rng
     det = Detections(time.monotonic(), r.bot.imu.compass())
-    det.field_visible = True
+    det.field_visible = not GREY_CARPET
 
     def to_robot(px, py):
         return rotate([px - r.x, py - r.y], -r.h)
@@ -1474,8 +1482,8 @@ def fast_detect(sim, r, ignore):
             sgn = 1 if colour == "yellow" else -1
             det.goals[colour] = Goal(to_robot(best[1], best[2]),
                                      to_robot(0.0, sgn * (field.GOAL_BACK_Y + 1)))
-    # other robots: nearest point
-    for b in sim.on_field:
+    # other robots: nearest point (none with cfg.ENEMY_DETECTION off, like vision.detect)
+    for b in (sim.on_field if cfg.ENEMY_DETECTION else ()):
         if b is r:
             continue
         dx, dy = b.x - r.x, b.y - r.y

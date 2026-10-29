@@ -633,6 +633,11 @@ OBSTACLE_SPLIT_JUMP = 6.0      # cm: ...where the blob's nearest distance jumps 
                                # nearer one hides a long wedge behind it, which joins onto the far one)...
 OBSTACLE_SPLIT_RISE = 4.0      # ...or rises this much higher between two dips than both dips (two robots side by side)
 OBSTACLE_SPLIT_MIN_W = 6.0     # cm across: a piece narrower than this isn't split off
+WHITE_BODY_KERNEL = 12.0       # cm: white blobs that survive an opening this big are white robots, not lines (a line,
+                               # even an L at a corner, is ~5 cm thick; a robot seen in the mirror 20+ cm). 0 = off
+WHITE_BODY_MARGIN = OBSTACLE_LINE_MARGIN_FAR   # cm grown around a white robot: line points this close to it are
+                               # dropped too, and it bridges the gap the line margin leaves to the robot's dark parts
+WHITE_GRID_PPC = 1.0           # px/cm of the top-down grid the white mask is checked on (radial mode)
 
 Goal = collections.namedtuple("Goal", "near centre")      # both [x, y] robot frame cm
 Obstacle = collections.namedtuple("Obstacle", "near size centre", defaults=(None,))
@@ -802,10 +807,9 @@ class _ObstacleGrid:
     everywhere. Has the same to_cm() / px_per_cm as RobotVision, so the helpers above work on
     it; built once per RobotVision (cached on rv)."""
 
-    def __init__(self, rv):
-        k = OBSTACLE_GRID_PPC
+    def __init__(self, rv, k=OBSTACLE_GRID_PPC, reach=OBSTACLE_MAX_RANGE + 2 * cfg.ROBOT_RADIUS):
         self.px_per_cm = k
-        self.half = int(math.ceil((OBSTACLE_MAX_RANGE + 2 * cfg.ROBOT_RADIUS) * k))
+        self.half = int(math.ceil(reach * k))
         n = 2 * self.half
         u, v = np.meshgrid(np.arange(n, dtype=np.float64) + 0.5, np.arange(n, dtype=np.float64) + 0.5)
         sx, sy = rv.to_px((u - self.half) / k, (self.half - v) / k)        # grid pixel -> raw image pixel
@@ -813,6 +817,9 @@ class _ObstacleGrid:
 
     def to_cm(self, px, py):
         return (px + 0.5 - self.half) / self.px_per_cm, (self.half - py - 0.5) / self.px_per_cm
+
+    def to_px(self, x_cm, y_cm):
+        return x_cm * self.px_per_cm + self.half - 0.5, self.half - y_cm * self.px_per_cm - 0.5
 
     def remap(self, mask):
         return cv2.remap(mask, *self.maps, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
@@ -823,6 +830,52 @@ def _obstacle_grid(rv):
     if grid is None:
         grid = rv._obstacle_grid = _ObstacleGrid(rv)
     return grid
+
+
+def _behind(o, q):
+    """True if obstacle o is wholly in the direction of the nearer obstacle q (as seen from us), so q would hide it."""
+    do, dq = math.hypot(*o.centre), math.hypot(*q.centre)
+    if do <= dq:
+        return False
+    half_q = math.asin(min(1.0, cfg.ROBOT_RADIUS / dq))
+    half_o = math.asin(min(1.0, o.size / 2 / do))
+    gap = abs((math.atan2(o.centre[1], o.centre[0]) - math.atan2(q.centre[1], q.centre[0]) + math.pi)
+              % (2 * math.pi) - math.pi)
+    return gap + half_o < half_q
+
+
+def _white_grid(rv):
+    grid = getattr(rv, "_white_grid", None)
+    if grid is None:
+        grid = rv._white_grid = _ObstacleGrid(rv, WHITE_GRID_PPC, LINE_MAX_RANGE + WHITE_BODY_KERNEL)
+    return grid
+
+
+def _white_bodies(rv, white):
+    """White robots: the parts of the white mask too thick to be a line (an opening WHITE_BODY_KERNEL cm across, done
+    on a top-down grid in radial mode so it's the same size in cm everywhere). Returns (grid, mask on that grid,
+    the mask grown by WHITE_BODY_MARGIN), or None if there are none."""
+    if WHITE_BODY_KERNEL <= 0 or cv2.countNonZero(white) == 0:
+        return None
+    g = _white_grid(rv) if getattr(rv, "mode", None) == "radial" else rv
+    w = g.remap(white) if g is not rv else white
+    k = max(1, int(round(WHITE_BODY_KERNEL * g.px_per_cm)))
+    body = cv2.morphologyEx(w, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    if cv2.countNonZero(body) == 0:
+        return None
+    km = max(1, int(round(2 * WHITE_BODY_MARGIN * g.px_per_cm))) | 1
+    return g, body, cv2.dilate(body, np.ones((km, km), np.uint8))
+
+
+def _on_mask(g, mask, x, y):
+    """For points in robot cm: True where mask (pixels of g: a RobotVision or an _ObstacleGrid) is set."""
+    px, py = g.to_px(x, y)
+    u, v = np.round(px).astype(np.int32), np.round(py).astype(np.int32)
+    h, w = mask.shape[:2]
+    ok = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+    out = np.zeros(len(x), bool)
+    out[ok] = mask[v[ok], u[ok]] > 0
+    return out
 
 
 def _big_contours(mask, min_area, approx=cv2.CHAIN_APPROX_NONE):
@@ -895,40 +948,55 @@ def detect(rv, res, t, compass):
     # white line points on the field, subsampled
     # (the range disc first, so far fewer pixels get converted to cm; findNonZero keeps np.nonzero's row order)
     white = cv2.bitwise_and(cv2.bitwise_and(m["white"], field_grown), _range_mask(rv, field_grown.shape))
+    bodies = _white_bodies(rv, white)          # white robots: not line points, and they are obstacles
     nz = cv2.findNonZero(white)
     if nz is not None:
         nz = nz.reshape(-1, 2).astype(np.float32)
         lx, ly = rv.to_cm(nz[:, 0], nz[:, 1])
         keep = lx * lx + ly * ly < LINE_MAX_RANGE ** 2
+        if bodies is not None:
+            keep &= ~_on_mask(bodies[0], bodies[2], lx, ly)
         lx, ly = lx[keep], ly[keep]
         if len(lx) > LINE_MAX_POINTS:
             idx = np.linspace(0, len(lx) - 1, LINE_MAX_POINTS).astype(np.int32)
             lx, ly = lx[idx], ly[idx]
         d.line_pts = np.stack([lx, ly], axis=1).astype(np.float32)
 
-    # obstacles: inside the field, but not any known colour
-    if field is not None:
+    # obstacles: inside the field, but not any known colour (none at all with cfg.ENEMY_DETECTION off)
+    if field is not None and cfg.ENEMY_DETECTION:
         kl = max(1, int(round(2 * OBSTACLE_LINE_MARGIN * ppc))) | 1
         white_grown = cv2.dilate(m["white"], np.ones((kl, kl), np.uint8))   # square kernel: much faster than round
         kf = max(1, int(round(2 * OBSTACLE_LINE_MARGIN_FAR * ppc))) | 1
         white_far = cv2.dilate(m["white"], np.ones((kf, kf), np.uint8))
         white_grown |= cv2.bitwise_and(white_far, _far_mask(rv, white_far.shape))
-        labels = getattr(res, "labels", None)     # any colour bit set = a known colour (white is in white_grown)
+        labels = getattr(res, "labels", None)     # any colour bit set = a known colour
         if labels is not None:
-            known = cv2.bitwise_or(cv2.compare(labels, 0, cv2.CMP_NE), white_grown)
+            bare = cv2.compare(labels, 0, cv2.CMP_EQ)
         else:
-            known = m["green"] | white_grown | m["orange"] | m["yellow"] | m["blue"]
-        unknown = cv2.bitwise_and(field, cv2.bitwise_not(known))
+            bare = cv2.bitwise_not(m["green"] | m["white"] | m["orange"] | m["yellow"] | m["blue"])
+        bare = cv2.bitwise_and(field, bare)       # no colour at all
         # our own body: blank a circle the size of the robot too
         x1, y1, x2, y2 = rv.ignore_box
         pad = int(round(OBSTACLE_BODY_MARGIN * ppc))
-        unknown[max(y1 - pad, 0):y2 + pad, max(x1 - pad, 0):x2 + pad] = 0
-        cv2.circle(unknown, tuple(int(round(v)) for v in rv.centre),
+        bare[max(y1 - pad, 0):y2 + pad, max(x1 - pad, 0):x2 + pad] = 0
+        cv2.circle(bare, tuple(int(round(v)) for v in rv.centre),
                    int(round(rv.radius_px(cfg.ROBOT_RADIUS + OBSTACLE_BODY_MARGIN))), 0, -1)
+        unknown = cv2.bitwise_and(bare, cv2.bitwise_not(white_grown))
         g = rv
         if getattr(rv, "mode", None) == "radial":      # open + find blobs on a top-down grid (see _ObstacleGrid)
             g = _obstacle_grid(rv)
             unknown = g.remap(unknown)
+        if bodies is not None:
+            # white robots count as obstacles too, and so does the uncoloured margin round them that white_grown
+            # took out (it joins a robot's white top onto its dark wheels / bumper)
+            wg, body, grown = bodies
+            if wg is not g:                            # white grid -> obstacle grid (both centred on us, top-down)
+                f = g.px_per_cm / wg.px_per_cm
+                o = (int(round(2 * wg.half * f)) - unknown.shape[0]) // 2
+                body, grown = (cv2.resize(b, None, fx=f, fy=f, interpolation=cv2.INTER_NEAREST)
+                               [o:o + unknown.shape[0], o:o + unknown.shape[1]] for b in (body, grown))
+            unknown = cv2.bitwise_or(unknown, body)
+            unknown = cv2.bitwise_or(unknown, cv2.bitwise_and(grown, bare if g is rv else g.remap(bare)))
         cover = cv2.findNonZero(orange)                # the ball (see _split_obstacle)
         if cover is not None:
             cover = rv.to_cm(*cover.reshape(-1, 2).astype(np.float32).T)
@@ -948,6 +1016,8 @@ def detect(rv, res, t, compass):
             if twin is not None:
                 q = d.obstacles[twin]
                 d.obstacles[twin] = q._replace(size=math.hypot(q.size, o.size))
+            elif any(_behind(o, q) for q in d.obstacles):
+                continue        # inside the wedge a nearer robot hides: the upper part of that robot (e.g. a white top)
             elif o.size >= OBSTACLE_MIN_SIZE:
                 d.obstacles.append(o)
     return d

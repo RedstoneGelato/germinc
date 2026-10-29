@@ -41,6 +41,11 @@ BALL_BLIND_RING = 2.0                      # cm: the camera can't see the ball w
                                            # perception.py then relies on the IR ring, or (no IR) assumes a ball that
                                            # vanished out of the capture zone is still in the dribbler. 0 = it can see it
 
+# ---- enemy robots: set before each match
+ENEMY_DETECTION = True                    # False = the camera reports no other robots (obstacles). Turn off when their
+                                           # robots can't be told apart from the carpet, e.g. dark robots on a grey carpet
+                                           # or green robots on a green one
+
 # ---- out of bounds: a robot is only out once NO part of it touches the white line
 LINE_TOUCH_SAFETY = 6.0                    # cm of robot that must still be over the line at the furthest out we go
 MAX_OUT = ROBOT_RADIUS - LINE_TOUCH_SAFETY # so the robot centre may be up to this far past the line's outer edge
@@ -49,7 +54,7 @@ PRECISE_STD = 6.0                          # pose spread (cm) below which the po
 
 # ---- LDR line ring (PCB)
 LDR_COUNT = 32
-LDR_LINE_THRESHOLD = 1500                  # reading below this = white line
+LDR_LINE_THRESHOLD = 1500                  # reading below this = white line (TUNE on each new carpet)
 LDR_START_ANGLE = math.pi / 2              # sensor 0 is at the front, numbering goes anticlockwise
 LED_BRIGHTNESS_START = 40000               # 0 - 65535
 

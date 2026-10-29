@@ -200,7 +200,8 @@ class Robot:
         self.zero_heading(det) #calibrate imu heading, if the robot was put down facing the goal we attack
 
     def zero_heading(self, det=None):
-        """Facing forward = facing the goal we attack - but only when the robot was really put down that way. Zeroes:
+        """Facing forward = facing the goal we attack. With our own on/off switch (REF_MODULE off) every pause zeroes
+        whatever way the robot faces. With the comms module, only when the robot was really put down that way. Zeroes:
             - whatever way it faces, on the first pause after start-up and when the attack goal changes (half-time:
               put down facing the other goal), for that whole pause
             - otherwise only while it faces within ZERO_MAX_ERR of forward (put down facing the goal again).
@@ -210,7 +211,7 @@ class Robot:
         if self.zeroed_for != self.attack:
             self._free_zero = True
             self.zeroed_for = self.attack
-        zero = self._free_zero or abs(before) < cfg.ZERO_MAX_ERR
+        zero = self._free_zero or not cfg.REF_MODULE or abs(before) < cfg.ZERO_MAX_ERR
         facing = 0.0 if zero else None
         seen = self._camera_says_turned(det, 0.0 if zero else self.imu.compass(), CAM_VOTES_PAUSED)
         if seen is not None:
