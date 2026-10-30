@@ -1,46 +1,4 @@
 #!/usr/bin/env python3
-"""
-test_camera.py - headless camera test + calibration + colour-tuning tool for the soccer robot.
- 
-Run on the Pi (no monitor needed):
-    python3 test_camera.py                 # web UI on port 8000, reads the BNO08x over I2C
-    python3 test_camera.py --port 8080 --imu-bitbang D6,D5     # IMU on bit-banged I2C (SCL,SDA board pins)
-    python3 test_camera.py --no-imu        # no IMU: use the manual yaw slider
- 
-Then on your laptop open  http://<pi-ip>:8000
-or, to get a real "localhost" URL, tunnel it:
-    ssh -L 8000:localhost:8000 <user>@<pi-ip>     ->  http://localhost:8000
- 
-There is no login on this server - only run it on a network you trust.
- 
-Tabs
-    Masks         annotated frame + one mask per colour (blue, yellow, white, green, orange)
-    Detect        the annotated frame on its own (goal detection)
-    Raw           raw camera frame
-    Calibrate     live checkerboard detection for fisheye calibration
-    Undistorted   fisheye correction (balance / zoom-out sliders decide how much edge is kept)
-    Top-down      ground-plane bird's-eye view, built straight from the raw fisheye image
- 
-Pipeline on every frame:
-    raw --(fisheye model + floor homography, ONE remap, nothing is cropped by undistortion)--> top-down
-        --> ROTATION (camera mounting) --> colour masks (minus the painted ignore mask and outside the mirror crop)
-        --> rotate by IMU yaw about the robot centre (field-aligned) --> goal detection
- 
-Ignore mask + mirror crop (panel "Ignore mask & mirror crop", on the Raw tab): paint over everything that must never
-be detected (the mirror mount bars, our own body), and crop the whole feed to a circle = the mirror, so nothing on
-the ceiling or past the mirror's rim is ever seen. Both are in raw camera pixels, so they follow the camera, not the
-field, and work in every mode (radial, top-down, undistorted).
- 
-Export: the "Generate config file" button writes robot_vision_config.json, which vision.py (RobotVision) loads in the robot script.
- 
-Heading: this script reads the BNO08x itself (adafruit_bno08x over I2C) and rotates the frame by its yaw.
-It owns the I2C bus, so don't run it next to the robot code. If the IMU can't be read, the manual
-yaw slider is used instead and the Live panel says why.
- 
-All slider values are saved to settings.json next to this file and reloaded at start-up.
- 
-Only needs: picamera2, opencv, numpy (web server is pure standard library).
-"""
 import argparse
 import base64
 import copy
@@ -59,32 +17,27 @@ import cv2
 import numpy as np
 import picamera2
  
-# =============================== CONFIG ====================================
  
 CAPTURE_SIZE = (640, 480)
-ROTATION = cv2.ROTATE_90_CLOCKWISE  # camera mounting; applied after undistort/top-down
+ROTATION = cv2.ROTATE_90_CLOCKWISE
  
 HERE = os.path.dirname(os.path.abspath(__file__))
 CALIB_FILE = os.path.join(HERE, "fisheye_calib.npz")
-CALIB_FRAMES_FILE = os.path.join(HERE, "calib_frames.npz")   # every captured board's corners (send it if calibration fails)
-CAL_MAX_RMS = 3.0              # px: a worse fit is not saved or used
+CALIB_FRAMES_FILE = os.path.join(HERE, "calib_frames.npz")
+CAL_MAX_RMS = 3.0
 TOPDOWN_FILE = os.path.join(HERE, "topdown.npz")
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
-EXPORT_FILE = os.path.join(HERE, "robot_vision_config.json")   # made by the "Generate config file" button
+EXPORT_FILE = os.path.join(HERE, "robot_vision_config.json")
  
-# Ignore mask: painted in the web page over the RAW camera frame (255 = never detect anything there: the mirror mount
-# bars, our own body - keep the front clear so a ball in the dribbler is still seen). Mirror crop: only the inside of
-# this circle of the raw frame is used. Both saved in settings.json and exported to robot_vision_config.json.
 DEFAULT_CROP = {"enabled": False, "cx": CAPTURE_SIZE[0] / 2.0, "cy": CAPTURE_SIZE[1] / 2.0,
                 "r": min(CAPTURE_SIZE) / 2.0}
 MIN_BLOB_AREA = 280
 KERNEL = np.ones((3, 3), np.uint8)
  
-MAX_TOPDOWN_SIDE = 1600  # sanity limit for the top-down output image
-ALIGN_MAX_SIDE = 1000    # max side of the field-aligned canvas (keeps rotation cheap on the Pi)
+MAX_TOPDOWN_SIDE = 1600
+ALIGN_MAX_SIDE = 1000
  
 COLOURS = ["blue", "yellow", "white", "green", "orange"]
-# BGR colour each mask is painted with in the Masks tab
 MASK_BGR = {"blue": (255, 90, 0), "yellow": (0, 255, 255), "white": (255, 255, 255),
             "green": (0, 200, 0), "orange": (0, 140, 255)}
  
@@ -98,11 +51,6 @@ DEFAULT_HSV = {
 }
 HSV_LIMITS = (179, 255, 255)
  
-# Defaults: auto exposure, manual white balance.
-# NOTE: libcamera's ColourGains order is (RED gain, BLUE gain).
-# Focus (Camera Module 3 only - ignored on cameras without autofocus, e.g. the HQ camera):
-#   af = continuous autofocus; off = lens held at lens_position, in dioptres = 1000 / focus distance in mm
-#   (12.5 = 80 mm, about where the mirror's image of the field sits; 0 = infinity).
 DEFAULT_CAMERA = {"ae": True, "awb": False,
                   "exposure_us": 10000, "analogue_gain": 1.0,
                   "red_gain": 2.4, "blue_gain": 2.7,
@@ -110,16 +58,11 @@ DEFAULT_CAMERA = {"ae": True, "awb": False,
 CAMERA_LIMITS = {"exposure_us": (20, 100000), "analogue_gain": (1.0, 16.0),
                  "red_gain": (0.1, 8.0), "blue_gain": (0.1, 8.0), "lens_position": (0.0, 15.0)}
  
-# How the Undistorted tab is cut out of the fisheye image (does NOT affect the top-down view).
-#   balance 0 = crop to the clean centre (edges lost), 1 = keep everything (black borders)
-#   fov_scale > 1 = zoom out further
 DEFAULT_UNDISTORT = {"balance": 1.0, "fov_scale": 1.0}
 UNDISTORT_LIMITS = {"balance": (0.0, 1.0), "fov_scale": (1.0, 4.0)}
  
-# Heading: enabled = rotate the frame by yaw; invert = flip the yaw sign; offset = degrees that count as "forward"
 DEFAULT_YAW = {"enabled": False, "invert": False, "offset": 0.0, "manual": 0.0}
  
-# ============================== SETTINGS ===================================
  
  
 def clean_hsv(entry):
@@ -139,7 +82,6 @@ def wrap180(a):
  
  
 class Config:
-    """All tunable settings. Sub-dicts are replaced (never mutated) so other threads read consistent values."""
  
     def __init__(self):
         self.lock = threading.Lock()
@@ -147,11 +89,11 @@ class Config:
         self.camera = dict(DEFAULT_CAMERA)
         self.undistort = dict(DEFAULT_UNDISTORT)
         self.yaw = dict(DEFAULT_YAW)
-        self.robot = None   # [x, y] in the image that goes into ROTATION; None = image centre
-        self.mask = None    # painted ignore mask: uint8 (h, w) raw-frame pixels, 255 = ignore; None = nothing painted
+        self.robot = None
+        self.mask = None
         self.crop = dict(DEFAULT_CROP)
-        self.seen_ver = 0   # +1 every time the mask or crop changes (cached views of them are rebuilt)
-        self.radial = {"points": [], "coeffs": None, "r_max_px": None, "rms_cm": None}   # distance calibration
+        self.seen_ver = 0
+        self.radial = {"points": [], "coeffs": None, "r_max_px": None, "rms_cm": None}
         self.arrays = {}
         self.load()
         self._rebuild()
@@ -199,7 +141,6 @@ class Config:
             json.dump(data, f, indent=2)
         os.replace(tmp, SETTINGS_FILE)
  
-    # ---- HSV
     def set_hsv(self, name, lo, hi):
         entry = clean_hsv({"lo": lo, "hi": hi})
         with self.lock:
@@ -210,7 +151,6 @@ class Config:
     def reset_hsv(self, name):
         return self.set_hsv(name, DEFAULT_HSV[name]["lo"], DEFAULT_HSV[name]["hi"])
  
-    # ---- camera
     def set_camera(self, partial):
         with self.lock:
             cam = dict(self.camera)
@@ -224,7 +164,6 @@ class Config:
             self.camera = cam
             return dict(cam)
  
-    # ---- undistort view
     @staticmethod
     def _clamp_undistort(u):
         return {k: max(lo, min(float(u[k]), hi)) for k, (lo, hi) in UNDISTORT_LIMITS.items()}
@@ -234,7 +173,6 @@ class Config:
             self.undistort = self._clamp_undistort({**self.undistort, **partial})
             return dict(self.undistort)
  
-    # ---- heading
     def set_yaw(self, partial):
         with self.lock:
             y = dict(self.yaw)
@@ -252,7 +190,6 @@ class Config:
         with self.lock:
             self.robot = None if xy is None else [float(xy[0]), float(xy[1])]
  
-    # ---- ignore mask + mirror crop (raw frame pixels)
     @staticmethod
     def _clamp_crop(c):
         w, h = CAPTURE_SIZE
@@ -271,7 +208,6 @@ class Config:
             self.seen_ver += 1
  
     def seen_raw(self):
-        """(version, uint8 raw-frame mask: 255 = used, 0 = painted or outside the mirror crop) or (version, None)."""
         with self.lock:
             mask, crop, ver = self.mask, dict(self.crop), self.seen_ver
         if mask is None and not crop["enabled"]:
@@ -287,8 +223,6 @@ class Config:
  
  
 def mask_from_png(data):
-    """PNG bytes -> uint8 CAPTURE_SIZE mask, 255 = ignore. A PNG with transparency (the web page's paint layer) uses its
-    alpha, otherwise its brightness."""
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError("not a PNG image")
@@ -300,7 +234,6 @@ def mask_from_png(data):
  
  
 def mask_b64(mask):
-    """uint8 mask -> base64 PNG text (the format vision.py's decode_mask() reads)."""
     ok, buf = cv2.imencode(".png", mask)
     return base64.b64encode(buf.tobytes()).decode("ascii")
  
@@ -315,7 +248,6 @@ def camera_controls(c):
         ctrl["AnalogueGain"] = float(c["analogue_gain"])
     if not c["awb"]:
         ctrl["ColourGains"] = (float(c["red_gain"]), float(c["blue_gain"]))
-    # AfMode: 0 = manual (lens stays at LensPosition), 2 = continuous autofocus
     ctrl["AfMode"] = 2 if c["af"] else 0
     if not c["af"]:
         ctrl["LensPosition"] = float(c["lens_position"])
@@ -323,7 +255,6 @@ def camera_controls(c):
  
  
 def supported_controls(cam, ctrl):
-    """Drop controls this camera doesn't have (no AfMode/LensPosition on the HQ camera), so set_controls won't fail."""
     have = getattr(cam, "camera_controls", None)
     if not isinstance(have, dict) or not have:
         return ctrl
@@ -348,11 +279,9 @@ def python_snippet():
               f"cam.set_controls({camera_controls(cam)!r})"]
     return "\n".join(lines)
  
-# ================================ HEADING ==================================
  
  
 class Heading:
-    """Latest yaw from the IMU thread. Falls back to the manual slider when there is no fresh reading."""
     LIVE_TIMEOUT = 1.0
  
     def __init__(self):
@@ -384,14 +313,10 @@ IMU_STATE = {"state": "off", "msg": "not started"}
  
  
 def quat_to_yaw_deg(x, y, z, w):
-    """Yaw (rotation about the vertical axis) in degrees, counter-clockwise positive, range -180..180."""
     return math.degrees(math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
  
  
 def imu_loop(addr, bitbang, report):
-    """Reads the BNO08x and pushes its yaw into HEADING. Runs in its own thread and is the only user of the I2C bus.
-    report: "game" = game rotation vector (gyro+accel, relative to power-on, immune to magnets/motors)
-            "rotation" = rotation vector (adds the magnetometer, absolute heading but motors/steel can disturb it)"""
     try:
         import board
         from adafruit_bno08x import BNO_REPORT_GAME_ROTATION_VECTOR, BNO_REPORT_ROTATION_VECTOR
@@ -405,7 +330,7 @@ def imu_loop(addr, bitbang, report):
             i2c = busio.I2C(board.SCL, board.SDA)
         bno = BNO08X_I2C(i2c, address=addr)
         bno.enable_feature(BNO_REPORT_ROTATION_VECTOR if report == "rotation" else BNO_REPORT_GAME_ROTATION_VECTOR)
-    except Exception as e:  # missing library, wrong address, wiring...
+    except Exception as e:
         IMU_STATE.update(state="error", msg=f"init failed: {e!r}")
         print(f"[imu] init failed: {e!r}  -> using the manual yaw slider")
         return
@@ -415,17 +340,16 @@ def imu_loop(addr, bitbang, report):
             qx, qy, qz, qw = bno.quaternion if report == "rotation" else bno.game_quaternion
             HEADING.push(quat_to_yaw_deg(qx, qy, qz, qw))
             IMU_STATE.update(state="ok", msg="")
-        except KeyError:        # no report received yet
+        except KeyError:
             time.sleep(0.01)
             continue
-        except Exception as e:  # I2C hiccup: keep trying, the manual slider covers in the meantime
+        except Exception as e:
             IMU_STATE.update(state="error", msg=repr(e))
             time.sleep(0.1)
             continue
         time.sleep(0.01)
  
  
-# ============================ COLOUR / GOAL DETECTION ======================
  
  
 def merge_blobs(mask, min_size):
@@ -446,8 +370,6 @@ def merge_blobs(mask, min_size):
  
  
 def compute_masks(frame, hsv_cfg, seen):
-    """Masks in the robot-aligned frame. seen = uint8 in the same frame, 0 = ignore mask / outside the mirror crop
-    (None = use everything)."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     masks = {}
     for name in COLOURS:
@@ -460,14 +382,12 @@ def compute_masks(frame, hsv_cfg, seen):
  
  
 def shade_unseen(img, unseen):
-    """Ignored pixels (painted / outside the mirror crop) dark red, so the Masks / Detect tabs show what's left out."""
     if unseen is not None:
         img[unseen > 0] = (img[unseen > 0] // 4) + np.uint8([0, 0, 70])
     return img
  
  
 def rotate_point(pt, size, code):
-    """Where pixel `pt` of a (w,h) image ends up after cv2.rotate(img, code)."""
     x, y = pt
     w, h = size
     if code == cv2.ROTATE_90_CLOCKWISE:
@@ -487,9 +407,6 @@ def robot_base_point(shape, robot):
  
  
 def make_align(shape, centre, angle, enabled):
-    """Affine matrix that rotates the robot frame about the robot centre by `angle` degrees
-    (counter-clockwise positive) onto a canvas where the robot sits in the middle.
-    Returns (M 2x3, canvas (w,h), robot centre in the output)."""
     h, w = shape[:2]
     if not enabled:
         return np.float64([[1, 0, 0], [0, 1, 0]]), (w, h), centre
@@ -504,16 +421,12 @@ def make_align(shape, centre, angle, enabled):
  
  
 def analyse(frame, masks, centre, M, unseen):
-    """Goal detection + annotation on the (possibly field-aligned) frame.
-    unseen = uint8 in the same frame, 255 = ignore mask / outside the mirror crop (or None).
-    Returns (annotated, goalpos, own_goalpos)."""
     cx, cy = centre
     blue_box = merge_blobs(masks["blue"], MIN_BLOB_AREA)
     yellow_box = merge_blobs(masks["yellow"], MIN_BLOB_AREA)
  
     annotated = shade_unseen(frame.copy(), unseen)
  
-    # robot centre + "front" arrow (points where the robot is facing; use it to check the yaw sign)
     cv2.drawMarker(annotated, (int(cx), int(cy)), (0, 255, 0), cv2.MARKER_CROSS, 8, 1)
     v = M[:, :2] @ np.float64([0, -1])
     cv2.arrowedLine(annotated, (int(cx), int(cy)), (int(cx + 30 * v[0]), int(cy + 30 * v[1])),
@@ -540,14 +453,12 @@ def analyse(frame, masks, centre, M, unseen):
  
  
 def tag(img, text):
-    """Readable label on any background."""
     cv2.putText(img, text, (4, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 0, 0), 3)
     cv2.putText(img, text, (4, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), 1)
     return img
  
  
 def build_montage(final, annotated, masks, show_bg, unseen):
-    """3x2 grid: annotated frame + one painted mask per colour."""
     h, w = annotated.shape[:2]
     scale = min(1.0, 320.0 / max(w, h))
     tw, th = max(1, int(w * scale)), max(1, int(h * scale))
@@ -570,12 +481,9 @@ def build_montage(final, annotated, masks, show_bg, unseen):
         tiles.append(border(tag(fit(tile, cv2.INTER_NEAREST), f"{name} {pct:.1f}%")))
     return np.vstack([np.hstack(tiles[0:3]), np.hstack(tiles[3:6])])
  
-# ============================ IMAGE PIPELINE ===============================
  
  
 def build_topdown_maps(Hn, out_size, K, D):
-    """For every top-down pixel: floor homography -> normalised camera ray -> fisheye model -> RAW pixel.
-    One remap straight from the raw fisheye image, so nothing is lost to a rectilinear undistort."""
     w, h = out_size
     u, v = np.meshgrid(np.arange(w, dtype=np.float64), np.arange(h, dtype=np.float64))
     pts = np.stack([u.ravel(), v.ravel(), np.ones(w * h)], axis=0)
@@ -594,13 +502,12 @@ def build_topdown_maps(Hn, out_size, K, D):
  
  
 class Pipeline:
-    """Lens calibration + undistort view + top-down mapping. Safe to swap while running."""
  
     def __init__(self):
         self.K = self.D = None
-        self.und = None       # (map1, map2, new_K) - only for the Undistorted tab
-        self.topdown = None   # (map1, map2, out_size, px_per_cm)
-        self.Hn = None        # floor homography behind `topdown` (kept so it can be exported)
+        self.und = None
+        self.topdown = None
+        self.Hn = None
         self.load()
  
     def load(self):
@@ -667,17 +574,15 @@ class Shared:
         self.fps = 0.0
         self.raw = self.undist = self.topdown = self.final = self.detect_img = None
         self.masks = None
-        self.unseen = None     # 255 = ignore mask / outside the mirror crop, in the final frame (or None)
+        self.unseen = None
         self.goalpos = self.own_goalpos = None
-        self.meta = {}        # what the camera is actually using right now
+        self.meta = {}
         self.yaw_info = {}
         self.canvas = None
-        # calibration capture state
         self.obj = []
         self.img = []
         self.board = None
         self.rms = None
-        # frozen RAW frame used for picking the 4 floor points
         self.snapshot = None
  
  
@@ -690,8 +595,6 @@ _SEEN_CACHE = {"key": None, "mask": None}
  
  
 def seen_in_robot_frame(kind):
-    """The raw-frame ignore mask + mirror crop (CFG.seen_raw) taken through the same geometry as the colour frame
-    (kind: "raw" / "radial" = as it is, "topdown" / "undistort" = their remap), then ROTATION. Cached."""
     ver, seen = CFG.seen_raw()
     maps = {"topdown": P.topdown, "undistort": P.und}.get(kind)
     key = (ver, kind, id(maps))
@@ -721,7 +624,7 @@ def capture_loop(cam):
         with CFG.lock:
             radial = CFG.radial if CFG.radial.get("table_px") else None
         if radial is not None:
-            base, kind = raw, "radial"   # distance calibration: the raw fisheye frame, like the robot (no lens / top-down)
+            base, kind = raw, "radial"
         elif td is not None:
             base, kind = td, "topdown"
         elif und is not None:
@@ -730,7 +633,6 @@ def capture_loop(cam):
             base, kind = raw, "raw"
         robot_frame = cv2.rotate(base, ROTATION)
  
-        # robot centre in the robot-aligned frame
         rh, rw = robot_frame.shape[:2]
         rcfg = CFG.robot
         if rcfg is None:
@@ -742,7 +644,6 @@ def capture_loop(cam):
         seen = seen_in_robot_frame(kind)
         masks_r = compute_masks(robot_frame, CFG.arrays, seen)
  
-        # field alignment from IMU yaw
         ycfg = CFG.yaw
         yaw_raw, yaw_src = HEADING.read(ycfg["manual"])
         yaw_eff = effective_yaw(yaw_raw, ycfg)
@@ -784,7 +685,6 @@ def make_camera():
     cam.start()
     return cam
  
-# ============================== CALIBRATION ================================
  
 SUBPIX = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
  
@@ -796,9 +696,6 @@ def label(img, text):
  
  
 def find_board(gray, cols, rows, fast=False):
-    """Find the checkerboard's inner corners. Tries the classic detector, then the more robust sector-based one
-    (findChessboardCornersSB), each also on a 2x upscaled image: at low resolution the squares are only a few pixels across,
-    especially near the edge of the fisheye. Returns (found, corners in this image's pixels)."""
     flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE + (cv2.CALIB_CB_FAST_CHECK if fast else 0)
     found, corners = cv2.findChessboardCorners(gray, (cols, rows), flags)
     if found:
@@ -808,7 +705,7 @@ def find_board(gray, cols, rows, fast=False):
         if found:
             return True, corners.astype(np.float32)
     if fast:
-        return False, None          # (live preview: the slower searches below only when Capture is pressed)
+        return False, None
     big = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     if hasattr(cv2, "findChessboardCornersSB"):
         found, corners = cv2.findChessboardCornersSB(big, (cols, rows), cv2.CALIB_CB_NORMALIZE_IMAGE
@@ -842,7 +739,7 @@ def cal_add(cols, rows):
     with S.lock:
         S.obj.append(objp)
         S.img.append(corners.reshape(1, -1, 2).astype(np.float32))
-        try:   # keep the raw corners on disk too (for checking a failed calibration)
+        try:
             np.savez(CALIB_FRAMES_FILE, img=np.array(S.img, dtype=object), cols=cols, rows=rows,
                      size=np.array(CAPTURE_SIZE), allow_pickle=True)
         except Exception as e:
@@ -856,17 +753,15 @@ CAL_CRIT = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
 CAL_FLAGS = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW + cv2.fisheye.CALIB_USE_INTRINSIC_GUESS
  
  
-CAL_F_SCALES = (1.0, 0.7, 1.4, 0.5, 2.0)   # starting focal lengths tried, x (short side / pi)
+CAL_F_SCALES = (1.0, 0.7, 1.4, 0.5, 2.0)
  
  
 def _cal_guess_K(scale=1.0):
-    """Starting guess for the lens: the image circle about as wide as the short side, ~180 degrees across (without a
-    guess OpenCV's own often failed on this wide lens - "InitExtrinsics ... norm_u1 > 0"), times `scale`."""
     f = scale * min(CAPTURE_SIZE) / np.pi
     return np.array([[f, 0, CAPTURE_SIZE[0] / 2], [0, f, CAPTURE_SIZE[1] / 2], [0, 0, 1]], np.float64)
  
  
-_CAL_SCALE = [1.0]   # the starting guess currently being tried (_robust_calibrate is run once per guess)
+_CAL_SCALE = [1.0]
  
  
 def _cal(obj, img):
@@ -875,10 +770,8 @@ def _cal(obj, img):
  
  
 def _robust_calibrate(obj, img, min_frames=8):
-    """Calibrate, dropping frames OpenCV can't use (alone first, then the one whose removal makes it work) and frames
-    whose reprojection error is far above the rest. Returns (rms, K, D, kept indices) or None."""
     keep = list(range(len(obj)))
-    for i in list(keep):                                  # frames unusable even on their own
+    for i in list(keep):
         try:
             _cal([obj[i]], [img[i]])
         except cv2.error:
@@ -887,7 +780,7 @@ def _robust_calibrate(obj, img, min_frames=8):
         try:
             rms, K, D, rv, tv = _cal([obj[i] for i in keep], [img[i] for i in keep])
         except cv2.error:
-            for i in list(keep):                          # leave-one-out: the first removal that makes it work
+            for i in list(keep):
                 trial = [j for j in keep if j != i]
                 try:
                     _cal([obj[j] for j in trial], [img[j] for j in trial])
@@ -898,7 +791,7 @@ def _robust_calibrate(obj, img, min_frames=8):
             else:
                 return None
             continue
-        errs = []                                         # one frame far worse than the rest: drop it
+        errs = []
         for n, i in enumerate(keep):
             p, _ = cv2.fisheye.projectPoints(obj[i].astype(np.float64), rv[n], tv[n], K, D)
             errs.append(float(np.sqrt(np.mean(np.sum((p - img[i]) ** 2, axis=2)))))
@@ -916,7 +809,7 @@ def cal_run():
     if len(obj) < 10:
         return {"ok": False, "msg": f"Need at least 10 frames (have {len(obj)}); 15-25 is better."}
     res = None
-    for scale in CAL_F_SCALES:                   # several starting guesses: keep the best fit
+    for scale in CAL_F_SCALES:
         _CAL_SCALE[0] = scale
         r = _robust_calibrate(obj, img)
         if r is not None and (res is None or (r[0], -len(r[3])) < (res[0], -len(res[3]))):
@@ -937,7 +830,7 @@ def cal_run():
     np.savez(CALIB_FILE, K=K, D=D, size=np.array(CAPTURE_SIZE))
     P.set_calibration(K, D)
     had_topdown = P.topdown is not None
-    P.clear_topdown()  # the old floor mapping was built from the old lens model
+    P.clear_topdown()
     with S.lock:
         S.obj, S.img, S.rms = obj, img, float(rms)
     msg = f"Calibrated with {len(obj)} frames, RMS {rms:.3f}px (aim for < ~1). Saved fisheye_calib.npz."
@@ -972,9 +865,8 @@ def td_apply(body):
         return {"ok": False, "msg": f"Output would be {out_size[0]}x{out_size[1]} px - lower px/cm or margin."}
     dst = np.float64([[m, m], [m + w, m], [m + w, m + h], [m, m + h]])
  
-    # clicked pixels (on the RAW fisheye snapshot) -> normalised camera coordinates via the lens model
     norm = cv2.fisheye.undistortPoints(pts.reshape(-1, 1, 2), P.K, P.D).reshape(-1, 2)
-    Hn, _ = cv2.findHomography(dst, norm, 0)   # top-down pixel -> normalised camera ray
+    Hn, _ = cv2.findHomography(dst, norm, 0)
     if Hn is None or not np.all(np.isfinite(Hn)):
         return {"ok": False, "msg": "Points are degenerate - pick 4 distinct corners."}
     corner_depth = Hn @ np.vstack([dst.T, np.ones(4)])
@@ -984,12 +876,11 @@ def td_apply(body):
         P.set_topdown(Hn, out_size, ppc)
     except cv2.error as e:
         return {"ok": False, "msg": f"Could not build the top-down map: {str(e).strip().splitlines()[-1]}"}
-    CFG.set_robot(None)   # the old robot-centre pixel no longer means anything
+    CFG.set_robot(None)
     CFG.save()
     return {"ok": True, "msg": f"Top-down saved: {out_size[0]}x{out_size[1]} px at {ppc} px/cm. "
                                "Robot centre reset to the image centre - set it in the Heading panel."}
  
-# ============================ HSV / CAMERA / HEADING API ===================
  
  
 def api_hsv(body):
@@ -1021,8 +912,6 @@ def api_camera(body):
     with S.lock:
         meta = dict(S.meta)
  
-    # Switching auto -> manual: start from whatever the camera is using right now,
-    # so the image doesn't jump. (Handy trick: let auto settle, then switch it off.)
     if partial.get("ae") is False and cur["ae"]:
         for k in ("exposure_us", "analogue_gain"):
             if k not in partial and meta.get(k):
@@ -1031,7 +920,6 @@ def api_camera(body):
         for k in ("red_gain", "blue_gain"):
             if k not in partial and meta.get(k):
                 partial[k] = meta[k]
-    # same for focus: untick autofocus once it's sharp and the lens stays where it is
     if partial.get("af") is False and cur["af"] and "lens_position" not in partial \
             and meta.get("lens_position") is not None:
         partial["lens_position"] = meta["lens_position"]
@@ -1042,7 +930,7 @@ def api_camera(body):
         return {"ok": False, "msg": "Bad camera values."}
     try:
         CAM.set_controls(supported_controls(CAM, camera_controls(new)))
-    except Exception as e:  # keep the server alive
+    except Exception as e:
         return {"ok": False, "msg": f"Camera rejected controls: {e!r}", "camera": new}
     if body.get("save"):
         CFG.save()
@@ -1080,7 +968,6 @@ def api_heading_zero():
  
  
 def api_mask(body):
-    """Painted ignore mask from the web page: {"png": data URL of the paint layer (alpha = painted)}, or {"clear": true}."""
     if body.get("clear"):
         CFG.set_mask(None)
         CFG.save()
@@ -1096,7 +983,6 @@ def api_mask(body):
  
  
 def mask_png():
-    """The ignore mask as the web page's paint layer: red, alpha = painted."""
     w, h = CAPTURE_SIZE
     with CFG.lock:
         mask = CFG.mask
@@ -1109,7 +995,7 @@ def mask_png():
  
 def api_crop(body):
     partial = {k: body[k] for k in ("enabled", "cx", "cy", "r") if k in body}
-    if body.get("centre"):          # centre it on the robot centre (radial mode: that one is picked on the Raw tab)
+    if body.get("centre"):
         with CFG.lock:
             robot, radial = CFG.robot, CFG.radial.get("table_px")
         if robot and radial:
@@ -1138,24 +1024,19 @@ def api_robot(body):
     CFG.save()
     return {"ok": True, "msg": f"Robot centre set to ({x:.0f}, {y:.0f}) in the top-down image."}
  
-RADIAL_DEGREE = 3          # distance calibration: polynomial degree of cm(pixels) (fewer points: n - 1)
+RADIAL_DEGREE = 3
  
  
 def _raw_centre(raw):
-    """Robot centre in the RAW frame (no lens / top-down in radial mode, so the picked centre is in raw pixels)."""
     with CFG.lock:
         robot = CFG.robot
     return robot_base_point(raw.shape, robot)
  
  
-BALL_RADIUS_CM = 2.1        # same as robot_config.BALL_RADIUS
+BALL_RADIUS_CM = 2.1
  
  
 def api_radial_add(body):
-    """Ball at a measured distance from the robot centre: record how far out (pixels) it is in the raw frame.
-    The curve is for points ON THE FLOOR (lines, where robots and goals touch it): the ball's centre is BALL_RADIUS_CM
-    up, and the camera's ray through it reaches the floor further out - by camera height / (camera height - ball
-    radius) - so the point is stored at that floor distance."""
     try:
         cm = float(body["cm"])
         cam_h = float(body["cam_h"])
@@ -1163,7 +1044,7 @@ def api_radial_add(body):
         return {"ok": False, "msg": "Type the camera height and the ball's real distance (cm) first."}
     if cam_h <= BALL_RADIUS_CM + 1:
         return {"ok": False, "msg": "Camera height = lens to floor in cm (must be well above the ball's centre)."}
-    cm = cm * cam_h / (cam_h - BALL_RADIUS_CM)        # where the ray through the ball's centre meets the floor
+    cm = cm * cam_h / (cam_h - BALL_RADIUS_CM)
     with S.lock:
         raw = None if S.raw is None else S.raw.copy()
     if raw is None:
@@ -1210,12 +1091,9 @@ def api_radial_reset():
  
  
 def _fit_tan(r, d):
-    """Fisheye-shaped regression: cm = a * tan(b * px) (a camera looking down through a fisheye: the floor distance
-    grows like tan of the angle, and the angle grows ~ in step with the pixel radius). Best (a, b) by least squares:
-    b by a fine search, a exactly for each b. Returns (sse, a, b)."""
     best = None
     r_max = float(r.max())
-    for b in np.linspace(0.05, 1.55, 600) / r_max:          # b * r_max stays below pi/2 (where tan blows up)
+    for b in np.linspace(0.05, 1.55, 600) / r_max:
         t = np.tan(b * r)
         a = float(np.dot(t, d) / max(np.dot(t, t), 1e-12))
         sse = float(np.sum((a * t - d) ** 2))
@@ -1225,8 +1103,6 @@ def _fit_tan(r, d):
  
  
 def api_radial_fit():
-    """Fit cm(pixels) through the points (the regression curve) - the fisheye shape cm = a*tan(b*px), or a polynomial
-    if that fits better - and store it as a lookup table."""
     with CFG.lock:
         pts = list(CFG.radial["points"])
     if len(pts) < 4:
@@ -1240,7 +1116,7 @@ def api_radial_fit():
     rr, dd = np.concatenate([[0.0], r]), np.concatenate([[0.0], d])
     coeffs = np.polyfit(rr, dd, deg, w=np.concatenate([[3.0], np.ones(len(r))]))
     poly_grid = np.polyval(coeffs, grid)
-    if np.all(np.diff(poly_grid) > 0):                      # (a polynomial that goes down somewhere is no use)
+    if np.all(np.diff(poly_grid) > 0):
         curves[f"polynomial (degree {deg})"] = (poly_grid, np.polyval(coeffs, r))
     name, (table, fit) = min(curves.items(), key=lambda kv: float(np.mean((kv[1][1] - d) ** 2)))
     rms = float(np.sqrt(np.mean((fit - d) ** 2)))
@@ -1255,7 +1131,6 @@ def api_radial_fit():
  
  
 def radial_rings(img, robot_centre_xy):
-    """Draw the fitted distances (every 20 cm) on a raw frame, if the distance calibration is fitted."""
     with CFG.lock:
         rd = dict(CFG.radial)
     if not rd.get("table_px"):
@@ -1276,7 +1151,6 @@ ROTATION_NAMES = {cv2.ROTATE_90_CLOCKWISE: "90_CLOCKWISE", cv2.ROTATE_180: "180"
  
  
 def build_export():
-    """Everything the robot script needs, in one JSON-able dict (read it with vision.py's RobotVision)."""
     with CFG.lock:
         hsv = copy.deepcopy(CFG.hsv)
         cam = dict(CFG.camera)
@@ -1295,8 +1169,6 @@ def build_export():
         "rotation": ROTATION_NAMES[ROTATION],
         "camera": {**cam, "controls": controls},
         "hsv": hsv,
-        # ignore mask + mirror crop: raw camera-frame pixels (before the rotation); the robot body is painted into
-        # the mask
         "detection": {"ignore_cm": None, "ignore_box": None,
                       "ignore_mask": None if mask is None else {"size": list(CAPTURE_SIZE), "png": mask_b64(mask)},
                       "mirror_crop": None if not crop["enabled"] else {k: crop[k] for k in ("cx", "cy", "r")},
@@ -1341,7 +1213,6 @@ def api_export():
     return {"ok": True, "msg": msg}
  
  
-# ================================ WEB UI ===================================
  
 PAGE = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Robot camera test</title>
@@ -1717,7 +1588,6 @@ let COLOURS_=[];
 </script></body></html>
 """
  
-# ================================ SERVER ===================================
  
 def get_view(mode, cols, rows, show_bg):
     with S.lock:
@@ -1767,7 +1637,6 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
  
-    # ---- helpers
     def send_bytes(self, data, ctype, code=200):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -1779,7 +1648,6 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, obj, code=200):
         self.send_bytes(json.dumps(obj).encode(), "application/json", code)
  
-    # ---- GET
     def do_GET(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
@@ -1865,7 +1733,6 @@ class Handler(BaseHTTPRequestHandler):
                 "imu": dict(IMU_STATE),
             }
  
-    # ---- POST
     def do_POST(self):
         try:
             n = int(self.headers.get("Content-Length", 0))
@@ -1931,7 +1798,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(res)
         except (BrokenPipeError, ConnectionResetError):
             pass
-        except Exception as e:  # keep the server alive, show the error in the UI log
+        except Exception as e:
             self.send_json({"ok": False, "msg": f"Server error: {e!r}"}, 500)
  
  

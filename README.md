@@ -88,7 +88,7 @@ See [GUIDE.md](GUIDE.md) for how it all works and which file to edit for what.
 | `comms.py` | Link to the other robot |
 | `simulator.py` | Runs both robots' real logic on a simulated field (laptop, no Pi needed) |
 | `faults.py` | Breaks our robots on purpose in the simulator (`--faults`) to check they survive crashes |
-| `STOP_attack.py` / `STOP_defense.py` | systemd ExecStopPost: stop all motors + LEDs (addresses must match the hardware files) |
+| `STOP_attack.py` / `STOP_defense.py` | systemd ExecStopPost: stop all motors + LEDs (`stop_robot.py`, addresses read from the hardware files) |
 
 Camera workflow (on each robot, the config is per robot):
 1. `python3 test_camera.py` -> lens calibration, top-down, robot centre, ignore box, HSV for all 5 colours -> "Generate config file" (writes `robot_vision_config.json`)

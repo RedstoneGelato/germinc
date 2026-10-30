@@ -1,6 +1,3 @@
-"""
-utils.py - small maths helpers and smoothing used by several modules.
-"""
 import math
 import time
 
@@ -12,7 +9,7 @@ def wrap_pi(a):
 
 
 def angdiff(a, b):
-    return math.atan2(math.sin(a - b), math.cos(a - b))  # wraps correctly through +-pi
+    return math.atan2(math.sin(a - b), math.cos(a - b))
 
 
 def circular_mean(angles):
@@ -20,20 +17,22 @@ def circular_mean(angles):
 
 
 def rotate(v, angle):
-    """Rotate a 2D vector counter-clockwise by angle (radians). Robot frame -> relative: rotate(v, compass)."""
     c, s = math.cos(angle), math.sin(angle)
     return [v[0] * c - v[1] * s, v[0] * s + v[1] * c]
 
 
 def rotate_points(pts, angle):
-    """Same as rotate() for an (N, 2) numpy array."""
     if len(pts) == 0:
         return pts
     c, s = math.cos(angle), math.sin(angle)
     return pts @ np.array([[c, s], [-s, c]], dtype=pts.dtype)
 
 
-class Hysteresis: #used for decision smoothing and ignore flickers, instant enter to instantly switch
+def other_goal(colour):
+    return "blue" if colour == "yellow" else "yellow"
+
+
+class Hysteresis:
     def __init__(self, hold_time, instant_enter=None):
         self.hold_time = hold_time
         self.instant_enter = instant_enter
@@ -43,65 +42,51 @@ class Hysteresis: #used for decision smoothing and ignore flickers, instant ente
 
     def update(self, raw_value):
         now = time.monotonic()
-
-        if self.current is None: #first call - nothing to debounce yet
+        if self.current is None:
             self.current = raw_value
-            return self.current
-
-        if raw_value == self.current: #still agrees - clear any pending change
+        elif raw_value == self.current:
             self._pending = None
-            return self.current
-
-        if self.instant_enter and self.instant_enter(raw_value): #instantly swap with no delay
+        elif self.instant_enter and self.instant_enter(raw_value):
             self.current = raw_value
             self._pending = None
-            return self.current
-
-        if raw_value != self._pending: #new candidate - start timing it
+        elif raw_value != self._pending:
             self._pending = raw_value
             self._pending_since = now
-            return self.current
-
-        if now - self._pending_since >= self.hold_time: #held long enough - commit it
+        elif now - self._pending_since >= self.hold_time:
             self.current = raw_value
             self._pending = None
-
         return self.current
 
-    def reset(self): #clear state
+    def reset(self):
         self.current = None
         self._pending = None
         self._pending_since = None
 
 
 class PointTracker:
-    """Smooths a 2D position that is sometimes missing.
-    - keeps a short history and averages it
-    - a reading far from the average counts as 'unconcordant'; enough of those in a row = it really moved
-    - keeps the last value for `lost_time` seconds after it disappears, then reports None"""
-
     def __init__(self, history=6, tolerance=25.0, lost_time=0.3):
         self.history, self.tolerance, self.lost_time = history, tolerance, lost_time
         self.points = []
-        self.unconcordant = 0
+        self.jumps_in_row = 0
         self.last_seen = 0.0
 
     def update(self, p, now=None):
         now = time.monotonic() if now is None else now
-        if p is not None:
-            self.last_seen = now
-            if self.points:
-                mx, my = self.mean()
-                if math.hypot(p[0] - mx, p[1] - my) > self.tolerance:
-                    self.unconcordant += 1
-                    if self.unconcordant > self.history // 2:   # moved for real
-                        self.points = [p]
-                        self.unconcordant = 0
-                    return self.value(now)
-            self.unconcordant = 0
-            self.points.append(p)
-            if len(self.points) > self.history:
-                self.points.pop(0)
+        if p is None:
+            return self.value(now)
+        self.last_seen = now
+        if self.points:
+            mx, my = self.mean()
+            if math.hypot(p[0] - mx, p[1] - my) > self.tolerance:
+                self.jumps_in_row += 1
+                if self.jumps_in_row > self.history // 2:
+                    self.points = [p]
+                    self.jumps_in_row = 0
+                return self.value(now)
+        self.jumps_in_row = 0
+        self.points.append(p)
+        if len(self.points) > self.history:
+            self.points.pop(0)
         return self.value(now)
 
     def mean(self):
@@ -117,29 +102,24 @@ class PointTracker:
 
     def reset(self):
         self.points = []
-        self.unconcordant = 0
+        self.jumps_in_row = 0
         self.last_seen = 0.0
 
 
 class HeadingFilter:
-    """Removes sudden jumps from a heading: any change faster than MAX_SPIN rad/s is a sensor jump, absorbed into
-    an offset, and the heading carries on from where it was."""
-    MAX_SPIN = 20.0       # rad/s (the robot spins ~6 rad/s flat out)
-    MARGIN = 0.3          # rad allowed on top of MAX_SPIN * dt
+    MAX_SPIN = 20.0
+    MARGIN = 0.3
 
     def __init__(self):
         self.offset = 0.0
-        self.last = None      # (t, filtered heading)
+        self.last = None
         self.jumps = 0
         self._reanchor = False
 
     def reanchor(self):
-        """The sensor was re-opened (its heading restarts at 0): the next reading carries on from the last one,
-        however long it's been."""
         self._reanchor = True
 
     def continue_from(self, heading):
-        """Make the next reading carry on from this heading (e.g. one saved before the program restarted)."""
         self.last = (-1e9, heading)
         self._reanchor = True
 
@@ -150,11 +130,11 @@ class HeadingFilter:
             self.offset = wrap_pi(self.offset + angdiff(self.last[1], h))
             h = self.last[1]
         elif self.last is not None:
-            lt, lh = self.last
-            step = angdiff(h, lh)
-            if abs(step) > self.MAX_SPIN * max(t - lt, 0.0) + self.MARGIN:
+            last_t, last_h = self.last
+            step = angdiff(h, last_h)
+            if abs(step) > self.MAX_SPIN * max(t - last_t, 0.0) + self.MARGIN:
                 self.offset = wrap_pi(self.offset - step)
-                h = lh
+                h = last_h
                 self.jumps += 1
         self.last = (t, h)
         return h

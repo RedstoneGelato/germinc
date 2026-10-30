@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""
-arena.py - play many simulated games in parallel and add up the results (to check a strategy change helps).
-
-    python arena.py                              # 10 games x 60 s against the simple opponents (simulator key a)
-    python arena.py --opp old_version_folder     # against another copy of the robot code (self-play)
-    python arena.py --games 20 --seconds 90 --jobs 8
-    python arena.py --games 44 --fast --opp old  # fast mode (no camera simulation): screen ideas, then confirm without --fast
-    python arena.py --games 22 --opp v35 --watch # also show every running game live in one window (q closes it)
-    python arena.py --games 20 --faults 1        # our robots get camera freezes, comms drops, IMU jumps, crashes and
-                                                 # restarts (faults.py): compare with the same games without --faults
-
-Self-play isn't perfectly symmetric (the two teams are processed in a fixed order in places), so to compare two
-versions fairly play both ways round - each one as "us" once - and add the results up.
-
-Each game uses a different seed (sensor noise on, kickoff positions jittered a few cm), so a change is only
-better if it wins over many seeds, not just one lucky game. Our robots always attack yellow.
-
-To get another version to play against:   git worktree add ../lightweight_v1 <commit>
-(or copy the .py files into a folder). simulator.load_code() imports it next to the current code.
-"""
 import argparse
 import os
 import math
@@ -27,9 +7,9 @@ import queue
 import sys
 import time
 
-_WATCH = None         # in each game process: the queue the live window reads from (--watch), else None
-WATCH_EVERY = 0.05    # s (real time, whatever the sim speed): send the positions this often for the live window
-TILE_PPC = 1.2        # live window: px per cm of each small field
+_WATCH = None
+WATCH_EVERY = 0.05
+TILE_PPC = 1.2
 
 
 def _init_worker(q):
@@ -40,9 +20,9 @@ def _init_worker(q):
 def play(args):
     seed, seconds, opp, fast, faults = args
     import cv2
-    cv2.setNumThreads(1)          # one game per core already: OpenCV's own threads would only fight over the cores
+    cv2.setNumThreads(1)
     import simulator as S
-    S._SIM_T[0] = 1000.0          # the sim clock is per process, and pool processes play several games
+    S._SIM_T[0] = 1000.0
     code = S.load_code(opp) if opp not in ("ai", "press") else None
     sim = S.Sim(noise=True, seed=seed, opp_code=code, fast=fast)
     sim.opp_ai = True
@@ -81,8 +61,6 @@ def play(args):
 
 
 def watch(q, pending, args):
-    """Live window: every running game as a small field (our robots cyan / magenta, opponents grey, ball orange),
-    finished games' scores along the top. Closing it (q / Esc) only stops the window, the games carry on."""
     import cv2
     import numpy as np
     import field
@@ -106,12 +84,12 @@ def watch(q, pending, args):
     r_px = int(round(10.5 * k))
     shown = True
     import os
-    snapshot = os.environ.get("ARENA_WATCH_SNAPSHOT")      # debugging: save the frames to this file, no window
+    snapshot = os.environ.get("ARENA_WATCH_SNAPSHOT")
     if not snapshot:
         cv2.namedWindow("arena (q closes this window, the games carry on)")
     while not pending.ready():
         try:
-            for _ in range(500):      # (bounded: never just sit reading the queue without drawing)
+            for _ in range(500):
                 seed, t, us, them, ball, bodies = q.get_nowait()
                 latest[seed] = (t, us, them, ball, bodies)
                 if t >= args.seconds - 0.02:
@@ -173,7 +151,7 @@ def main():
     ap.add_argument("--dump", help="also save every game's results (incl. each kick) to this JSON file")
     args = ap.parse_args()
 
-    if args.opp not in ("ai", "press"):         # check the opponent exists here (in the game processes it would just hang the pool)
+    if args.opp not in ("ai", "press"):
         from simulator import code_folder
         args.opp = code_folder(args.opp)
     t0 = time.perf_counter()
@@ -218,7 +196,7 @@ def main():
         for k, v in sorted(ph.items()):
             print(f"  {k:40s} {100 * v / total:5.1f}%")
     print("events:", ", ".join(f"{k} {v:.0f}" for k, v in sorted(ev.items()) if not k.startswith("ballview ")))
-    for who in ("striker", "goalie"):   # simulator.Sim.ball_stats: why our robots' cameras could / couldn't see the ball
+    for who in ("striker", "goalie"):
         bv = {k[10 + len(who):]: v for k, v in ev.items() if k.startswith(f"ballview {who} ")}
         frames = sum(v for k, v in bv.items() if k.endswith("seen"))
         if not frames:

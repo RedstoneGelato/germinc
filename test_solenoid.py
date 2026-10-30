@@ -7,11 +7,11 @@ print("Press ENTER to fire solenoid. Ctrl+C to quit.")
 
 try:
     while True:
-        input()  # wait for enter
+        input()
         print("KICK")
 
         kick_pin.on()
-        time.sleep(0.05)  # adjust this carefully
+        time.sleep(0.05)
         kick_pin.off()
 
 except KeyboardInterrupt:

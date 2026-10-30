@@ -1,15 +1,3 @@
-"""
-hardware.py - threads that talk to the IMU, the PCB (LDR line ring) and the motor drivers. Shared by both robots;
-the motor addresses / calibration for each robot are in hardware_attack.py and hardware_defense.py.
-
-The ball comes from the camera (vision.py), plus the IR ring where the camera can't see it (robot_config.IR_*).
-The PCB does the 32 LDRs + bottom LEDs (commands 0x01 read colours, 0x03 set brightness) and, with
-cfg.IR_ON_PCB, the IR ring (0x02 read IR - CHECK it matches the PCB firmware).
-
-Ultrasonic ring (later): add an UltrasonicThread here that keeps `distances` (8 values in cm, None = no echo)
-and `angles` (each sensor's direction in the robot frame, radians, 0 = robot's right, CCW). main.py then hands
-them to LocalisationThread.walls as (distances, [a + compass for a in angles]).
-"""
 import math
 import threading
 import time
@@ -36,7 +24,7 @@ class IMUThread(threading.Thread):
 
         self.heading = 0
         self.heading_offset = 0
-        self.filter = HeadingFilter() # the BNO08x restarts its heading at 0 when it resets: carry on from where we were
+        self.filter = HeadingFilter()
         self.ready = False
 
     def _open(self):
@@ -47,9 +35,9 @@ class IMUThread(threading.Thread):
         errors = 0
         while self.running:
             try:
-                quat = self.imu.game_quaternion  # (x, y, z, w)
+                quat = self.imu.game_quaternion
                 errors = 0
-            except Exception as e: # I2C glitch / sensor reset: the BNO08x library raises, try again, then re-open it
+            except Exception as e:
                 quat = None
                 errors += 1
                 if errors == 1:
@@ -57,7 +45,7 @@ class IMUThread(threading.Thread):
                 if errors % 20 == 0:
                     try:
                         self._open()
-                        self.filter.reanchor() # its heading starts again at 0: carry on from the last one
+                        self.filter.reanchor()
                         print("IMU re-opened")
                     except Exception as e2:
                         print(f"IMU re-open failed: {e2!r}")
@@ -66,7 +54,6 @@ class IMUThread(threading.Thread):
 
                 x, y, z, w = quat
 
-                # convert quaternion -> yaw (heading)
                 self.heading = self.filter.update(math.atan2(
                     2*(w*z + x*y),
                     1 - 2*(y*y + z*z)
@@ -74,16 +61,13 @@ class IMUThread(threading.Thread):
             time.sleep(0.01)
 
     def continue_from(self, compass):
-        """The program restarted (the IMU reset with it): make compass() carry on from this heading."""
         self.heading_offset = 0
         self.filter.continue_from(compass)
 
     def zero(self, facing=0.0):
-        """Current heading = facing the goal we attack (or `facing` radians from it, e.g. pi = facing our own goal)."""
         self.heading_offset = self.heading - facing
 
     def compass(self):
-        """Robot heading in radians, CCW positive, 0 = facing the goal we attack."""
         return wrap_pi(self.heading - self.heading_offset)
 
 
@@ -109,19 +93,19 @@ class PCBThread(threading.Thread):
         self.bus_lock = threading.Lock()
 
         self.colours = [0] * self.COLOUR_SENSOR_COUNT
-        self.ir = None            # IR ring, 0..1 per sensor (None = no IR on this PCB)
+        self.ir = None
         self.brightness_target = 0
         self._brightness_sent = None
 
-    def _send_command(self, cmd): #low level helper
+    def _send_command(self, cmd):
         self.bus.write_byte(self.I2C_ADDR, cmd)
 
-    def _read_raw(self, length): #low level helper
+    def _read_raw(self, length):
         msg = i2c_msg.read(self.I2C_ADDR, length)
         self.bus.i2c_rdwr(msg)
         return bytes(msg)
 
-    def _read_packet(self, cmd, length): #low level helper
+    def _read_packet(self, cmd, length):
         last_err = None
 
         for _ in range(self.READ_RETRIES):
@@ -139,7 +123,7 @@ class PCBThread(threading.Thread):
 
         raise IOError(f"Failed to read packet: {last_err}")
 
-    def _read_colours(self): #read colour sensors
+    def _read_colours(self):
         data = self._read_packet(self.CMD_READ_COLOURS, self.COLOUR_PACKET_SIZE)
 
         values = []
@@ -150,14 +134,14 @@ class PCBThread(threading.Thread):
 
         return values
 
-    def _read_ir(self): #read IR ball sensors -> 0..1 each
+    def _read_ir(self):
         data = self._read_packet(self.CMD_READ_IR, cfg.IR_COUNT * 2)
         return [min(1.0, (data[2*i] | (data[2*i + 1] << 8)) / cfg.IR_RAW_MAX) for i in range(cfg.IR_COUNT)]
 
-    def set_brightness(self, value: float):  # called from main: just records the request
+    def set_brightness(self, value: float):
         self.brightness_target = int(max(0.0, min(65535.0, value)))
 
-    def _write_brightness(self, val):  # called only from the PCB thread
+    def _write_brightness(self, val):
         lo = val & 0xFF
         hi = (val >> 8) & 0xFF
         for _ in range(self.READ_RETRIES):
@@ -181,7 +165,7 @@ class PCBThread(threading.Thread):
                     self.colours = new_colours
                     self.ir = new_ir
                 self.ready = True
-            except Exception as e: # IOError mostly; anything else mustn't end the thread either
+            except Exception as e:
                 print(f"PCB I2C error: {e!r}")
                 self.ready = False
             time.sleep(0.02)
@@ -197,15 +181,11 @@ class PCBThread(threading.Thread):
             return None if self.ir is None else list(self.ir)
 
 
-# settings every drive motor gets (both robots)
-MOTOR_CURRENT_LIMIT = 262144          # max 8 amps is 524288, this is 4 amps
-MOTOR_SPEED_LIMIT = 546133333         # max spd
+MOTOR_CURRENT_LIMIT = 262144
+MOTOR_SPEED_LIMIT = 546133333
 
 
-class MotorThread(threading.Thread): #setup motors with motor drivers
-    """motors = list of 4 (i2c address, ELECANGLEOFFSET, SINCOSCENTRE), in VelocityToMotor order (motor1..motor4).
-    dribbler = the same tuple for the dribbler motor, or None. Each robot passes its own: see hardware_attack.py /
-    hardware_defense.py."""
+class MotorThread(threading.Thread):
 
     def __init__(self, motors, dribbler=None, dribbler_speed=0):
         super().__init__()
@@ -213,17 +193,13 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         self.running = True
 
         self.speedlimit = MOTOR_SPEED_LIMIT
-        self.motorspeed1 = 0
-        self.motorspeed2 = 0
-        self.motorspeed3 = 0
-        self.motorspeed4 = 0
-        self.dribblerspeed = 0
+        self.speeds = (0, 0, 0, 0)
+        self.dribbler_speed = 0
         self.dribbler_on_speed = dribbler_speed
 
         self.i2c = busio.I2C(board.SCL, board.SDA)
-
-        self.drivers = [self._make_driver(*m) for m in motors]
-        self.motor1, self.motor2, self.motor3, self.motor4 = self.drivers
+        self.wheels = [self._make_driver(*m) for m in motors]
+        self.drivers = list(self.wheels)
         self.dribbler = None
         self.has_dribbler = dribbler is not None
         if dribbler is not None:
@@ -237,8 +213,8 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         m.set_speed_pid_constants(4e-2, 4e-4, 3e-2)
         m.set_position_pid_constants(275, 0, 0)
         m.set_position_region_boundary(250000)
-        m.set_ELECANGLEOFFSET(elec_offset)   # per-motor calibration
-        m.set_SINCOSCENTRE(sincos_centre)    # per-motor calibration
+        m.set_ELECANGLEOFFSET(elec_offset)
+        m.set_SINCOSCENTRE(sincos_centre)
         m.set_speed_limit(self.speedlimit)
         m.configure_operating_mode_and_sensor(3, 1)
         m.configure_command_mode(12)
@@ -248,33 +224,29 @@ class MotorThread(threading.Thread): #setup motors with motor drivers
         errors = 0
         while self.running:
             try:
-                self.motor1.set_speed(int(-self.motorspeed1))
-                self.motor2.set_speed(int(-self.motorspeed2))
-                self.motor3.set_speed(int(-self.motorspeed3))
-                self.motor4.set_speed(int(-self.motorspeed4))
+                for wheel, speed in zip(self.wheels, self.speeds):
+                    wheel.set_speed(int(-speed))
                 if self.dribbler is not None:
-                    self.dribbler.set_speed(int(-self.dribblerspeed))
+                    self.dribbler.set_speed(int(-self.dribbler_speed))
                 errors = 0
-            except Exception as e: # an I2C error must not end this thread (the motors would keep their last speed)
+            except Exception as e:
                 errors += 1
                 if errors == 1 or errors % 1000 == 0:
                     print(f"Motor I2C error ({errors} in a row): {e!r}")
             time.sleep(0.005)
 
     def set(self, speeds):
-        self.motorspeed1, self.motorspeed2, self.motorspeed3, self.motorspeed4 = speeds
+        self.speeds = tuple(speeds)
 
     def set_dribbler(self, on):
-        self.dribblerspeed = self.dribbler_on_speed if on else 0
+        self.dribbler_speed = self.dribbler_on_speed if on else 0
 
     def stop(self):
         self.set((0, 0, 0, 0))
-        self.dribblerspeed = 0
+        self.dribbler_speed = 0
 
 
 class Kicker:
-    """Solenoid on a GPIO pin. kick() never blocks the main loop: the pulse is ended by a timer,
-    and kicks inside the cooldown are ignored (returns False)."""
 
     def __init__(self, pin, pulse, cooldown):
         from gpiozero import OutputDevice

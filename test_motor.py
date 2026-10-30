@@ -6,7 +6,6 @@ import busio
 import select
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
 
-# Initialize variables
 motor = [None] * 8
 motormode = [0] * 8
 motorcount = 0
@@ -30,7 +29,6 @@ def read_input():
         return sys.stdin.readline().strip()
     return None
 
-# Initialize I2C
 i2c = busio.I2C(board.SCL, board.SDA)
 
 print("Please enter the number of motor drivers you want to control:")
@@ -58,30 +56,30 @@ while setupmotorcount < motorcount:
 
 setupmotorcount = 0
 while setupmotorcount < motorcount:
-    motor[setupmotorcount].set_current_limit_foc(65536)  # set current limit to 1 amp (only works in FOC mode)
+    motor[setupmotorcount].set_current_limit_foc(65536)
     motor[setupmotorcount].set_id_pid_constants(1500, 200)
     motor[setupmotorcount].set_iq_pid_constants(1500, 200)
-    motor[setupmotorcount].set_speed_pid_constants(4e-2, 4e-4, 3e-2)  # Constants valid for FOC and Robomaster M2006 P36 motor only, see tuning constants document for more details
+    motor[setupmotorcount].set_speed_pid_constants(4e-2, 4e-4, 3e-2)
     motor[setupmotorcount].set_position_pid_constants(275, 0, 0)
     motor[setupmotorcount].set_position_region_boundary(250000)
     motor[setupmotorcount].set_speed_limit(10000000)
     
-    motor[setupmotorcount].configure_operating_mode_and_sensor(15, 1)  # configure calibration mode and sin/cos encoder
-    motor[setupmotorcount].configure_command_mode(15)  # configure calibration mode
-    motor[setupmotorcount].set_calibration_options(300, 2097152, 50000, 500000)  # set calibration voltage to 300/3399*vcc volts, speed to 2097152/65536 elecangle/s, settling time to 50000/50000 seconds, calibration time to 500000/50000 seconds
+    motor[setupmotorcount].configure_operating_mode_and_sensor(15, 1)
+    motor[setupmotorcount].configure_command_mode(15)
+    motor[setupmotorcount].set_calibration_options(300, 2097152, 50000, 500000)
     
-    motor[setupmotorcount].start_calibration()  # start the calibration
+    motor[setupmotorcount].start_calibration()
     print(f"Starting calibration of motor {setupmotorcount}")
-    while not motor[setupmotorcount].is_calibration_finished():  # wait for the calibration to finish, do not call any other motor driver functions while calibration is ongoing
+    while not motor[setupmotorcount].is_calibration_finished():
         print(".", end="")
         sys.stdout.flush()
         time.sleep(0.5)
-    print()  # print out the calibration results
+    print()
     print(f"ELECANGLEOFFSET: {motor[setupmotorcount].get_calibration_ELECANGLEOFFSET()}")
     print(f"SINCOSCENTRE: {motor[setupmotorcount].get_calibration_SINCOSCENTRE()}")
 
-    motor[setupmotorcount].configure_operating_mode_and_sensor(3, 1)  # configure FOC mode and sin/cos encoder
-    motor[setupmotorcount].configure_command_mode(12)  # configure speed command mode
+    motor[setupmotorcount].configure_operating_mode_and_sensor(3, 1)
+    motor[setupmotorcount].configure_command_mode(12)
     motormode[setupmotorcount] = 12
     
     setupmotorcount += 1

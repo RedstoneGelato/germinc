@@ -14,13 +14,12 @@ alpha = 0.2
 ready = False
 
 while True:
-    quat = imu.game_quaternion  # (x, y, z, w)
+    quat = imu.game_quaternion
     if quat is not None:
         ready = True
 
         x, y, z, w = quat
 
-        # convert quaternion → yaw (heading)
         heading = math.atan2(
             2*(w*z + x*y),
             1 - 2*(y*y + z*z)

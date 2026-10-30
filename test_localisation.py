@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""
-test_localisation.py - check vision + localisation + line fusion on the real robot WITHOUT driving the motors.
-
-    python3 test_localisation.py                    # camera + IMU, web page on port 8001
-    python3 test_localisation.py --pcb              # also read the LDR ring and show the line fusion
-    python3 test_localisation.py --no-imu           # heading fixed at 0 (robot must face the attack goal)
-    python3 test_localisation.py --attack blue      # which goal we shoot at (default yellow)
-
-Open http://<pi-ip>:8001. Left: what the camera sees (robot frame). Right: the field model with the particles
-(grey), the estimated position (green) and everything seen, drawn where the robot thinks it is.
-
-Checks, in order:
-  1. Camera view: ball circled orange, goals crossed, white line points magenta, obstacles red, field hull green.
-     The cyan box is CAPTURE_ZONE (robot_config.py): put the ball in the dribbler, it must be inside it.
-  2. Face the attack goal, press "Zero heading". Turn the robot by hand: the dots on the field view must stay
-     on the drawn lines (if they spin the wrong way, the compass sign is wrong).
-  3. Carry the robot around: the green dot should follow within a few cm, the spread (±) should stay small.
-  4. --pcb: push the robot onto a line, the escape arrow (blue) must point back into the field.
-
-Uses the I2C bus and the camera, so don't run it next to main.py or test_camera.py.
-"""
 import argparse
 import json
 import math
@@ -36,7 +15,7 @@ from localisation import LocalisationThread
 from perception import World
 from vision import VisionThread
 
-FIELD_SCALE = 2.0   # px per cm in the field view
+FIELD_SCALE = 2.0
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Localisation test</title>
 <style>body{margin:0;padding:12px;background:#111;color:#eee;font:14px system-ui,sans-serif}
@@ -110,9 +89,9 @@ class Debug:
                 cv2.drawMarker(img, px(g.near), colour, cv2.MARKER_CROSS, 10, 2)
         for o in det.obstacles:
             cv2.circle(img, px(o.near), 3, (0, 0, 255), -1)
-            if getattr(o, "centre", None) is not None:   # the whole robot it belongs to
+            if getattr(o, "centre", None) is not None:
                 cx_, cy_ = px(o.centre)
-                ex_, ey_ = px((o.centre[0] + cfg.ROBOT_RADIUS, o.centre[1]))   # (raw fisheye: size depends on distance)
+                ex_, ey_ = px((o.centre[0] + cfg.ROBOT_RADIUS, o.centre[1]))
                 cv2.circle(img, (cx_, cy_), max(2, int(round(math.hypot(ex_ - cx_, ey_ - cy_)))), (0, 0, 255), 2)
         if det.ball is not None:
             cv2.circle(img, px(det.ball), 6, (0, 140, 255), 2)

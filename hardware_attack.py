@@ -1,28 +1,21 @@
-"""
-hardware_attack.py - everything that is different about the ATTACK (striker) robot's hardware.
+from collections import namedtuple
 
-If you swap a motor or driver board: change its row here AND in STOP_attack.py.
-ELECANGLEOFFSET / SINCOSCENTRE come from the motor driver calibration and belong to that physical motor + driver.
-This file is plain data (the Pi libraries are only imported inside the make_ functions) so simulator.py can read it.
-"""
-ROBOT_ID = 1   # striker
+Motor = namedtuple("Motor", "i2c_address elec_angle_offset sincos_centre")
 
-# (i2c address, ELECANGLEOFFSET, SINCOSCENTRE) for motor1..motor4, in VelocityToMotor order
+ROBOT_ID = 1
+
 DRIVE_MOTORS = [
-    (26, 1559051008, 1258),   # motor1
-    (25, 1349926656, 1247),   # motor2
-    (27, 1769756160, 1247),   # motor3
-    (28, 1790054912, 1227),   # motor4
+    Motor(26, 1559051008, 1258),
+    Motor(25, 1349926656, 1247),
+    Motor(27, 1769756160, 1247),
+    Motor(28, 1790054912, 1227),
 ]
+DRIBBLER = Motor(32, 1431223552, 1245)
+DRIBBLER_SPEED = 200000000   # TUNE: flip the sign if it spins the ball away
 
-# dribbler: (i2c address, ELECANGLEOFFSET, SINCOSCENTRE), or None if this robot has no dribbler
-DRIBBLER = (32, 1431223552, 1245)   # CHECK it's this driver's calibration
-DRIBBLER_SPEED = 200000000          # speed while on; flip the sign if it spins the ball away
-
-# kicker: solenoid GPIO pin (test_solenoid.py), or None if this robot has no kicker
 KICKER_PIN = 17
-KICK_PULSE = 0.05                   # s the solenoid is powered (adjust carefully, same as test_solenoid.py)
-KICK_COOLDOWN = 1.0                 # s between kicks (capacitor recharge / solenoid heat)
+KICK_PULSE = 0.05            # TUNE carefully: seconds the solenoid is powered
+KICK_COOLDOWN = 1.0
 
 
 def make_motors():

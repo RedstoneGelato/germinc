@@ -1,31 +1,9 @@
 #!/usr/bin/env python3
-"""
-sim_int.py - simulator.py / arena.py on the INTERNATIONAL field (field_int.py) and rules, with our robots running
-strategy_int.py. simulator.py and arena.py themselves are unchanged (still RCJA).
-
-    python sim_int.py                                   # the simulator window (same keys / options as simulator.py)
-    python sim_int.py --opp v88 --noise
-    python sim_int.py --arena --games 20 --fast --opp v88     # arena.py's many games (same options as arena.py)
-    python sim_int.py --rcja-strategy --arena ...       # our RCJA strategy.py on this field instead, to compare
-    python sim_int.py --opp-as-is --arena --opp ba ...  # opponents NOT kept legal in the penalty areas (see below)
-
-The referee follows the international rules instead of the RCJA ones:
-    2.5  the ball is never out at the line: it's live up to the walls
-    2.7  lack of progress -> nearest free neutral spot (after NO_PROGRESS_TIME)
-    2.8  a robot touching a wall or COMPLETELY inside a penalty area is out: off for 1 minute (or till the next
-         kickoff), then back on the free neutral spot furthest from the ball, facing its own goal. Pushed out by an
-         opponent (touched it just now, and it wasn't driving that way itself or the opponent was driving it there)
-         = not taken off, nudged straight back in (pushed_out())
-    2.6  multiple defense: two robots of a team even partly in a penalty area (any time) -> the one further from
-         the ball goes to the free neutral spot furthest from the ball
-Opponents loaded with --opp play on this field too (their own strategy, with MAX_OUT for these walls). Their moves
-also go through strategy_int's penalty area guard (legal_opponent()), unless --opp-as-is.
-"""
 import math
 import os
 import sys
 
-if "--rcja-strategy" in sys.argv:          # (an environment variable, so arena's game processes see it too)
+if "--rcja-strategy" in sys.argv:
     os.environ["GERMINC_RCJA_STRATEGY"] = "1"
 RCJA_STRATEGY = os.environ.get("GERMINC_RCJA_STRATEGY") == "1"
 if "--opp-as-is" in sys.argv:
@@ -34,29 +12,26 @@ OPP_LEGAL = os.environ.get("GERMINC_OPP_AS_IS") != "1"
 
 import field_int  # noqa: E402
 
-field_int.install()                        # before anything else imports field
+field_int.install()
 if not RCJA_STRATEGY:
     import strategy_int  # noqa: E402
-    sys.modules["strategy"] = strategy_int # main.py / main_attack.py's `from strategy import ...` get strategy_int
+    sys.modules["strategy"] = strategy_int
 
 import simulator as S  # noqa: E402
 
 field = field_int
-NO_PROGRESS_TIME = 5.0      # s the ball hasn't moved 5 cm -> lack of progress (rule 2.7: "a reasonable period")
-PUSHING_TIME = 0.5          # s an attacker and a defender keep shoving over the ball near an area -> pushing (2.6)
-PUSHER_GAP = 2.0            # cm: an opponent this close (edge to edge)...
-PUSHER_OUT_SPEED = 10.0     # ...driving at least this fast the way our robot went out = it pushed it out
-PUSH_NEAR = 5.0             # cm: 'near the area' for the both-on-the-ball push (robot edge within this of the area)
-PUSH_GOAL_WINDOW = 0.5      # s: a goal this soon after such a push doesn't count
-S.DAMAGED_TIME = 60.0       # out of bounds: 1 minute off (rule 2.8)
-KICKOFF_CIRCLE_R = 30.0     # centre circle radius (60 cm diameter)
-KICKOFF_BLOCK = os.environ.get("GERMINC_KICKOFF_BLOCK", "1") == "1"   # the team NOT kicking off stands its striker in
-                            # front of the centre circle, on the line to its goal (both teams) - see kickoff()
+NO_PROGRESS_TIME = 5.0
+PUSHING_TIME = 0.5
+PUSHER_GAP = 2.0
+PUSHER_OUT_SPEED = 10.0
+PUSH_NEAR = 5.0
+PUSH_GOAL_WINDOW = 0.5
+S.DAMAGED_TIME = 60.0
+KICKOFF_CIRCLE_R = 30.0
+KICKOFF_BLOCK = os.environ.get("GERMINC_KICKOFF_BLOCK", "1") == "1"
 
 
 def load_code(folder):
-    """simulator.load_code(), but the other version's modules get field_int as their field (and MAX_OUT for these
-    walls, and the white penalty lines in lines.py) - so they play on this field too."""
     import importlib
     folder = S.code_folder(folder)
     names = [k for k in S.CODE_MODULES if k != "field"]
@@ -64,7 +39,7 @@ def load_code(folder):
     sys.path.insert(0, os.path.abspath(folder))
     try:
         mods = {}
-        for k in names:                    # (in CODE_MODULES order: robot_config before everything that uses it)
+        for k in names:
             if not os.path.isfile(os.path.join(folder, k + ".py")):
                 continue
             mods[k] = importlib.import_module(k)
@@ -83,9 +58,6 @@ def load_code(folder):
 
 
 def legal_opponent(mod):
-    """Wrap another version's GoalieStrategy / StrikerStrategy update() in strategy_int's penalty area guard: never
-    completely inside an area, and (attacking, teammate on) not in its own area at all. A robot with a .role
-    defends when its role is "defender"."""
     import strategy_int as SI
     for name, goalie in (("GoalieStrategy", True), ("StrikerStrategy", False)):
         cls = getattr(mod, name, None)
@@ -109,10 +81,7 @@ def legal_opponent(mod):
 S.load_code = load_code
 
 
-# ==================================== referee (international rules) ====================================
-
 def _sgn_of(team):
-    """Which end a team's own goal is at."""
     return -1.0 if team == "us" else 1.0
 
 
@@ -137,7 +106,6 @@ def _out_reason(b):
 
 
 def _out_dir(b, why):
-    """Unit arrow the robot went out along (towards the wall / deeper into the area)."""
     if why == "wall":
         gx = field.WALL_W / 2 - abs(b.x)
         gy = field.WALL_L / 2 - abs(b.y)
@@ -151,9 +119,6 @@ def _out_dir(b, why):
 
 
 def pushed_out(self, b, why):
-    """Pushed out by an opponent: it touched an opponent within
-    PUSHED_TIME, and either it wasn't driving out itself (PUSHED_OUT_SPEED) or an opponent touching it is driving it
-    that way (PUSHER_OUT_SPEED)."""
     if self.t - b.opp_contact_t > S.PUSHED_TIME:
         return False
     n = _out_dir(b, why)
@@ -164,7 +129,6 @@ def pushed_out(self, b, why):
 
 
 def push_back_in(self, b, why):
-    """Pushed out by an opponent: straight back in, just far enough."""
     if why == "wall":
         b.x = max(-(field.WALL_W / 2 - b.r - 3), min(field.WALL_W / 2 - b.r - 3, b.x))
         b.y = max(-(field.WALL_L / 2 - b.r - 3), min(field.WALL_L / 2 - b.r - 3, b.y))
@@ -179,7 +143,6 @@ def push_back_in(self, b, why):
 
 
 def put_back(self, b):
-    """Rule 2.8: on the free neutral spot furthest from the ball, facing its own goal."""
     x, y = _furthest_spot(self, ignore=b)
     b.removed_until = None
     b.place(x, y, math.pi if b.team == "us" else 0.0)
@@ -199,8 +162,6 @@ def place_ball(self, spot, why):
 
 
 def multiple_defence(self):
-    """Rule 2.6: two robots of a team at least partly in a penalty area (either one, any time) -> the one further from
-    the ball to the free neutral spot furthest from the ball."""
     bx, by = self.ball
     for team in ("us", "them"):
         for sgn in (1.0, -1.0):
@@ -217,8 +178,6 @@ def multiple_defence(self):
 
 
 def _ball_push(self):
-    """An attacker and a defender touching each other, both touching the ball, one of them
-    near the defender's own area (its edge within PUSH_NEAR of it). Returns the defending team or None."""
     bx, by = self.ball
     bodies = self.on_field
 
@@ -232,15 +191,13 @@ def _ball_push(self):
             if not (on_ball(a) and on_ball(b)):
                 continue
             for d in (a, b):
-                sgn = -1.0 if d.team == "us" else 1.0            # d defending its own area
+                sgn = -1.0 if d.team == "us" else 1.0
                 if any(field.partly_in_penalty(c.x, c.y, c.r + PUSH_NEAR, sgn) for c in (a, b)):
                     return d.team
     return None
 
 
 def pushing(self):
-    """Rule 2.6: an attacker and a defender touching, one of them partly in a penalty area and one of them touching
-    the ball, for PUSHING_TIME -> ball to the free neutral spot furthest from it."""
     if self.ball_away_until is not None:
         return
     who = _ball_push(self)
@@ -263,7 +220,7 @@ def pushing(self):
                 continue
             for sgn in (1.0, -1.0):
                 if field.partly_in_penalty(a.x, a.y, a.r, sgn) or field.partly_in_penalty(b.x, b.y, b.r, sgn):
-                    found = "us" if sgn < 0 else "them"          # whose area
+                    found = "us" if sgn < 0 else "them"
     if found is None:
         self._push_since = None
         return
@@ -276,13 +233,12 @@ def pushing(self):
 
 
 def bookkeeping(self):
-    """simulator.Sim.bookkeeping() with the international referee (see the top of this file)."""
     bx, by = self.ball
-    in_goal = (abs(bx) < field.GOAL_W / 2 and          # inside a goal, fully over the goal line
+    in_goal = (abs(bx) < field.GOAL_W / 2 and
                field.ATTACK_GOAL_Y + S.BALL_RADIUS < abs(by) < field.GOAL_BACK_Y)
     if self.goal_timer is None and in_goal and (self.t - getattr(self, "_ball_push_t", -1e9) < PUSH_GOAL_WINDOW
                                                 or _ball_push(self) is not None):
-        self._ball_push_t = self.t                     # pushed in: no goal, ball to the furthest spot, play on
+        self._ball_push_t = self.t
         self.count("goal disallowed (pushing)")
         place_ball(self, _furthest_spot(self), "goal disallowed (pushing)")
         bx, by = self.ball
@@ -302,7 +258,6 @@ def bookkeeping(self):
         self.kickoff()
         return
     if self.goal_timer is None:
-        # rule 2.7: lack of progress -> nearest free neutral spot (the ball is never out: rule 2.5)
         if math.hypot(bx - self.progress[0][0], by - self.progress[0][1]) > 5:
             self.progress = ([bx, by], self.t)
         if self.t - self.progress[1] > NO_PROGRESS_TIME:
@@ -313,7 +268,7 @@ def bookkeeping(self):
             if self.t >= b.removed_until and self.goal_timer is None:
                 self.put_back(b)
             continue
-        why = _out_reason(b)                 # rule 2.8: touching a wall / completely inside a penalty area
+        why = _out_reason(b)
         if why and not b.was_out:
             b.outs += 1
             if pushed_out(self, b, why):
@@ -339,8 +294,6 @@ _kickoff = S.Sim.kickoff
 
 
 def kickoff(self):
-    """simulator's kickoff, then the striker of the team that isn't kicking off (it just scored) stands just outside
-    the centre circle on the line to its own goal (KICKOFF_BLOCK), or else at least out of its own penalty area."""
     self._push_since = None
     _kickoff(self)
     for b in self.robots + self.opponents:
@@ -348,9 +301,7 @@ def kickoff(self):
             continue
         sgn = _sgn_of(b.team)
         if KICKOFF_BLOCK and self.last_scorer == b.team:
-            # the other team kicks off: stand on the line from the centre spot to our goal, just outside the centre
-            # circle (30 cm from the ball)
-            jitter = b.x - math.copysign(S.KICKOFF_SIDE, b.x)       # (kickoff() placed it KICKOFF_SIDE to the side)
+            jitter = b.x - math.copysign(S.KICKOFF_SIDE, b.x)
             b.place(jitter, sgn * (KICKOFF_CIRCLE_R + b.r + 2))
         elif field.partly_in_penalty(b.x, b.y, b.r, sgn):
             b.place(b.x, sgn * (field.ATTACK_GOAL_Y - field.PENALTY_D - b.r - 3))

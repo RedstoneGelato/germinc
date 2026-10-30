@@ -1,47 +1,4 @@
 #!/usr/bin/env python3
-"""
-simulator.py - test the robots' logic on a simulated field, on a laptop (no Pi needed).
-
-    python simulator.py                    # window with the field, both robots, two opponents
-    python simulator.py --headless 30      # no window: simulate 30 s and print a summary (quick regression test)
-    python simulator.py --headless 30 --fast   # same without the camera simulation (see FAST MODE), ~10x faster
-
-It runs main.GoalieBrain and main_attack.StrikerBrain - the SAME code that runs on the robots: camera detection,
-localisation, perception, line fusion, strategy and motion. Only the hardware is replaced:
-
-    camera   the field seen through the omni mirror (camera looking up into a hyperbolic mirror, MIRROR_* settings)
-             at CAM_RES pixels (so things far away get small and blurry like on the real camera). Robots, the ball
-             and the goal walls stand up: they hide whatever is behind them, and our own deck hides the floor
-             near us. Then the raw image (robot_vision "radial" mode) or its top-down view, the real
-             vision.py (masks -> detection) -> localisation.py. The ball isn't seen at all within BALL_BLIND_RING
-             (2 cm) of our bumper - so never in the dribbler
-    IR ring  cfg.IR_COUNT ball sensors: bearing + strength, 3-4 active, none while the ball is off the field (IR_*)
-    LDRs     32 readings: white line under the sensor = low reading, green = high
-    IMU      the true heading (+ drift with noise on)
-    comms    the two robots' my_state handed straight to each other
-    switch   per robot, P key; the goal switch set for the goal each team attacks
-    motors   the 4 motor speeds -> robot movement with an ideal omni-wheel model
-    dribbler holds the ball in the capture notch while on (loses it when spinning / moving sideways or backwards
-             too fast, or when an opponent touches it)
-    kicker   fires the ball forward at KICK_SPEED, with the cooldown from hardware_*.py
-    goals    solid side and back walls (GOAL_WALL_T thick): the ball only gets in through the front
-    referee  ball fully out of the playing area -> nearest free neutral spot at once (3 spots on the halfway line);
-             a robot fully out -> taken off as damaged for DAMAGED_TIME s or until the next kickoff
-             (a robot only gets a dribbler / kicker if its hardware_attack.py / hardware_defense.py has one)
-
-NOT simulated (so test these on the real robot): mirror / lens / calibration errors, glare off the mirror's mounting
-(its two bars DO block their slices of the view, MOUNT_BAR_*), the real image being left-right flipped by the mirror, real lighting, motor wiring/sign mistakes
-(the sim assumes VelocityToMotor's output moves the robot the way the code intends), real dribbler grip.
-
-Mouse:  left-drag  move the ball / a robot / an opponent
-        right-drag turn a robot / opponent to face the mouse
-Keys:   space pause sim     .  step one tick       1 / 2  select goalie / striker
-        p  toggle the selected robot's switch (paused <-> running)
-        k  kickoff positions    r  pick up the selected robot and drop it somewhere random (relocalisation test)
-        o  add opponent at mouse    x  remove opponent at mouse    a  opponents chase the ball on/off
-        n  sensor noise on/off      c  camera panel: detections / masks    h  particles on/off
-        + / -  sim speed            q / Esc  quit
-"""
 import argparse
 import math
 import os
@@ -52,7 +9,6 @@ import time
 import cv2
 import numpy as np
 
-# ---- simulated clock: every module calls time.monotonic(), so the whole robot code runs on sim time
 _SIM_T = [1000.0]
 time.monotonic = lambda: _SIM_T[0]
 
@@ -74,7 +30,6 @@ from vision import RobotVision, analyse_frame  # noqa: E402
 import common as _common, lines as _lines, localisation as _localisation, main as _main  # noqa: E402,E401
 import main_attack as _main_attack, motion as _motion, perception as _perception  # noqa: E402,E401
 
-# everything SimBot builds from the robot code, so another version of it can play against this one
 CODE_MODULES = ["field", "robot_config", "utils", "robot_vision", "detection", "vision", "localisation", "perception",
                 "lines", "motion", "comms", "common", "strategy_fallback", "strategy", "main", "main_attack"]
 
@@ -96,7 +51,6 @@ PAST_VERSIONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "past_v
 
 
 def code_folder(name):
-    """A version name from past_versions/ (e.g. "v26"), or a path to any folder with the robot code."""
     for folder in (name, os.path.join(PAST_VERSIONS, name)):
         if os.path.isfile(os.path.join(folder, "strategy.py")):
             return folder
@@ -105,14 +59,12 @@ def code_folder(name):
 
 
 def load_code(folder):
-    """Import another copy of the robot code (a folder with the same .py files: one of past_versions/, or e.g. an
-    commit from `git worktree add`) next to the current one, without the two mixing. Returns a Code."""
     import importlib
     folder = code_folder(folder)
     saved = {k: sys.modules.pop(k) for k in CODE_MODULES if k in sys.modules}
     sys.path.insert(0, os.path.abspath(folder))
     try:
-        mods = {k: importlib.import_module(k) for k in CODE_MODULES   # (not every version has every file)
+        mods = {k: importlib.import_module(k) for k in CODE_MODULES
                 if os.path.isfile(os.path.join(folder, k + ".py"))}
     finally:
         sys.path.pop(0)
@@ -121,103 +73,75 @@ def load_code(folder):
         sys.modules.update(saved)
     return Code(os.path.basename(os.path.normpath(folder)), mods)
 
-# ==================================== SIM SETTINGS ====================================
-DT = 0.01                    # physics + control tick (the robots' main loop is 100 Hz)
-CAMERA_EVERY = 3             # camera frame every 3 ticks = 33 fps (set to what test_localisation.py shows)
-PCB_EVERY = 4                # LDR update every 4 ticks = 25 Hz
-# camera: Pi Camera Module 3 Wide looking straight up into a hyperbolic omni mirror (geometry from the project's
-# hardware/omni_mirror_calc.py; change these to match what you build)
-MIRROR_D = 7.0               # cm, mirror diameter
-MIRROR_RIM_Z = 21.2          # cm, mirror rim above the floor
-MIRROR_USE_HALF = 31.0       # deg, half-angle of the camera's view the mirror rim fills
-MIRROR_RIM_ELEV = -3.0       # deg, rim ray from the viewpoint (below the horizon: the rim sees the floor ~4 m away)
-CAM_RES = 400                # px across the mirror circle in the image. ~784 in the 1536x864 binned mode, ~350 at
-                             # 640x480. Far things are only a few px (a ball at 2 m is ~8 px at 784, ~4 px at 400)
-# camera mount: two vertical bars beside the mirror, front-to-back along the robot's left and right sides. With the
-# camera on the mirror's axis each bar blinds one fixed slice of the 360 deg view at every distance (things beyond
-# it in that direction are never seen), atan(w/2 / (R - w/2)) either side: 2.7 deg for 1 cm at 11 cm = 5.5 deg a bar.
-# The sim's vision config gets an ignore mask over those slices, like the one you paint in test_camera.py.
-MOUNT_BAR_W = 1.0            # cm, bar width (10 x 10 mm bars)
-MOUNT_BAR_R = 11.0           # cm, mirror axis to the bar's centre
-MOUNT_BAR_ANGLES = (90.0, -90.0)   # deg from the robot's front, + = left. () = no bars
-MOUNT_BAR_HALF = math.atan((MOUNT_BAR_W / 2) / (MOUNT_BAR_R - MOUNT_BAR_W / 2))   # rad, half the slice a bar blinds
-MOUNT_MASK_MARGIN = 0.5      # deg painted past each edge of a bar in the sim's ignore mask (a brush isn't exact)
-OWN_DECK_HEIGHT = 4.0        # cm, top of our own body around the mast. It hides the floor near the robot: out to
-                             # ROBOT_RADIUS * H / (H - OWN_DECK_HEIGHT) from the centre (13.5 cm at 4 cm, 17.6 at 8).
-                             # Above ~5 cm the camera can't see a ball in the dribbler at all (needs a ball sensor)
-ROBOT_HEIGHT = 18.0          # cm, other robots as solid cylinders this tall: they hide everything behind them (seen
-                             # from the mirror's viewpoint ~21 cm up, a robot hides a long wedge of floor behind it)
-GOAL_HEIGHT = 10.0           # cm, goal walls (solid boxes, also hide what's behind them)
-BALL_BLIND_RING = cfg.BALL_BLIND_RING   # cm (robot_config): the camera never sees the ball while its near edge is
-                             # within this of our bumper (too close / too steep for the mirror): ball centre closer than ROBOT_RADIUS + BALL_BLIND_RING +
-                             # BALL_RADIUS (15.1 cm) to ours. So a ball in the dribbler (centre 13.1) is never seen - the
-                             # IR ring (IR_*) has to find it. 0 = off (only the deck hides the ball)
-# IR ball sensors (the pulsed RCJ ball): cfg.IR_COUNT sensors evenly round the robot, numbered like the LDRs (sensor 0
-# at the front, anticlockwise). Bearing + strength only. The ball off the field = none active.
-IR_HALF_FOV = 55.0           # deg: a sensor picks the ball up within this either side of where it points (12 sensors:
-                             # 3 or 4 active at any time)
-IR_NEAR = 20.0               # cm: closer than this every active sensor reads full strength (1.0); further = IR_NEAR / d
-IR_NOISE = 0.1               # strength noise (x the reading)
-SIM_IR = True                # the sim robots have the IR ring (whatever cfg.IR_ON_PCB says). False = camera only
-TOPDOWN_PPC = 2.0            # px/cm of the top-down view handed to robot_vision (when robot_vision has no "radial"
-                             # mode). Use >= 2 on the real robot too
-TOPDOWN_RADIUS = 150.0       # cm of floor the top-down view covers (only without radial mode; bigger = slower)
+DT = 0.01
+CAMERA_EVERY = 3
+PCB_EVERY = 4
+MIRROR_D = 7.0
+MIRROR_RIM_Z = 21.2
+MIRROR_USE_HALF = 31.0
+MIRROR_RIM_ELEV = -3.0
+CAM_RES = 400
+MOUNT_BAR_W = 1.0
+MOUNT_BAR_R = 11.0
+MOUNT_BAR_ANGLES = (90.0, -90.0)
+MOUNT_BAR_HALF = math.atan((MOUNT_BAR_W / 2) / (MOUNT_BAR_R - MOUNT_BAR_W / 2))
+MOUNT_MASK_MARGIN = 0.5
+OWN_DECK_HEIGHT = 4.0
+ROBOT_HEIGHT = 18.0
+GOAL_HEIGHT = 10.0
+BALL_BLIND_RING = cfg.BALL_BLIND_RING
+IR_HALF_FOV = 55.0
+IR_NEAR = 20.0
+IR_NOISE = 0.1
+SIM_IR = True
+TOPDOWN_PPC = 2.0
+TOPDOWN_RADIUS = 150.0
 
-TOP_SPEED = 200.0            # cm/s when the motors get BASE_SPEED - MEASURE on the real robot
-TOP_SPIN = 6.0               # rad/s spinning on the spot at BASE_SPEED - MEASURE
-MOTOR_TAU = 0.08             # s, how quickly the robot reaches the commanded speed
+TOP_SPEED = 200.0
+TOP_SPIN = 6.0
+MOTOR_TAU = 0.08
 
-BALL_RADIUS = cfg.BALL_RADIUS   # robot_config.py
-BALL_FRICTION = 0.8          # 1/s velocity decay
-BALL_BOUNCE = 0.5            # wall restitution
-GOAL_WALL_T = 2.0            # cm, thickness of the goal's side and back walls (solid: the ball only gets in the front)
-OPP_PRESS_SPEED = 100.0      # cm/s, the pressing opponents (opp_style "press": they also chase our ball carrier)
-OPP_SPEED = 60.0             # cm/s, opponents chasing the ball
+BALL_RADIUS = cfg.BALL_RADIUS
+BALL_FRICTION = 0.8
+BALL_BOUNCE = 0.5
+GOAL_WALL_T = 2.0
+OPP_PRESS_SPEED = 100.0
+OPP_SPEED = 60.0
 
-KICK_SPEED = 250.0           # cm/s the kicker gives the ball - MEASURE
-DRIBBLE_MAX_SPIN = 6.0       # rad/s: turning faster than this while dribbling loses the ball
-DRIBBLE_MAX_SIDE = 60.0      # cm/s: moving sideways (across the way the robot faces) or backwards faster than this
-                             # loses the ball (accelerating / braking doesn't)
-DRIBBLE_CATCH_SPEED = 120.0  # cm/s: a ball arriving faster than this bounces off the dribbler instead
-NOTCH_REST_Y = cfg.ROBOT_RADIUS + BALL_RADIUS   # cm, ball centre when sitting in the dribbler notch (touching the
-                             # bumper). The physical notch, NOT cfg.CAPTURE_ZONE (that's where the camera sees the ball)
-NOTCH_HALF_W = 4.0 + BALL_RADIUS               # cm, the ball centre is in the notch within this either side
+KICK_SPEED = 250.0
+DRIBBLE_MAX_SPIN = 6.0
+DRIBBLE_MAX_SIDE = 60.0
+DRIBBLE_CATCH_SPEED = 120.0
+NOTCH_REST_Y = cfg.ROBOT_RADIUS + BALL_RADIUS
+NOTCH_HALF_W = 4.0 + BALL_RADIUS
 
-# referee: the ball fully outside the playing area -> off the field for BALL_OUT_DELAY s (no ball), then on the
-# free neutral spot nearest to where it went out
-BALL_OUT_DELAY = 0.5          # s an out ball is off the field before the referee puts it back (real referees: ~0.5 s)
-BALL_PARK = (1e4, 0.0)       # where the ball is kept while it's off the field (not drawn, not seen, no physics)
-NO_PROGRESS_TIME = 10.0      # referee: ball hasn't moved 5 cm in this long -> nearest free neutral spot
-DAMAGED_TIME = 30.0          # referee: a robot fully outside the playing area is taken off as damaged for this long
-                             # (or until the next kickoff), then put back in its own half
-KICKOFF_SIDE = 20.0          # kickoff: the team that just scored has its striker this far to the side of its goalie,
-                             # touching the front of its penalty area
-PUSHED_TIME = 0.5            # referee: a robot that goes out within this long of touching an opponent, while not itself
-PUSHED_OUT_SPEED = 20.0      # driving outwards faster than this (cm/s), was pushed out: it comes straight back in
-PARK = (1e4, 1e4)            # where a taken-off robot is kept (far off the field: not drawn, not seen, no physics)
+BALL_OUT_DELAY = 0.5
+BALL_PARK = (1e4, 0.0)
+NO_PROGRESS_TIME = 10.0
+DAMAGED_TIME = 30.0
+KICKOFF_SIDE = 20.0
+PUSHED_TIME = 0.5
+PUSHED_OUT_SPEED = 20.0
+PARK = (1e4, 1e4)
 
 LDR_RING_RADIUS = cfg.ROBOT_RADIUS - 3.0
-# Where LDR number i physically sits = the angle lines.py computes for it + this offset.
-# pi: the sensors sit opposite the computed angle (lines.LDR_VECTOR_IS_ESCAPE). Set 0 to test the layout the comments
-# describe.
 LDR_PHYSICAL_OFFSET = math.pi
 LDR_WHITE, LDR_GREEN, LDR_GREY = 800, 3200, 2400
-GREY_CARPET = False          # True = the field is drawn grey (no green for the camera, LDRs read LDR_GREY)
+GREY_CARPET = False
 
-FIELD_PPC = 2.0              # sim field image resolution (px/cm)
-UI_PPC = 2.4                 # window scale (px/cm)
-MARGIN = 10.0                # cm drawn around the walls
+FIELD_PPC = 2.0
+UI_PPC = 2.4
+MARGIN = 10.0
 
 GREEN, GREY, WHITE, WALL = (40, 150, 40), (120, 120, 120), (250, 250, 250), (25, 25, 25)
 YELLOW, BLUE, ORANGE, ROBOT = (0, 220, 255), (220, 70, 0), (0, 120, 255), (45, 45, 45)
-THEIR_ROBOT = ROBOT          # colour the other team's robots are drawn in (full mode only), e.g. (235, 235, 235) = white
-THEIR_DARK_BASE = 0.0        # cm: ...with their bottom this high drawn ROBOT colour (dark wheels / bumper). 0 = all one colour
+THEIR_ROBOT = ROBOT
+THEIR_DARK_BASE = 0.0
 GOAL_BGR = {"yellow": YELLOW, "blue": BLUE}
 
-MASK_BGR = {"blue": (255, 90, 0), "yellow": (0, 255, 255), "white": (255, 255, 255),   # masks view
+MASK_BGR = {"blue": (255, 90, 0), "yellow": (0, 255, 255), "white": (255, 255, 255),
             "green": (0, 200, 0), "orange": (0, 140, 255)}
 
-# HSV ranges that match the colours above (sim only - the real ones come from test_camera.py)
 SIM_HSV = {
     "blue": {"lo": [100, 150, 80], "hi": [130, 255, 255]},
     "yellow": {"lo": [20, 100, 100], "hi": [35, 255, 255]},
@@ -230,10 +154,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def mirror_design():
-    """Hyperbolic mirror (z - c)^2 / a^2 - r^2 / b^2 = 1, camera pupil at z = 0 (one focus), z up, cm. Same maths as
-    hardware/omni_mirror_calc.py. The robot 'sees' from the other focus (z = 2c): a single viewpoint VIEW_Z up."""
     R = MIRROR_D / 2
-    zr = R / math.tan(math.radians(MIRROR_USE_HALF))            # pupil -> rim height
+    zr = R / math.tan(math.radians(MIRROR_USE_HALF))
     c = (zr - R * math.tan(math.radians(MIRROR_RIM_ELEV))) / 2
     a = (math.hypot(R, zr) - math.hypot(R, zr - 2 * c)) / 2
     b = math.sqrt(c * c - a * a)
@@ -242,43 +164,37 @@ def mirror_design():
 
 
 def mirror_floor_table(d, n=4000):
-    """Camera ray angle from the axis (rad, 0..MIRROR_USE_HALF) -> floor distance (cm) from the robot centre, seen
-    via the mirror. Increasing; the rim ray (just below the horizon) is the last entry."""
     a, b, c = d["a"], d["b"], d["c"]
     th = np.linspace(0.0, math.radians(MIRROR_USE_HALF), n)
     t = np.tan(th)
-    A = 1 / a ** 2 - t ** 2 / b ** 2           # (z-c)^2/a^2 - (z t)^2/b^2 = 1, root on the upper sheet
+    A = 1 / a ** 2 - t ** 2 / b ** 2
     B = -2 * c / a ** 2
     C = c ** 2 / a ** 2 - 1
     z = (-B + np.sqrt(B * B - 4 * A * C)) / (2 * A)
-    dep = np.arctan2(2 * c - z, z * t)         # depression of the ray from the viewpoint (> 0 = towards the floor)
+    dep = np.arctan2(2 * c - z, z * t)
     with np.errstate(divide="ignore"):
         dist = d["view_z"] / np.tan(dep)
     return th, np.minimum(dist, 1e4)
 
 
 MIRROR = mirror_design()
-VIEW_Z = MIRROR["view_z"]                     # cm, the mirror's effective viewpoint above the floor (~21.4)
+VIEW_Z = MIRROR["view_z"]
 MIRROR_TH, MIRROR_DIST = mirror_floor_table(MIRROR)
-MIRROR_FPX = (CAM_RES / 2) / math.tan(math.radians(MIRROR_USE_HALF))   # camera focal length in image px
-VIEW_MAX = float(MIRROR_DIST[-1])             # cm of floor the mirror rim sees (~400: the whole field)
-EGO_RADIUS = 300.0                            # cm rendered around the robot (further away = outside the walls)
-# Detection runs on the raw mirror image when robot_vision has the "radial" mode (pixel angle = direction, a
-# pixels -> cm curve = distance), otherwise on a top-down remap of it
+MIRROR_FPX = (CAM_RES / 2) / math.tan(math.radians(MIRROR_USE_HALF))
+VIEW_MAX = float(MIRROR_DIST[-1])
+EGO_RADIUS = 300.0
 RADIAL = hasattr(_vision_mod, "radial_table")
-VIEW_RADIUS = min(VIEW_MAX, EGO_RADIUS) if RADIAL else TOPDOWN_RADIUS   # cm the robot code can see
+VIEW_RADIUS = min(VIEW_MAX, EGO_RADIUS) if RADIAL else TOPDOWN_RADIUS
 CAM_SIZE = CAM_RES if RADIAL else int(2 * TOPDOWN_RADIUS * TOPDOWN_PPC)
-OWN_HIDDEN_R = cfg.ROBOT_RADIUS * VIEW_Z / (VIEW_Z - OWN_DECK_HEIGHT)   # floor our own deck hides (cm from centre)
+OWN_HIDDEN_R = cfg.ROBOT_RADIUS * VIEW_Z / (VIEW_Z - OWN_DECK_HEIGHT)
 
 
 def radial_calibration():
-    """What test_camera.py's Distance calibration would measure: image radius (px) -> floor distance (cm)."""
     keep = MIRROR_DIST <= VIEW_RADIUS
     return {"table_px": (MIRROR_FPX * np.tan(MIRROR_TH[keep])).tolist(), "table_cm": MIRROR_DIST[keep].tolist()}
 
 
 def bar_angle_off(az):
-    """How far (rad) direction(s) az (0 = robot front, + = left) are from the nearest mount bar's centre line."""
     az = np.asarray(az, np.float64)
     off = np.full(az.shape, np.inf)
     for a in MOUNT_BAR_ANGLES:
@@ -287,23 +203,19 @@ def bar_angle_off(az):
 
 
 def bar_pixels(size, half):
-    """(size, size) bool: pixels of a centred radial image (the raw mirror image or its top-down view, front = up)
-    whose direction is within `half` rad of a mount bar."""
     j, i = np.meshgrid(np.arange(size) + 0.5, np.arange(size) + 0.5)
     dx, dy = j - size / 2.0, size / 2.0 - i
     return bar_angle_off(np.arctan2(-dx, dy)) < half
 
 
 def sim_vision_config():
-    """robot_vision config for the sim camera. Uses the ignore box from your real config if there is one, and an
-    ignore mask over the mount bars (what you'd paint in test_camera.py)."""
     ignore = {"left": 11.0, "right": 11.0, "back": 11.0, "front": 5.0}
     real = os.path.join(HERE, cfg.VISION_CONFIG)
     if os.path.exists(real):
         import json
         with open(real) as f:
             real_ign = json.load(f)["detection"].get("ignore_cm")
-        if real_ign and any(real_ign.values()):      # (a painted mask instead: keep the sim's box for our body)
+        if real_ign and any(real_ign.values()):
             ignore = real_ign
     det = {"ignore_cm": ignore, "min_blob_area": 50, "morph_kernel": 3}
     if MOUNT_BAR_ANGLES and hasattr(_vision_mod, "encode_mask"):
@@ -327,22 +239,21 @@ def make_rv():
         json.dump(sim_vision_config(), f)
     rv = RobotVision(path)
     fov = np.zeros((CAM_SIZE, CAM_SIZE), np.uint8)
-    if MOUNT_BAR_ANGLES:     # (also for a robot_vision without ignore masks: at least don't call the bars obstacles)
+    if MOUNT_BAR_ANGLES:
         bars = bar_pixels(CAM_SIZE, MOUNT_BAR_HALF + math.radians(MOUNT_MASK_MARGIN))
         rv.valid = rv.valid.copy()
         rv.valid[cv2.dilate(bars.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0] = 0
-    if RADIAL:      # robot_vision works out the scale, ignore box and calibrated circle itself; add the mirror circle
+    if RADIAL:
         cv2.circle(fov, (CAM_SIZE // 2, CAM_SIZE // 2), int(rv.radius_px(VIEW_RADIUS)) - 2, 255, -1)
         rv.valid = cv2.bitwise_and(rv.valid, cv2.erode(fov, np.ones((5, 5), np.uint8)))
         return rv, fov
-    # "raw" mode means 1 px/cm; the sim's top-down view is TOPDOWN_PPC, like a real top-down setup would be
     rv.px_per_cm = TOPDOWN_PPC
     ign, (cx, cy) = rv.config["detection"]["ignore_cm"], rv.centre
     box = (cx - ign["left"] * TOPDOWN_PPC, cy - ign["front"] * TOPDOWN_PPC,
            cx + ign["right"] * TOPDOWN_PPC, cy + ign["back"] * TOPDOWN_PPC)
     rv.ignore_box = tuple(max(int(round(v)), 0) for v in box)
     cv2.circle(fov, (CAM_SIZE // 2, CAM_SIZE // 2), int(VIEW_RADIUS * TOPDOWN_PPC) - 3, 255, -1)
-    rv.valid = cv2.erode(fov, np.ones((5, 5), np.uint8))   # like the real top-down "camera sees this" mask
+    rv.valid = cv2.erode(fov, np.ones((5, 5), np.uint8))
     return rv, fov
 
 
@@ -352,20 +263,15 @@ def _ring(cx, cy, r, n=20):
 
 
 def _lift(pts, z):
-    """Robot-frame points at height z cm -> where the mirror's viewpoint sees them on the floor (they're pushed
-    outwards: at or above the viewpoint's height they'd be on the horizon, so cap it)."""
     return pts * min(VIEW_Z / max(VIEW_Z - z, 1e-3), 40.0)
 
 
 def cylinder_shadow(x, y, r, height):
-    """Floor area (robot-frame polygon, cm) a solid cylinder hides from the mirror, itself included: the convex
-    hull of its base and of its top seen on the floor."""
     base = _ring(x, y, r)
     return np.vstack([base, _lift(base, height)])
 
 
 def ball_shadow(x, y):
-    """Same for the ball (a sphere on the floor): hull of its horizontal slices seen on the floor."""
     pts = []
     for z in np.linspace(0.0, 2 * BALL_RADIUS, 5):
         rr = math.sqrt(max(BALL_RADIUS ** 2 - (z - BALL_RADIUS) ** 2, 0.0)) + 0.05
@@ -374,42 +280,34 @@ def ball_shadow(x, y):
 
 
 def box_shadow(corners, height):
-    """Same for a solid box standing on the floor (corners: (4, 2) robot frame)."""
     return np.vstack([corners, _lift(corners, height)])
 
 
 def ray_hidden(sim, r, pts, z=0.0, exclude=None, size=0.0):
-    """Which robot-frame points (N, 2) at height z the mirror on robot r can't see because another robot is in the
-    way (the ray from the viewpoint, VIEW_Z up, passes through a ROBOT_HEIGHT cylinder before reaching them) or
-    because our own deck hides them, or a mount bar does (size = the thing's radius, cm: a bar only hides it if all
-    of it is behind the bar). Used by fast mode; the full camera renders the same thing."""
     pts = np.asarray(pts, np.float64).reshape(-1, 2)
     dist = np.hypot(pts[:, 0], pts[:, 1])
-    hidden = dist * (VIEW_Z - OWN_DECK_HEIGHT) / max(VIEW_Z - z, 1e-3) < cfg.ROBOT_RADIUS   # under our own deck line
+    hidden = dist * (VIEW_Z - OWN_DECK_HEIGHT) / max(VIEW_Z - z, 1e-3) < cfg.ROBOT_RADIUS
     hidden |= dist > VIEW_RADIUS
-    if MOUNT_BAR_ANGLES:                                   # behind a mirror mount bar
+    if MOUNT_BAR_ANGLES:
         half_size = np.arcsin(np.minimum(size / np.maximum(dist, 1e-6), 1.0))
-        bar_half = MOUNT_BAR_HALF + math.radians(MOUNT_MASK_MARGIN)       # (what the ignore mask blanks)
+        bar_half = MOUNT_BAR_HALF + math.radians(MOUNT_MASK_MARGIN)
         hidden |= (bar_angle_off(np.arctan2(-pts[:, 0], pts[:, 1])) + half_size < bar_half) & (dist > MOUNT_BAR_R)
     u = pts / np.maximum(dist, 1e-6)[:, None]
     for b in sim.on_field:
         if b is r or b is exclude:
             continue
         bx, by = rotate([b.x - r.x, b.y - r.y], -r.h)
-        s_c = u[:, 0] * bx + u[:, 1] * by                  # along the ray to the body's centre
+        s_c = u[:, 0] * bx + u[:, 1] * by
         perp2 = bx * bx + by * by - s_c * s_c
         half = np.sqrt(np.maximum(b.r * b.r - perp2, 0.0))
         s_in, s_out = s_c - half, np.minimum(s_c + half, dist - 1e-3)
         hit = (perp2 < b.r * b.r) & (s_in < s_out) & (s_out > 0)
-        ray_z = VIEW_Z - (VIEW_Z - z) * s_out / np.maximum(dist, 1e-6)   # the ray's lowest point inside the body
+        ray_z = VIEW_Z - (VIEW_Z - z) * s_out / np.maximum(dist, 1e-6)
         hidden |= hit & (ray_z <= ROBOT_HEIGHT)
     return hidden
 
 
 def ball_view(sim, r):
-    """Why robot r's camera can or can't see the ball right now (from the truth): "off" (off the field), "ring" (in the
-    blind ring round our bumper, BALL_BLIND_RING), "range" (too far), "bar" (behind a mirror mount bar), "robot"
-    (behind another robot, or our own deck) or "clear" (it should be seen)."""
     if sim.ball[0] > BALL_PARK[0] / 2:
         return "off"
     p = rotate([sim.ball[0] - r.x, sim.ball[1] - r.y], -r.h)
@@ -428,35 +326,22 @@ def ball_view(sim, r):
 
 
 class OmniCamera:
-    """Pi Camera Module 3 Wide looking up into the hyperbolic omni mirror. The mirror has a single viewpoint VIEW_Z
-    up, so the image is that point's view in every direction: image angle = direction from the robot, image
-    radius = how far below the horizon (radius -> floor distance from mirror_floor_table). Things standing up are
-    seen on the floor further out than they are (_lift), so robots and goal walls are drawn as the floor area
-    they cover from the viewpoint, far ones first: anything behind them is hidden, like on the real robot.
-    Rendering stays cheap: (1) one affine warp of the field into the robot's frame, (2) the bodies' shadows
-    painted on that, (3) a fixed remap to the mirror image. Then (only without radial mode) another fixed remap to
-    the top-down view, like robot_vision's calibration.
-    Not modelled: the mirror image is left-right flipped on the real camera (the sim's is already turned the right
-    way round), glare off the mirror mount (its bars are drawn: MOUNT_BAR_*), focus blur, robots' own colours (all drawn dark, except
-    the other team's: THEIR_ROBOT)."""
-    SS = 2   # supersampling when rendering the raw image (pixels average over their area, like a real sensor)
+    SS = 2
 
     def __init__(self):
         n = CAM_RES * self.SS
         c = n / 2.0
         j, i = np.meshgrid(np.arange(n) + 0.5, np.arange(n) + 0.5)
-        dx, dy = (j - c), (c - i)                          # +dy = robot front
+        dx, dy = (j - c), (c - i)
         rho = np.hypot(dx, dy)
         th = np.arctan(rho / (MIRROR_FPX * self.SS))
         dist = np.interp(th, MIRROR_TH, MIRROR_DIST)
         with np.errstate(invalid="ignore", divide="ignore"):
-            gx = np.where(rho > 0, dist * dx / rho, 0)     # floor point, robot frame cm
+            gx = np.where(rho > 0, dist * dx / rho, 0)
             gy = np.where(rho > 0, dist * dy / rho, 0)
-        # (1) robot-frame floor image at FIELD_PPC, robot in the middle, front = up
         k = FIELD_PPC
         self.half_px = int(math.ceil(EGO_RADIUS * k)) + 4
         self.ego_size = 2 * self.half_px
-        # (3) mirror image pixel -> robot-frame image pixel; outside the mirror circle -> -1 (black)
         ex = (self.half_px + gx * k).astype(np.float32)
         ey = (self.half_px - gy * k).astype(np.float32)
         out = th > math.radians(MIRROR_USE_HALF)
@@ -465,8 +350,6 @@ class OmniCamera:
         self.lens_maps = cv2.convertMaps(ex, ey, cv2.CV_16SC2)
         self.top_maps = None
         if not RADIAL:
-            # top-down (TOPDOWN_PPC px/cm, CAM_SIZE square, robot at the centre) -> mirror pixel (at CAM_RES);
-            # outside the "camera sees this" circle -> -1 (black), same circle as make_rv's fov mask
             m = CAM_SIZE
             u, v = np.meshgrid(np.arange(m) + 0.5, np.arange(m) + 0.5)
             x, y = (u - m / 2.0) / TOPDOWN_PPC, (m / 2.0 - v) / TOPDOWN_PPC
@@ -481,13 +364,11 @@ class OmniCamera:
             map_x[fov == 0] = -10
             map_y[fov == 0] = -10
             self.top_maps = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
-        # the mount bars: dark slices of the image (things beyond a bar, in its direction, are never seen)
         self.bar_px = bar_pixels(CAM_RES, MOUNT_BAR_HALF) if MOUNT_BAR_ANGLES else None
         self.goal_boxes = [("yellow" if y0 + y1 > 0 else "blue", np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float))
                            for x0, x1, y0, y1 in GOAL_WALLS]
 
     def shadows(self, robot, bodies, ball):
-        """(colour, robot-frame polygon cm) to paint, in order (far first, nearer ones on top)."""
         c, s = math.cos(-robot.h), math.sin(-robot.h)
         R = np.array([[c, -s], [s, c]])
         to_robot = lambda p: (np.asarray(p, np.float64) - [robot.x, robot.y]) @ R.T
@@ -501,20 +382,18 @@ class OmniCamera:
             bx, by = to_robot([b.x, b.y])
             colour = ROBOT if b.team == robot.team else THEIR_ROBOT
             items.append((math.hypot(bx, by) - b.r, colour, cylinder_shadow(bx, by, b.r, ROBOT_HEIGHT)))
-            if colour != ROBOT and THEIR_DARK_BASE > 0:      # (sorted by the first item: stays on top of the body)
+            if colour != ROBOT and THEIR_DARK_BASE > 0:
                 items.append((math.hypot(bx, by) - b.r - 1e-6, ROBOT, cylinder_shadow(bx, by, b.r, THEIR_DARK_BASE)))
         if ball is not None:
             bx, by = to_robot(ball)
             items.append((math.hypot(bx, by) - BALL_RADIUS, ORANGE, ball_shadow(bx, by)))
         items.sort(key=lambda it: -it[0])
-        items.append((0.0, ROBOT, _ring(0.0, 0.0, OWN_HIDDEN_R, 32)))   # our own deck, nearest of all
+        items.append((0.0, ROBOT, _ring(0.0, 0.0, OWN_HIDDEN_R, 32)))
         return [(col, poly) for _, col, poly in items]
 
     def render(self, field_img, robot, noise_rng=None, bodies=(), ball=None):
-        """Raw mirror image (CAM_RES square) as the camera would see the field + bodies + ball from this robot."""
         c, s = math.cos(robot.h), math.sin(robot.h)
         k, h = FIELD_PPC, self.half_px
-        # robot-frame pixel (u, v) -> field image pixel (inverse map for warpAffine)
         M = np.float32([[c, s, (FieldImage.W / 2 + robot.x) * k - c * h - s * h],
                         [-s, c, (FieldImage.L / 2 - robot.y) * k + s * h - c * h]])
         ego = cv2.warpAffine(field_img, M, (self.ego_size, self.ego_size), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
@@ -527,8 +406,8 @@ class OmniCamera:
         img = cv2.remap(ego, *self.lens_maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         img = cv2.resize(img, (CAM_RES, CAM_RES), interpolation=cv2.INTER_AREA)
         if self.bar_px is not None:
-            img[self.bar_px & (img.max(axis=2) > 0)] = ROBOT     # (outside the mirror stays black)
-        if noise_rng is not None:      # pixel noise: a random pick from a bank of noise frames, randomly shifted
+            img[self.bar_px & (img.max(axis=2) > 0)] = ROBOT
+        if noise_rng is not None:
             if not hasattr(self, "noise_bank"):
                 self.noise_bank = [noise_rng.normal(0, 8, img.shape).astype(np.int16) for _ in range(16)]
             n = self.noise_bank[int(noise_rng.integers(len(self.noise_bank)))]
@@ -537,13 +416,11 @@ class OmniCamera:
         return img
 
     def topdown(self, raw):
-        """What robot_vision gets: the raw mirror image itself (radial mode) or its top-down remap."""
         if self.top_maps is None:
             return raw
         return cv2.remap(raw, *self.top_maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
-# ==================================== FIELD DRAWING ====================================
 class FieldImage:
     W = field.WALL_W + 2 * MARGIN
     L = field.WALL_L + 2 * MARGIN
@@ -554,13 +431,11 @@ class FieldImage:
         img = np.full((self.size[1], self.size[0], 3), WALL, np.uint8)
         cv2.rectangle(img, self.px(-field.WALL_W / 2, field.WALL_L / 2), self.px(field.WALL_W / 2, -field.WALL_L / 2),
                       GREY if GREY_CARPET else GREEN, -1)
-        # goals: the floor under the coloured walls (the camera draws the walls standing up, see OmniCamera); the
-        # goal floor is green with the white line on it
         for x0, x1, y0, y1 in GOAL_WALLS:
             cv2.rectangle(img, self.px(x0, y1), self.px(x1, y0), YELLOW if y0 + y1 > 0 else BLUE, -1)
         self.white = np.zeros(img.shape[:2], np.uint8)
         thick = max(1, int(round(field.LINE_W * ppc)))
-        for a, b in field.black_line_segments():     # penalty box: black, the LDRs and white mask ignore it
+        for a, b in field.black_line_segments():
             cv2.line(img, self.px(*a), self.px(*b), WALL, max(1, int(round(field.PENALTY_LINE_W * ppc))))
         for a, b in field.white_line_segments():
             cv2.line(img, self.px(*a), self.px(*b), WHITE, thick)
@@ -577,7 +452,6 @@ class FieldImage:
 
 
 def goal_walls():
-    """The goals' side and back walls as solid rectangles (x0, x1, y0, y1), both ends."""
     hw, t = field.GOAL_W / 2, GOAL_WALL_T
     y0, y1 = field.ATTACK_GOAL_Y, field.GOAL_BACK_Y
     walls = []
@@ -591,10 +465,9 @@ GOAL_WALLS = goal_walls()
 
 
 def push_out_of_walls(x, y, r):
-    """Move a circle (centre x, y, radius r) out of the goal walls. Returns (x, y, list of push-out normals)."""
     normals = []
     for x0, x1, y0, y1 in GOAL_WALLS:
-        cx, cy = min(max(x, x0), x1), min(max(y, y0), y1)      # closest point of the wall
+        cx, cy = min(max(x, x0), x1), min(max(y, y0), y1)
         dx, dy = x - cx, y - cy
         d = math.hypot(dx, dy)
         if d >= r:
@@ -602,14 +475,13 @@ def push_out_of_walls(x, y, r):
         if d > 1e-9:
             n = (dx / d, dy / d)
             pen = r - d
-        else:                                                   # centre inside the wall: leave by the nearest side
+        else:
             pen, n = min((x - x0 + r, (-1, 0)), (x1 - x + r, (1, 0)), (y - y0 + r, (0, -1)), (y1 - y + r, (0, 1)))
         x, y = x + n[0] * pen, y + n[1] * pen
         normals.append(n)
     return x, y, normals
 
 
-# ==================================== SIM HARDWARE ====================================
 class SimIMU:
     def __init__(self, body):
         self.body = body
@@ -648,7 +520,7 @@ class SimKicker:
     def __init__(self, cooldown):
         self.cooldown = cooldown
         self.last = -1e9
-        self.pending = False      # physics fires the ball on the next step
+        self.pending = False
 
     def ready(self):
         return time.monotonic() - self.last >= self.cooldown
@@ -692,8 +564,6 @@ class SimComms:
 
 
 class SimGoalSwitch:
-    """The attack-goal switch (common.Robot.goal_switch), set the way the team would set it: we attack yellow, the
-    opponents blue."""
 
     def __init__(self, body):
         self.body = body
@@ -717,8 +587,6 @@ class SimVision:
 
 
 class SimBot(Robot):
-    """Same interface as common.Robot (so the brains can't tell the difference), with sim hardware.
-    code = the robot code to run (CURRENT_CODE, or an older version from load_code())."""
 
     def __init__(self, body, rv, hw, code):
         self.imu = SimIMU(body)
@@ -729,21 +597,18 @@ class SimBot(Robot):
         self.comms = SimComms()
         self.vision = SimVision(rv)
         self.attack = "yellow"
-        self.loc = code.LocalisationThread(self.vision, lambda: self.attack)   # never started: process() per frame
+        self.loc = code.LocalisationThread(self.vision, lambda: self.attack)
         self.world = code.World()
         self.lines = code.LineFusion()
         self.mover = code.Mover()
         self.leds = code.LedCalibrator(self.pcb)
 
 
-# ==================================== BODIES / PHYSICS ====================================
 SQ2 = math.sqrt(2)
 MOTOR_ANGLES = [math.pi / 4, 3 * math.pi / 4, 5 * math.pi / 4, 7 * math.pi / 4]
 
 
 def motors_to_velocity(speeds):
-    """Inverse of motion.VelocityToMotor + motion.Mover's axis swap: 4 motor speeds -> robot-frame (vx, vy) cm/s
-    and spin rad/s (CCW +)."""
     mx = sum(m * math.cos(a) for m, a in zip(speeds, MOTOR_ANGLES)) / 2
     my = sum(m * math.sin(a) for m, a in zip(speeds, MOTOR_ANGLES)) / 2
     k = TOP_SPEED / (SQ2 * cfg.BASE_SPEED)
@@ -759,8 +624,8 @@ class Body:
         self.prev_v = (0.0, 0.0)
         self.name, self.colour = name, colour
         self.r = cfg.ROBOT_RADIUS
-        self.removed_until = None    # taken off as damaged until this sim time (None = on the field)
-        self.opp_contact_t = -1e9    # last time an opponent pushed against it
+        self.removed_until = None
+        self.opp_contact_t = -1e9
         self.outs = 0
         self.was_out = False
 
@@ -779,7 +644,7 @@ class SimRobot(Body):
         self.kick_flash = 0.0
         self.brain = brain_cls(self.bot, log=lambda m: log(f"{name}: {m}"))
         self.paused = True
-        self.return_at = None        # just put back after being taken off: stays paused (calibrating) till then
+        self.return_at = None
 
     def drive(self, dt):
         vx_r, vy_r, spin = motors_to_velocity(self.bot.motors.speeds)
@@ -792,27 +657,22 @@ class SimRobot(Body):
 
 class Sim:
     def __init__(self, noise=False, seed=0, opp_code=None, fast=False):
-        """seed: changes the sensor noise, particle filters and (seed > 0) jitters the kickoff positions a little,
-        so different seeds give different games. opp_code: None = the simple opponents (key a), or a robot code
-        version from load_code() = the opponents run that code (self-play), attacking the blue goal.
-        fast: no camera rendering / detection / localisation - Detections and pose straight from the truth (see
-        FAST MODE below), ~10x faster, for screening strategy ideas."""
         self.seed = seed
         self.fast = fast
         self.fimg = FieldImage(FIELD_PPC)
         self.rv, self.fov = make_rv()
         self.cam = OmniCamera()
-        self.held_by = None       # robot whose dribbler has the ball
+        self.held_by = None
         self.held_since = 0.0
         self.kicks = 0
         self.events = {}
-        self.last_touch = None    # robot that touched the ball last
+        self.last_touch = None
         self.last_touch_phase = ""
         self.last_kick = -1e9
         self.shots = []
-        self.last_restart = 0.0   # time of the last kickoff / neutral spot placement           # every kick: who, from where, did it go in (within 1.5 s)          # what happened to the ball (counts), for arena.py / tuning
+        self.last_restart = 0.0
         self.ball_out_since = None
-        self.progress = ([0.0, 0.0], 0.0)   # (ball position, time) last time it moved 5 cm
+        self.progress = ([0.0, 0.0], 0.0)
         self.logs = []
         self.robots = [
             SimRobot(0, 0, 0, "goalie", (255, 200, 0), GoalieBrain, hardware_defense, self.rv, self.log),
@@ -822,7 +682,7 @@ class Sim:
         g.bot.comms.partner, s.bot.comms.partner = s.bot.comms, g.bot.comms
         if opp_code is None:
             self.opponents = [Body(0, 0, math.pi, "opp", ROBOT), Body(0, 0, math.pi, "opp", ROBOT)]
-        else:      # same order as the kickoff spots: striker at the centre, goalie in front of the yellow goal
+        else:
             self.opponents = [
                 SimRobot(0, 0, math.pi, "opp striker", ROBOT, opp_code.StrikerBrain, hardware_attack, self.rv,
                          self.log, opp_code, "them"),
@@ -831,38 +691,36 @@ class Sim:
             ]
             o_s, o_g = self.opponents
             o_s.bot.comms.partner, o_g.bot.comms.partner = o_g.bot.comms, o_s.bot.comms
-        for i, r in enumerate(self.players):        # fixed seeds: the same settings give the same game every run
+        for i, r in enumerate(self.players):
             r.bot.loc.loc.rng = np.random.default_rng(100 + i + 10 * seed)
             if fast:
                 r.bot.loc = TruthLoc(r, np.random.default_rng(200 + i + 10 * seed))
         self.fast_ignore = self.rv.config["detection"]["ignore_cm"]
         self.ball = [0.0, 0.0]
         self.ball_v = [0.0, 0.0]
-        self.ball_away_until = None   # ball off the field (gone out) until this time
-        self.ball_out_at = None       # where it went out
+        self.ball_away_until = None
+        self.ball_out_at = None
         self.noise = noise
         self.opp_ai = False
-        self.last_scorer = None   # who scored last: the other team kicks off (kickoff())
-        self.opp_style = "push"   # simple opponents: "push" the ball at our goal, or "press" (faster, chase our carrier)
+        self.last_scorer = None
+        self.opp_style = "push"
         self.ticks = 0
         self.score = {"us": 0, "them": 0}
         self.goal_timer = None
         self.loc_err = {r.name: [] for r in self.robots}
         self.rng = np.random.default_rng(seed)
-        self.ir_rng = np.random.default_rng(300 + seed)   # (its own stream: the IR ring doesn't change the other noise)
-        self.faults = None        # faults.FaultInjector: break our robots on purpose (--faults)
+        self.ir_rng = np.random.default_rng(300 + seed)
+        self.faults = None
         self.kickoff()
 
     @property
     def players(self):
-        """Every robot running robot code (ours, plus the opponents in self-play)."""
         return self.robots + [o for o in self.opponents if isinstance(o, SimRobot)]
 
     def release(self, why):
-        """The ball leaves the dribbler. Possessions longer than 0.3 s are counted by how they ended."""
         if self.held_by is not None and self.t - self.held_since > 0.3:
             self.count(f"{self.held_by.team} possession ended: {why}")
-            gy = self.held_by.y if self.held_by.team == "us" else -self.held_by.y     # towards the goal it attacks
+            gy = self.held_by.y if self.held_by.team == "us" else -self.held_by.y
             where = "own third" if gy < -30 else "middle third" if gy < 30 else "attacking third"
             self.count(f"{self.held_by.team} possession ended: {why} in {where}")
             self.count(f"{self.held_by.team} possession seconds", self.t - self.held_since)
@@ -880,17 +738,13 @@ class Sim:
         return _SIM_T[0] - 1000.0
 
     def kickoff(self):
-        """Kickoff positions. The team that just conceded (at the start: us) kicks off: its striker just behind the
-        centre spot in its own half. Every other robot - both of the team that just scored, and the kicking-off team's
-        goalie - starts in (or touching) its own penalty area: goalie in front of its goal, striker touching the
-        front of the area, KICKOFF_SIDE to the side."""
-        for b in self.robots + self.opponents:     # a new point: taken-off robots come back
+        for b in self.robots + self.opponents:
             b.removed_until = None
             if isinstance(b, SimRobot):
                 b.return_at = None
         g, s = self.robots
         R = cfg.ROBOT_RADIUS
-        box_y = field.OWN_GOAL_Y + field.PENALTY_D + R - 2          # centre with the robot's edge just in the area
+        box_y = field.OWN_GOAL_Y + field.PENALTY_D + R - 2
         g.place(0, field.OWN_GOAL_Y + R + 8, 0)
         if self.last_scorer == "us":
             s.place(KICKOFF_SIDE, box_y, 0)
@@ -900,9 +754,9 @@ class Sim:
         for o, (x, y) in zip(self.opponents, (opp_striker, (0, field.ATTACK_GOAL_Y - R - 8))):
             o.place(x, y, math.pi)
         self.ball, self.ball_v = [0.0, 0.0], [0.0, 0.0]
-        self.ball_away_until = None       # a kickoff always puts the ball back on the centre spot
+        self.ball_away_until = None
         self.ball_out_at = None
-        if self.seed:                          # a little variety between games
+        if self.seed:
             for b in self.robots + self.opponents:
                 b.place(b.x + self.rng.uniform(-3, 3), b.y + self.rng.uniform(-3, 3), b.h + self.rng.uniform(-0.1, 0.1))
             self.ball = [self.rng.uniform(-3, 3), self.rng.uniform(-3, 3)]
@@ -912,32 +766,24 @@ class Sim:
         for r in self.players:
             r.paused = True
         self.last_restart = self.t + 0.5
-        self.start_at = self.t + 0.5      # stand still (paused) half a second: calibrates heading + goal colour
+        self.start_at = self.t + 0.5
         self.goal_timer = None
 
-    # ---- sensors
     @property
     def on_field(self):
-        """Every body (ours and opponents) that isn't taken off."""
         return [b for b in self.robots + self.opponents if b.removed_until is None]
 
     def draw_dynamic(self):
-        """The field the cameras look at. Just the static field: robots and the ball stand up, so each camera draws
-        them from its own viewpoint (OmniCamera.render)."""
         return self.fimg.img
 
     def camera(self, img, robot):
-        """Omni mirror image from the robot (robot front = up) -> what robot_vision gets from the real camera after
-        its calibration: the raw mirror image (radial mode) or its top-down view."""
         ball = None if ball_view(self, robot) in ("off", "ring") else self.ball
         raw = self.cam.render(img, robot, self.rng if self.noise else None, self.on_field, ball)
-        return self.cam.topdown(raw)        # (outside the mirror / fov circle is already black)
+        return self.cam.topdown(raw)
 
-    _LDR_RING = None    # (N, 2) robot-frame LDR positions (computed once)
+    _LDR_RING = None
 
     def ldrs(self, robot):
-        """LDR readings: white / green under each sensor (+ noise). Vectorised; same values and random numbers as
-        reading them one by one."""
         if Sim._LDR_RING is None:
             ring = []
             for i in range(cfg.LDR_COUNT):
@@ -960,12 +806,9 @@ class Sim:
             out = out + np.array([int(n) for n in self.rng.normal(0, 150, len(out))])
         return [int(o) for o in out]
 
-    _IR_DIRS = None     # sensor directions (robot frame, rad, 0 = right, anticlockwise)
+    _IR_DIRS = None
 
     def ir(self, robot):
-        """IR ring readings, 0..1 per sensor (0 = not picking the ball up): every sensor pointing within IR_HALF_FOV of
-        the ball sees it, strongest near its axis, all full strength within IR_NEAR. Not modelled: robots in the way
-        (IR gets round / reflects more than visible light), reflections off the walls, sunlight."""
         n = getattr(cfg, "IR_COUNT", 0)
         if not n or not SIM_IR:
             return []
@@ -984,8 +827,6 @@ class Sim:
         return [float(min(max(v, 0.0), 1.0)) for v in val]
 
     def ball_stats(self):
-        """Per camera frame, for each of our robots: why it can / can't see the ball (ball_view), whether the camera
-        found it, and where the robot code's ball came from (World.ball_source) -> self.events "ballview ..."."""
         for r in self.robots:
             if r.paused or r.removed_until is not None or r.return_at is not None:
                 continue
@@ -995,7 +836,6 @@ class Sim:
             if why != "off":
                 self.count(f"ballview {r.name} {why} code:{getattr(r.bot.world, 'ball_source', '?')}")
 
-    # ---- one tick
     def step(self):
         _SIM_T[0] += DT
         self.ticks += 1
@@ -1030,9 +870,9 @@ class Sim:
 
         for r in self.players:
             if self.faults is not None:
-                self.faults.tick(r)      # (the real robot code, through common.TickGuard, with faults)
+                self.faults.tick(r)
             else:
-                r.brain.tick(r.paused)       # <- the real robot code
+                r.brain.tick(r.paused)
             r.drive(DT)
         if self.ticks % CAMERA_EVERY == 0:
             self.ball_stats()
@@ -1043,15 +883,13 @@ class Sim:
     def move_opponents(self):
         for o in self.opponents:
             if isinstance(o, SimRobot) or o.removed_until is not None:
-                continue                 # self-play: drives itself / taken off
+                continue
             if self.opp_ai and self.start_at is None and self.ball_away_until is None:
-                # (same start signal as our robots; while the ball is off the field they wait)
                 bx, by = self.ball
                 held = self.held_by is not None and self.held_by.team == "us"
                 if self.opp_style == "press" and held:
-                    tx, ty = bx, by                     # pressing: go straight for the ball our robot is carrying
+                    tx, ty = bx, by
                 else:
-                    # get behind the ball (on the side away from our goal) and push it towards our goal (-y)
                     tx, ty = bx, by + o.r + BALL_RADIUS - 2
                     if o.y < by:
                         tx += math.copysign(25, o.x - bx or 1)
@@ -1071,8 +909,8 @@ class Sim:
             b.h = wrap_pi(b.h + b.w * DT)
             b.x = min(max(b.x, -field.WALL_W / 2 + b.r), field.WALL_W / 2 - b.r)
             b.y = min(max(b.y, -field.WALL_L / 2 + b.r), field.WALL_L / 2 - b.r)
-            b.x, b.y, _ = push_out_of_walls(b.x, b.y, b.r)          # robots can't drive through the goals
-        for i, a in enumerate(bodies):           # robots push each other apart
+            b.x, b.y, _ = push_out_of_walls(b.x, b.y, b.r)
+        for i, a in enumerate(bodies):
             for b in bodies[i + 1:]:
                 dx, dy = b.x - a.x, b.y - a.y
                 d = math.hypot(dx, dy)
@@ -1085,18 +923,17 @@ class Sim:
                     b.x += dx / d * push
                     b.y += dy / d * push
 
-        # dribbler / kicker
-        rest_y = NOTCH_REST_Y     # ball centre when sitting in the capture notch
+        rest_y = NOTCH_REST_Y
         notch_x = NOTCH_HALF_W
         order = list(self.players)
-        self.rng.shuffle(order)            # no team gets to go first every tick
+        self.rng.shuffle(order)
         catchers = []
         for r in order:
             if r.removed_until is not None:
                 continue
             fwd = rotate([0.0, 1.0], r.h)
-            rv = rotate([r.vx, r.vy], -r.h)                    # robot frame: [sideways, forwards]
-            side = max(abs(rv[0]), -rv[1])                     # sideways or backwards speed
+            rv = rotate([r.vx, r.vy], -r.h)
+            side = max(abs(rv[0]), -rv[1])
             r.prev_v = (r.vx, r.vy)
             rx, ry = rotate([self.ball[0] - r.x, self.ball[1] - r.y], -r.h)
             in_notch = abs(rx) < notch_x and 0 < ry < rest_y + 2.5
@@ -1125,7 +962,7 @@ class Sim:
                     why = ("dribbler off" if not r.bot.motors.dribbler else
                            "spun too fast" if abs(r.w) > DRIBBLE_MAX_SPIN else "moved sideways / backwards")
                     self.count(f"{r.team} lost: {why}")
-                    self.release(why)                    # lost it: it keeps the robot's speed and rolls away
+                    self.release(why)
                 else:
                     px, py = fwd[0] * rest_y, fwd[1] * rest_y
                     self.ball = [r.x + px, r.y + py]
@@ -1139,16 +976,15 @@ class Sim:
                     self.count(f"{r.team} bounce speed sum", relv)
         if catchers and self.held_by is None:
             if len({r.team for r in catchers}) > 1:
-                self.count("ball squeezed between both teams' dribblers")    # nobody gets it
+                self.count("ball squeezed between both teams' dribblers")
             else:
                 r = catchers[0]
                 self.held_by, self.held_since = r, self.t
                 self.last_touch = r
                 self.count(f"{r.team} caught")
 
-        # ball
         if self.ball_away_until is not None:
-            return                                          # off the field (went out): nothing to move
+            return
         bx, by = self.ball
         vx, vy = self.ball_v
         decay = math.exp(-BALL_FRICTION * DT)
@@ -1161,14 +997,14 @@ class Sim:
             bx, vx = math.copysign(lim_x, bx), -vx * BALL_BOUNCE
         if abs(by) > lim_y:
             by, vy = math.copysign(lim_y, by), -vy * BALL_BOUNCE
-        bx, by, normals = push_out_of_walls(bx, by, BALL_RADIUS)      # goal side / back walls: bounce off
+        bx, by, normals = push_out_of_walls(bx, by, BALL_RADIUS)
         for n in normals:
             vn = vx * n[0] + vy * n[1]
             if vn < 0:
                 vx -= (1 + BALL_BOUNCE) * vn * n[0]
                 vy -= (1 + BALL_BOUNCE) * vn * n[1]
         contact_order = list(bodies)
-        self.rng.shuffle(contact_order)          # no robot gets the last push every tick
+        self.rng.shuffle(contact_order)
         for b in contact_order:
             if b is self.held_by:
                 continue
@@ -1182,17 +1018,15 @@ class Sim:
                 self.last_touch_phase = f"b{st.botstate} {st.phase}"
             if self.held_by is not None and b.team != self.held_by.team:
                 self.count(f"{self.held_by.team} lost: knocked by opponent")
-                self.release("knocked")                        # an opponent knocked it out of the dribbler
+                self.release("knocked")
             bx += n[0] * pen
             by += n[1] * pen
-            # contact point velocity (incl. spin) pushes the ball
             px, py = bx - b.x, by - b.y
             cvx, cvy = b.vx - b.w * py, b.vy + b.w * px
             rel = (vx - cvx) * n[0] + (vy - cvy) * n[1]
             if rel < 0:
                 vx -= (1 + BALL_BOUNCE * 0.5) * rel * n[0]
                 vy -= (1 + BALL_BOUNCE * 0.5) * rel * n[1]
-        # the ball is solid: a robot it still overlaps (squeezed between two robots) gets pushed back instead
         for b in bodies:
             hit = self.ball_overlap(b, bx, by, rest_y, notch_x)
             if hit is not None:
@@ -1203,13 +1037,11 @@ class Sim:
 
     @staticmethod
     def ball_overlap(b, bx, by, rest_y, notch_x):
-        """(direction to push the ball out of body b, how far) in field axes, or None if they don't touch.
-        Our robots have the capture notch at the front; opponents are plain circles."""
-        rx, ry = rotate([bx - b.x, by - b.y], -b.h)       # ball in the body's frame
+        rx, ry = rotate([bx - b.x, by - b.y], -b.h)
         if isinstance(b, SimRobot) and abs(rx) < notch_x and ry > 0:
             if ry >= rest_y:
                 return None
-            return rotate([0.0, 1.0], b.h), rest_y - ry       # straight out of the notch
+            return rotate([0.0, 1.0], b.h), rest_y - ry
         d = math.hypot(rx, ry)
         if d >= b.r + BALL_RADIUS or d < 1e-6:
             return None
@@ -1217,7 +1049,7 @@ class Sim:
 
     def bookkeeping(self):
         bx, by = self.ball
-        in_goal = (abs(bx) < field.GOAL_W / 2 and          # inside a goal, fully over the goal line
+        in_goal = (abs(bx) < field.GOAL_W / 2 and
                    field.ATTACK_GOAL_Y + BALL_RADIUS < abs(by) < field.GOAL_BACK_Y)
         if self.goal_timer is None and in_goal:
             who = "us" if by > 0 else "them"
@@ -1239,12 +1071,10 @@ class Sim:
             self.goal_timer = self.t + 1.0
         if self.goal_timer is not None and self.t >= self.goal_timer:
             self.kickoff()
-            return          # everything below would still look at where the ball was before the kickoff
-        # referee: ball out of play (fully outside the playing area) -> off for BALL_OUT_DELAY, then the nearest free
-        # neutral spot; lack of progress -> nearest free neutral spot at once
+            return
         if self.ball_away_until is not None:
             if self.t >= self.ball_away_until and self.goal_timer is None:
-                self.ball = list(self.ball_out_at)          # (only used to pick the nearest spot)
+                self.ball = list(self.ball_out_at)
                 self.ball_away_until = None
                 self.place_ball_neutral("out")
         elif self.goal_timer is None:
@@ -1271,7 +1101,6 @@ class Sim:
                 if self.t >= b.removed_until and self.goal_timer is None:
                     self.put_back(b)
                 continue
-            # out: the whole robot is past the white line -> taken off as damaged (unless it was pushed out)
             out = not field.inside_play_area(b.x, b.y, -b.r)
             if out and not b.was_out:
                 b.outs += 1
@@ -1292,26 +1121,23 @@ class Sim:
                 self.loc_err[r.name].append(math.hypot(pose.x - r.x, pose.y - r.y))
 
     def take_off(self, b):
-        """Robot fully out of the playing area: off as damaged for DAMAGED_TIME (or until the next kickoff)."""
         if self.held_by is b:
             self.release("robot taken off")
         b.removed_until = self.t + DAMAGED_TIME
         b.place(*PARK)
         b.was_out = False
         if isinstance(b, SimRobot):
-            b.paused = True                       # switched off while it's off the field (like the real robot)
+            b.paused = True
         self.count(f"{b.name} taken off (out of bounds)")
         self.log(f"{b.name} OUT OF BOUNDS - off for {DAMAGED_TIME:.0f} s")
 
     def pushed_out(self, b):
-        """Clearly pushed out: an opponent touched it just now and it wasn't driving outwards itself."""
         if self.t - b.opp_contact_t > PUSHED_TIME:
             return False
         n = (math.copysign(1.0, b.x), 0.0) if abs(b.x) > field.PLAY_W / 2 else (0.0, math.copysign(1.0, b.y))
         return b.vx * n[0] + b.vy * n[1] < PUSHED_OUT_SPEED
 
     def push_back_in(self, b):
-        """Pushed out by an opponent: straight back, just inside the line where it went out."""
         R = cfg.ROBOT_RADIUS
         x = max(-(field.PLAY_W / 2 - R), min(field.PLAY_W / 2 - R, b.x))
         y = max(-(field.PLAY_L / 2 - R), min(field.PLAY_L / 2 - R, b.y))
@@ -1320,11 +1146,9 @@ class Sim:
         self.log(f"{b.name} pushed out - put straight back")
 
     def multiple_defence(self):
-        """Ball in a penalty area with both of the defending team's robots in it: the one further from the ball is
-        moved out of the area (straight out towards the halfway line)."""
         bx, by = self.ball
         R = cfg.ROBOT_RADIUS
-        for team, sgn in (("us", -1.0), ("them", 1.0)):        # sgn: which end that team's goal is at
+        for team, sgn in (("us", -1.0), ("them", 1.0)):
             def in_box(x, y):
                 return abs(x) < field.PENALTY_W / 2 and sgn * y > field.ATTACK_GOAL_Y - field.PENALTY_D
             if not in_box(bx, by):
@@ -1348,11 +1172,8 @@ class Sim:
             self.log(f"{far.name}: multiple defence - moved out of the area")
 
     def put_back(self, b):
-        """Damage time over: back in level with its own goal (parallel to it, just inside the field), on the side
-        further from the ball, facing the goal it attacks. Our robots stay paused (calibrating heading / goal
-        colour) for 0.5 s first."""
         R = cfg.ROBOT_RADIUS
-        sgn = -1.0 if b.team == "us" else 1.0                 # own end
+        sgn = -1.0 if b.team == "us" else 1.0
         y = sgn * (field.PLAY_L / 2 - R - 3)
         far_side = -math.copysign(1.0, self.ball[0]) if abs(self.ball[0]) > 1 else 1.0
         x = far_side * (field.GOAL_W / 2 + R + 8)
@@ -1387,20 +1208,14 @@ class Sim:
         r.bot.loc.relocalise()
         self.log(f"{r.name} picked up and moved")
 
-# ==================================== FAST MODE ====================================
-# Sim(fast=True): no camera rendering / detection / localisation. Each camera frame's Detections are made straight
-# from the true positions (+ a little noise), in the same format vision.detect() produces, and the pose comes from
-# the truth (+ noise). Everything after that (perception, lines, strategy, motion) is still the real robot code.
-# ~10x faster: use it to screen ideas, then confirm the good ones in the full simulator.
-FAST_POSE_NOISE = 1.5        # cm
-FAST_BALL_RANGE = 200.0      # cm the camera finds the ball out to (400 px mirror image; 150 = the top-down view's edge)
-FAST_LINE_RANGE = 150.0      # cm
-FAST_LINE_STEP = 2.0         # cm between line points
-FAST_RELOCALISE = 0.3        # s without a confident pose after being picked up
+FAST_POSE_NOISE = 1.5
+FAST_BALL_RANGE = 200.0
+FAST_LINE_RANGE = 150.0
+FAST_LINE_STEP = 2.0
+FAST_RELOCALISE = 0.3
 
 
 class TruthLoc:
-    """Stands in for localisation.LocalisationThread in fast mode."""
 
     def __init__(self, body, rng):
         self.body, self.rng = body, rng
@@ -1418,8 +1233,8 @@ class TruthLoc:
         if t < self.lost_until:
             return Pose(0.0, 0.0, 1e3, t)
         n = self.rng.normal(0, FAST_POSE_NOISE, 2)
-        sgn = 1.0 if self.body.team == "us" else -1.0   # the opponents' field frame is ours turned round (they
-        return Pose(sgn * self.body.x + n[0], sgn * self.body.y + n[1], 3.0, t)   # attack the other goal)
+        sgn = 1.0 if self.body.team == "us" else -1.0
+        return Pose(sgn * self.body.x + n[0], sgn * self.body.y + n[1], 3.0, t)
 
     def particles(self):
         return np.zeros((0, 2))
@@ -1438,7 +1253,6 @@ FAST_LINE_PTS = _line_points()
 
 
 def _goal_parts(sgn):
-    """The coloured parts of a goal as rectangles (x0, x1, y0, y1): side walls (drawn 5 cm wide) and back wall."""
     gw, y0, y1 = field.GOAL_W / 2, field.ATTACK_GOAL_Y, field.GOAL_BACK_Y
     rects = [(-gw - 5, -gw, y0, y1 + 2), (gw, gw + 5, y0, y1 + 2), (-gw - 5, gw + 5, y1, y1 + 2)]
     return [(x0, x1, min(sgn * ya, sgn * yb), max(sgn * ya, sgn * yb)) for x0, x1, ya, yb in rects]
@@ -1448,7 +1262,6 @@ GOAL_PARTS = {"yellow": _goal_parts(1), "blue": _goal_parts(-1)}
 
 
 def fast_detect(sim, r, ignore):
-    """Detections for robot r from the true positions (robot frame cm), like detection.detect() would give."""
     from vision import Detections, Goal, Obstacle
     rng = sim.rng
     det = Detections(time.monotonic(), r.bot.imu.compass())
@@ -1457,20 +1270,18 @@ def fast_detect(sim, r, ignore):
     def to_robot(px, py):
         return rotate([px - r.x, py - r.y], -r.h)
 
-    def hidden(p, z=0.0, exclude=None, size=0.0):   # inside the ignore box (our own body), or something's in the way
+    def hidden(p, z=0.0, exclude=None, size=0.0):
         return (-ignore["left"] < p[0] < ignore["right"] and -ignore["back"] < p[1] < ignore["front"]) or \
             bool(ray_hidden(sim, r, [p], z, exclude, size)[0])
 
-    # ball: nearest point
     dx, dy = sim.ball[0] - r.x, sim.ball[1] - r.y
     d = math.hypot(dx, dy)
     in_ring = BALL_BLIND_RING > 0 and d - BALL_RADIUS < cfg.ROBOT_RADIUS + BALL_BLIND_RING
     if 1e-6 < d < FAST_BALL_RANGE and not in_ring:
         near = to_robot(sim.ball[0] - dx / d * BALL_RADIUS, sim.ball[1] - dy / d * BALL_RADIUS)
-        if not hidden(to_robot(*sim.ball), 2 * BALL_RADIUS, size=BALL_RADIUS):     # its top still shows = found
+        if not hidden(to_robot(*sim.ball), 2 * BALL_RADIUS, size=BALL_RADIUS):
             s = 0.3 + 0.01 * d
             det.ball = [near[0] + rng.normal(0, s), near[1] + rng.normal(0, s)]
-    # goals: nearest coloured point + centre
     for colour, parts in GOAL_PARTS.items():
         best = None
         for x0, x1, y0, y1 in parts:
@@ -1482,7 +1293,6 @@ def fast_detect(sim, r, ignore):
             sgn = 1 if colour == "yellow" else -1
             det.goals[colour] = Goal(to_robot(best[1], best[2]),
                                      to_robot(0.0, sgn * (field.GOAL_BACK_Y + 1)))
-    # other robots: nearest point (none with cfg.ENEMY_DETECTION off, like vision.detect)
     for b in (sim.on_field if cfg.ENEMY_DETECTION else ()):
         if b is r:
             continue
@@ -1493,7 +1303,6 @@ def fast_detect(sim, r, ignore):
             centre = to_robot(b.x, b.y)
             n = rng.normal(0, 1.0, 2)
             det.obstacles.append(Obstacle([near[0] + n[0], near[1] + n[1]], 2 * b.r, [centre[0] + n[0], centre[1] + n[1]]))
-    # white line points
     rel = FAST_LINE_PTS - np.float32([r.x, r.y])
     rel = rel[(rel[:, 0] ** 2 + rel[:, 1] ** 2) < FAST_LINE_RANGE ** 2]
     if len(rel) > 250:
@@ -1504,7 +1313,6 @@ def fast_detect(sim, r, ignore):
     return det
 
 
-# ==================================== WINDOW ====================================
 class Viewer:
     PANEL = 330
 
@@ -1547,7 +1355,7 @@ class Viewer:
             if obj == "ball":
                 self.sim.ball, self.sim.ball_v = [x, y], [0.0, 0.0]
             elif turn:
-                obj.h = math.atan2(-(x - obj.x), y - obj.y)    # face the mouse (0 = +y, CCW +)
+                obj.h = math.atan2(-(x - obj.x), y - obj.y)
                 obj.w = 0.0
             else:
                 obj.place(x, y)
@@ -1600,7 +1408,7 @@ class Viewer:
             for x, y in sel.bot.loc.particles()[::2]:
                 cv2.circle(img, P(x, y), 1, (170, 170, 170), -1)
         pose = sel.bot.loc.get()
-        if pose.confident:          # opponents as the selected robot believes them (both robots' cameras): circles
+        if pose.confident:
             for o in sel.bot.world.opponents:
                 cv2.circle(img, P(*o), int(cfg.ROBOT_RADIUS * UI_PPC), (0, 0, 255), 1, cv2.LINE_AA)
         for o in s.opponents:
@@ -1618,7 +1426,7 @@ class Viewer:
             tip = P(r.x - 1.3 * r.r * math.sin(r.h), r.y + 1.3 * r.r * math.cos(r.h))
             cv2.line(img, c, tip, r.colour, 2)
             br = r.brain
-            if r.bot.motors.dribbler:      # dribbler bar at the front
+            if r.bot.motors.dribbler:
                 fx, fy = -math.sin(r.h), math.cos(r.h)
                 a = P(r.x + fx * r.r + fy * 5, r.y + fy * r.r - fx * 5)
                 b = P(r.x + fx * r.r - fy * 5, r.y + fy * r.r + fx * 5)
@@ -1632,7 +1440,7 @@ class Viewer:
                 dp = br.desired_pos
                 cv2.arrowedLine(img, c, P(r.x + dp[0], r.y + dp[1]), r.colour, 1, tipLength=0.08)
             pose = r.bot.loc.get()
-            if pose.std < 200:     # estimated position: cross + spread circle
+            if pose.std < 200:
                 e = P(pose.x, pose.y)
                 cv2.drawMarker(img, e, r.colour, cv2.MARKER_TILTED_CROSS, 10, 2)
                 cv2.circle(img, e, max(2, int(pose.std * UI_PPC)), r.colour, 1)
@@ -1698,7 +1506,7 @@ class Viewer:
                 while sim_debt >= DT:
                     self.sim.step()
                     sim_debt -= DT
-                    if time.perf_counter() - now > 0.05:   # can't keep up: drop the debt, run slower than real time
+                    if time.perf_counter() - now > 0.05:
                         sim_debt = 0.0
                         break
             wall_last = now
@@ -1717,8 +1525,6 @@ RV_FOR_DRAW = []
 
 
 def draw_detections(img, det):
-    """Same overlay as test_localisation.py: ignore box red, capture zone cyan, hull green, lines magenta,
-    goals crossed, obstacles red, ball orange."""
     rv = RV_FOR_DRAW[0]
     px = lambda p: tuple(int(round(v)) for v in rv.to_px(p[0], p[1]))
     x1, y1, x2, y2 = rv.ignore_box
@@ -1735,7 +1541,7 @@ def draw_detections(img, det):
             cv2.drawMarker(img, px(g.near), colour, cv2.MARKER_CROSS, 10, 2)
     for o in det.obstacles:
         cv2.circle(img, px(o.near), 3, (0, 0, 255), -1)
-        if getattr(o, "centre", None) is not None:      # the whole robot it belongs to
+        if getattr(o, "centre", None) is not None:
             cv2.circle(img, px(o.centre), int(round(cfg.ROBOT_RADIUS * rv.px_per_cm)), (0, 0, 255), 2)
     if det.ball is not None:
         cv2.circle(img, px(det.ball), 6, (0, 140, 255), 2)
@@ -1743,7 +1549,6 @@ def draw_detections(img, det):
 
 
 def headless(sim, seconds):
-    """Run without a window and print what happened - quick check after changing the logic."""
     sim.opp_ai = True
     t0 = time.perf_counter()
     states = {r.name: {} for r in sim.robots}
