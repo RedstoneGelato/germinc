@@ -5,6 +5,7 @@ import threading
 import time
 import traceback
 
+import field
 import robot_config as cfg
 from lines import LineFusion
 from motion import Mover
@@ -17,6 +18,7 @@ VISION_STALL = 1.5
 COMMS_STALL = 1.0
 READY_TIMEOUT = 10.0
 WATCHDOG_PERIOD = 1.0
+STATUS_PERIOD = 1.0
 STATE_FILE = "/dev/shm/germinc_state.json"   # RAM disk: survives a program restart, cleared on reboot
 STATE_MAX_AGE = 30.0
 CAM_HEADING_WRONG = math.radians(100)
@@ -25,6 +27,12 @@ CAM_VOTES_PAUSED = 20
 CAM_VOTES_RUNNING = 50
 MIN_GOAL_SEPARATION = 50.0
 OWN_GOAL_NO_KICK = math.radians(30)
+ROLE_SWAP = False         # off: no tuned version beat it in the arena (see OVERNIGHT_LOG.md)
+SWAP_MUCH_CLOSER = 30.0
+SWAP_RESTART_MEMORY = 2.0
+SWAP_SPOT_RADIUS = 15.0
+SWAP_HOLD = 0.3           # s a swap rule must hold before the defender asks
+SWAP_COOLDOWN = 2.0       # s after a swap before either robot swaps again
 LED_STEP = 50
 LED_MAX = 65535
 LED_HEADROOM = 3000
@@ -178,6 +186,7 @@ class Robot:
         self.attack = self.attack_goal(det)
         self.leds.step(colours)
         self.zero_heading(det)
+        self.pcb.retry_ir()
 
     def zero_heading(self, det=None):
         heading_before_pause = wrap_pi(self.imu.compass() + self._pause_shift)
@@ -259,20 +268,95 @@ class CameraWatch:
         return now - self.t > CAMERA_BLIND
 
 
-class Brain:
-    idle_state = {"bot active": 0}
+class RoleSwap:
+    """Which robot attacks. The defender asks; the attacker gives way first; lost messages change nothing."""
 
-    def __init__(self, bot, strategy, log=print):
+    def __init__(self, start_role):
+        self.start_role = start_role
+        self.ball_out_at = -1e9
+        self.reset()
+
+    def reset(self):
+        self.role = self.start_role
+        self.wants_attack = False
+        self.last_swap = -1e9
+        self._better_since = None
+
+    def _swap_to(self, role, now):
+        self.role = role
+        self.wants_attack = False
+        self.last_swap = now
+        self._better_since = None
+
+    def update(self, world, mate, pose, now):
+        ball = world.ball_field
+        if ball is None or not field.inside_play_area(ball[0], ball[1], -cfg.BALL_RADIUS - 3.0):
+            self.ball_out_at = now
+        if not ROLE_SWAP or not mate:
+            return
+        if mate.get("bot active") != 1:
+            self.reset()
+            return
+        settled = now - self.last_swap >= SWAP_COOLDOWN
+        if self.role == "attack":
+            self.wants_attack = False
+            asked = mate.get("role") == "defend" and mate.get("wants attack")
+            if asked and settled and not world.ball_in_capture:
+                self._swap_to("defend", now)
+            return
+        if self._better_placed(world, mate, pose, now):
+            self._better_since = now if self._better_since is None else self._better_since
+        else:
+            self._better_since = None
+        self.wants_attack = settled and self._better_since is not None and now - self._better_since >= SWAP_HOLD
+        mate_also_wants = mate.get("wants attack") and self.start_role != "defend"
+        if self.wants_attack and mate.get("role") == "defend" and not mate_also_wants:
+            self._swap_to("attack", now)
+
+    def _better_placed(self, world, mate, pose, now):
+        ball, mate_pos = world.ball_field, mate.get("pos")
+        if pose is None or not pose.confident:
+            return False
+        if world.ball_in_capture:
+            return True
+        if ball is None or mate_pos is None:
+            return False
+        mine = math.hypot(ball[0] - pose.x, ball[1] - pose.y)
+        theirs = math.hypot(ball[0] - mate_pos[0], ball[1] - mate_pos[1])
+        at_spot = min(math.hypot(ball[0] - x, ball[1] - y) for x, y in field.NEUTRAL_SPOTS) < SWAP_SPOT_RADIUS
+        if now - self.ball_out_at < SWAP_RESTART_MEMORY and at_spot and mine < theirs:
+            return True
+        nearest_other = min([theirs] + [math.hypot(ball[0] - o[0], ball[1] - o[1]) for o in world.opponents])
+        return mine + SWAP_MUCH_CLOSER < nearest_other
+
+
+class Brain:
+    def __init__(self, bot, strategies, start_role, log=print):
         self.bot = bot
         self.log = log
-        self.strategy = strategy
+        self.strategies = strategies
+        self.roles = RoleSwap(start_role)
         self.robot_active = None
         self.status = ""
         self.camera = CameraWatch()
 
+    @property
+    def strategy(self):
+        return self.strategies[self.roles.role]
+
+    def idle_state(self):
+        state = {"bot active": 0, "role": self.roles.role, "wants attack": False}
+        if self.roles.role == "attack":
+            state["command"] = 1
+        return state
+
+    def role_state(self):
+        if self.roles.role == "attack":
+            return {"command": self.strategy.command}
+        return {"clear": getattr(self.strategy, "clear_plan", None)}
+
     def tick(self, paused):
         bot = self.bot
-        strategy = self.strategy
         colours = bot.pcb.snapshot()
         frame_id, det = bot.vision.frame_id, bot.vision.latest()
         blind = self.camera.blind(frame_id)
@@ -281,9 +365,11 @@ class Brain:
             if self.robot_active or self.robot_active is None:
                 self.log("Paused")
                 self.robot_active = False
-                strategy.reset()
+                for strategy in self.strategies.values():
+                    strategy.reset()
+                self.roles.reset()
                 bot.on_pause()
-            bot.comms.my_state.update(self.idle_state)
+            bot.comms.my_state.update(self.idle_state())
             bot.standby(colours, det)
             return
         if not self.robot_active:
@@ -291,7 +377,7 @@ class Brain:
             self.robot_active = True
         if blind:
             bot.actuate((0, 0, 0, 0), getattr(self, "dribbler_on", False), False)
-            bot.comms.my_state.update(self.idle_state)
+            bot.comms.my_state.update(self.idle_state())
             self.status = "camera blind - standing still"
             return
 
@@ -306,6 +392,12 @@ class Brain:
         world.update(frame_id, det, pose, bot.attack, mate, ir)
         line = bot.lines.update(colours, compass, world.line_pts, pose)
 
+        role_before = self.roles.role
+        self.roles.update(world, mate, pose, time.monotonic())
+        if self.roles.role != role_before:
+            self.log(f"role swap: now {self.roles.role}")
+            self.strategy.reset()
+        strategy = self.strategy
         desired_pos, desired_heading, dribbler_on = strategy.update(world, compass, mate, line.touches)
         speeds = bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed,
                                 dribbler_on=dribbler_on)
@@ -316,7 +408,9 @@ class Brain:
 
         bot.comms.my_state.update({
             "bot active": 1,
-            **self.extra_state(),
+            "role": self.roles.role,
+            "wants attack": self.roles.wants_attack,
+            **self.role_state(),
             "chasing": strategy.chasing,
             "has ball": world.ball_in_capture,
             "pos": [round(pose.x), round(pose.y)] if pose.confident else None,
@@ -328,10 +422,7 @@ class Brain:
         line_text = "ON " + line.source if line.on_line else "off"
         self.status = (f"botstate={strategy.botstate} {strategy.phase} ball:{strategy.possession or '-'} line={line_text} "
                        f"pos=({pose.x:.0f},{pose.y:.0f})+-{pose.std:.0f} ball={world.ball}({world.ball_source}) "
-                       f"goals={world.goal_source}")
-
-    def extra_state(self):
-        return {}
+                       f"goals={world.goal_source} role={self.roles.role}")
 
 
 class TickGuard:
@@ -397,7 +488,7 @@ def run_robot(hw, brain_cls):
     print("Waiting for signal")
     failed = False
     try:
-        next_loop = time.monotonic()
+        next_loop = next_status = time.monotonic()
         while True:
             paused = is_paused()
             guard.tick(paused)
@@ -406,7 +497,9 @@ def run_robot(hw, brain_cls):
                 time.sleep(0.02)
                 next_loop = time.monotonic()
                 continue
-            print(guard.brain.status)
+            if time.monotonic() >= next_status:
+                print(guard.brain.status)      # once a second: 100 lines/s filled the systemd journal
+                next_status = time.monotonic() + STATUS_PERIOD
             next_loop = keep_rate(next_loop)
     except KeyboardInterrupt:
         print("User stopped.")
@@ -427,6 +520,8 @@ class LedCalibrator:
         pcb.set_brightness(self.brightness)
 
     def step(self, colours):
+        if not getattr(self.pcb, "ready", True):
+            return
         brightest = max(colours)
         if brightest - LED_HEADROOM > cfg.LDR_LINE_THRESHOLD:
             self.brightness += LED_STEP

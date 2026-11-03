@@ -36,8 +36,7 @@ LED_BRIGHTNESS_START = 40000
 
 IR_COUNT = 12
 IR_START_ANGLE = math.pi / 2
-IR_ON_PCB = False
-IR_RAW_MAX = 1000          # TUNE: raw reading with the ball right next to a sensor
+IR_ON_PCB = True
 
 BASE_SPEED = 80000000
 LINE_ESCAPE_SPEED = BASE_SPEED * 1.5

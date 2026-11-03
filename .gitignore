@@ -1,3 +1,9 @@
 __pycache__/
 robot_stop.log
 blender-mirror/
+.vibe-wise/
+.serena/
+graphify-out/
+past_versions/
+simulator.py
+sim_int.py

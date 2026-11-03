@@ -24,8 +24,7 @@ OPP_VEL_WINDOW = 0.3
 OPP_VEL_MIN_SPAN = 0.1
 OPP_TRACK_LOST = 0.3
 OPP_MERGE = 15.0
-IR_NEAR = 20.0                # TUNE: cm, the IR sensors read full strength (1.0) closer than this, ~IR_NEAR / distance further
-IR_CLOSE = 0.8
+IR_UNKNOWN_RANGE = 40.0       # TUNE: cm, assumed distance of a ball only the IR ring sees, with no recent camera sighting
 IR_RANGE_MEMORY = 1.5
 IR_RING_R = cfg.ROBOT_RADIUS + 1.0
 IR_CAPTURE_ANGLE = math.radians(20)
@@ -65,16 +64,14 @@ def ir_bearing(ir):
         return None
     n = len(ir)
     vx = vy = 0.0
-    active = 0
     for i, v in enumerate(ir):
         if v > 0:
             a = cfg.IR_START_ANGLE + i * 2 * math.pi / n
-            vx += v * math.cos(a)
-            vy += v * math.sin(a)
-            active += 1
-    if not active or (vx == 0 and vy == 0):
+            vx += math.cos(a)
+            vy += math.sin(a)
+    if vx == 0 and vy == 0:
         return None
-    return math.atan2(vy, vx), max(ir), active
+    return math.atan2(vy, vx)
 
 
 def in_capture_zone(ball_robot):
@@ -192,9 +189,8 @@ class World:
 
         if in_capture_zone(det.ball):
             self.last_capture = now
-        ir_capture = (self.ball_hidden == "ir" and self.ir[1] >= IR_CLOSE
-                      and math.hypot(*self.ball_robot) < IR_CAPTURE_R
-                      and abs(self.ir[0] - math.pi / 2) < IR_CAPTURE_ANGLE)
+        ir_capture = (self.ball_hidden == "ir" and math.hypot(*self.ball_robot) < IR_CAPTURE_R
+                      and abs(self.ir - math.pi / 2) < IR_CAPTURE_ANGLE)
         if ir_capture:
             self.last_capture = now
         no_ir_blind_ring = ir is None and cfg.BALL_BLIND_RING > 0
@@ -268,21 +264,18 @@ class World:
         if has_ir:
             if self.ir is None:
                 return None
-            bearing, strength, _ = self.ir
-            r = None
-            if recent and confident and last[1] is not None:
+            if last is not None and math.hypot(last[0][0], last[0][1]) < NEAR_HOLD_DIST:
+                r = IR_RING_R      # last seen close and the camera lost it: it's in the blind ring
+            elif recent and confident and last[1] is not None:
                 dt = min(now - last[2], 0.5)
                 r = math.hypot(last[1][0] + self.ball_vel[0] * dt - pose.x, last[1][1] + self.ball_vel[1] * dt - pose.y)
             elif recent:
                 r = math.hypot(last[0][0], last[0][1])
-            if strength >= IR_CLOSE:
-                r = IR_RING_R
             else:
-                r_ir = IR_NEAR / max(strength, 1e-3) - cfg.BALL_RADIUS
-                r = r_ir if r is None else min(max(r, 0.6 * r_ir), 1.6 * r_ir)
+                r = IR_UNKNOWN_RANGE
             r = max(r, cfg.ROBOT_RADIUS)
             self.ball_hidden = "ir"
-            return [r * math.cos(bearing), r * math.sin(bearing)]
+            return [r * math.cos(self.ir), r * math.sin(self.ir)]
         if (cfg.BALL_BLIND_RING <= 0 or last is None or now - last[2] > NEAR_HOLD_TIME
                 or math.hypot(last[0][0], last[0][1]) > NEAR_HOLD_DIST):
             return None

@@ -96,4 +96,4 @@ After changing behaviour, try it in the simulator before the robot: `python simu
 | --- | --- | --- |
 | `SWITCH_PIN`, `GOAL_SWITCH_PIN` | [robot_config.py:8](robot_config.py:8) | `25`, `26` |
 | `TEAM_ID`, `COMMS_PORT` | [robot_config.py:5](robot_config.py:5) | `"GERM_INC"`, `5555` |
-| `IR_ON_PCB`, `IR_RAW_MAX` | [robot_config.py:39](robot_config.py:39) | `False`, `1000` (set `IR_ON_PCB = True` once the PCB sends IR readings) |
+| `IR_ON_PCB` | [robot_config.py:39](robot_config.py:39) | `True` (the PCB sends one uint16 per IR sensor, 0 = doesn't see the ball; `False` = play without the ring) |

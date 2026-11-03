@@ -1020,7 +1020,7 @@ FACE_BALL = True
 FACE_BALL_ALL = False
 OUR_CORNER_X = field.GOAL_W / 2 + 5.0
 OUR_CORNER_Y = 45.0
-TURN_AWAY = True
+TURN_AWAY = False
 TURN_AWAY_Y = 60.0
 TURN_AWAY_FY = -0.2
 TURN_AWAY_SPEED = 0.4
@@ -1042,7 +1042,7 @@ CARRY_KICK_RANGE = 70.0
 QUICK_SHOT_TIME = 1.0
 QUICK_SHOT_RANGE = 130.0
 CHARGED_DIST = 50.0
-CHARGED_SPEED = 30.0
+CHARGED_SPEED = 15.0
 OPEN_SHOT_RANGE = 120.0
 LONG_SHOT_FROM = 70.0
 LONG_SHOT_ROOM = cfg.BALL_RADIUS + 4.0
@@ -1079,6 +1079,10 @@ BASE_SHIELD = False
 BASE_SHIELD_Y = 40.0
 BASE_SHIELD_EDGE = 12.0
 BASE_SHIELD_T = 0.3
+STANDOFF = False
+STANDOFF_BOX = 2 * R + 8.0
+STANDOFF_OPP = R + cfg.BALL_RADIUS + 3.0
+STANDOFF_GAP = R + cfg.BALL_RADIUS + 6.0
 FEINT = True
 FEINT_RANGE = 120.0
 FEINT_KEEPER_D = 50.0
@@ -1111,10 +1115,21 @@ BEHIND_RANGE = 70.0
 BEHIND_GAP = R + cfg.BALL_RADIUS + 10.0
 BEHIND_CLOSE = 50.0
 BEHIND_SIDESTEP = 110.0
+CHASE_SLOW_DIST = 25.0
+CHASE_SLOW_MULTI = 0.75
+ORBIT_BLEND_FRONT = 25.0
+ORBIT_BLEND_WIDE = 90.0
 
 
 def share(value, start, end):
     return min(1.0, max(0.0, (start - value) / (start - end)))
+
+
+def tangent_orbit_angle(a, d):
+    side = math.copysign(1.0, a or 1.0)
+    if d <= ORBIT_DIST:
+        return a + side * 90.0
+    return a + side * math.degrees(math.asin(ORBIT_DIST / d))
 
 
 def chase(me, ball):
@@ -1129,6 +1144,8 @@ def chase(me, ball):
     ang = a + (further_round - a) * t1
     t2 = share(d, 50.0, 20.0)
     ang = ang + (180.0 * soften(ang) / soften(180.0) - ang) * t2
+    orbit = tangent_orbit_angle(a, d)
+    ang = ang + share(abs(a), ORBIT_BLEND_FRONT, ORBIT_BLEND_WIDE) * ((orbit - ang + 180.0) % 360.0 - 180.0)
     if not BEHIND_ORBIT and d < BEHIND_CLOSE and abs(a) > BEHIND_ANGLE:
         ang = math.copysign(BEHIND_SIDESTEP, a or 1.0)
     target = [me[0] + math.sin(math.radians(ang)) * 40, me[1] + math.cos(math.radians(ang)) * 40]
@@ -1153,8 +1170,8 @@ def chase(me, ball):
         heading = math.radians(-a) * (1 - t)
 
     spd = 0.8 + 0.2 * share(d, 30, 45)
-    if d < 25:
-        spd *= 0.6
+    if d < CHASE_SLOW_DIST:
+        spd *= CHASE_SLOW_MULTI
 
     dribbler = d <= 33 and abs(a) <= 45
     return clamp_in_field(target, FIELD_MARGIN), heading, dribbler, spd
@@ -1381,6 +1398,13 @@ class StrikerStrategy:
                 self.botstate, self.phase = 5, "ball out"
             else:
                 target, heading = self.no_ball(world, me, centres + spot_obstacles, goalie_on)
+        elif STANDOFF and not world.ball_in_capture and self.contested_at_box(world, ball):
+            away = unit((me[0] - ball[0], me[1] - ball[1]))
+            target = [ball[0] + away[0] * STANDOFF_GAP, ball[1] + away[1] * STANDOFF_GAP]
+            heading = heading_for((ball[0] - me[0], ball[1] - me[1]))
+            dribbler = False
+            self.chasing = True
+            self.botstate, self.phase = 2, "standoff"
         elif self.meeting_clear(world, mate, me, ball, goalie_on):
             target = self.avoid(me, meet_clear(me, mate["clear"]), centres)
             heading = heading_for((0.0 - me[0], field.ATTACK_GOAL_Y - me[1]))
@@ -1398,6 +1422,11 @@ class StrikerStrategy:
         if goalie_on:
             target = keep_out_of_box(target)
         return rel(target, pose), heading, dribbler
+
+    @staticmethod
+    def contested_at_box(world, ball):
+        near_box = field.penalty_depth(ball[0], ball[1], 1) > -STANDOFF_BOX
+        return near_box and any(dist(o, ball) < STANDOFF_OPP for o in world.opponents)
 
     @staticmethod
     def meeting_clear(world, mate, me, ball, goalie_on):

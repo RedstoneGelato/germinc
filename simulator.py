@@ -91,8 +91,7 @@ ROBOT_HEIGHT = 18.0
 GOAL_HEIGHT = 10.0
 BALL_BLIND_RING = cfg.BALL_BLIND_RING
 IR_HALF_FOV = 55.0
-IR_NEAR = 20.0
-IR_NOISE = 0.1
+IR_ANGLE_NOISE = math.radians(8)
 SIM_IR = True
 TOPDOWN_PPC = 2.0
 TOPDOWN_RADIUS = 150.0
@@ -550,6 +549,9 @@ class SimPCB:
     def set_brightness(self, value):
         pass
 
+    def retry_ir(self):
+        pass
+
 
 class SimComms:
     def __init__(self):
@@ -817,14 +819,11 @@ class Sim:
         if self.ball[0] > BALL_PARK[0] / 2:
             return [0.0] * n
         p = rotate([self.ball[0] - robot.x, self.ball[1] - robot.y], -robot.h)
-        d = max(math.hypot(p[0], p[1]), 1.0)
         a = math.atan2(p[1], p[0])
-        off = np.abs((Sim._IR_DIRS - a + math.pi) % (2 * math.pi) - math.pi) / math.radians(IR_HALF_FOV)
-        s = min(1.0, IR_NEAR / d)
-        val = np.where(off < 1.0, s * (1.0 - 0.6 * off ** 2), 0.0)
         if self.noise:
-            val = val * (1.0 + self.ir_rng.normal(0, IR_NOISE, n))
-        return [float(min(max(v, 0.0), 1.0)) for v in val]
+            a += self.ir_rng.normal(0, IR_ANGLE_NOISE)
+        off = np.abs((Sim._IR_DIRS - a + math.pi) % (2 * math.pi) - math.pi)
+        return [1.0 if o < math.radians(IR_HALF_FOV) else 0.0 for o in off]
 
     def ball_stats(self):
         for r in self.robots:

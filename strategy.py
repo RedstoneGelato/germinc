@@ -812,7 +812,7 @@ CARRY_KICK_RANGE = 70.0
 QUICK_SHOT_TIME = 1.0
 QUICK_SHOT_RANGE = 130.0
 CHARGED_DIST = 50.0
-CHARGED_SPEED = 30.0
+CHARGED_SPEED = 15.0
 OPEN_SHOT_RANGE = 120.0
 LONG_SHOT_FROM = 70.0
 LONG_SHOT_ROOM = cfg.BALL_RADIUS + 4.0
@@ -831,7 +831,7 @@ CORNER_INSET = R + 5.0
 CORNER_REACHED = 8.0
 CARRY_AIM_CORNER = True
 FEINT = True
-FEINT_RANGE = 120.0
+FEINT_RANGE = 80.0          # cm from goal; 120 scored about half as many goals against TS (OVERNIGHT_LOG.md)
 FEINT_KEEPER_D = 50.0
 FEINT_MID = 4.0
 FEINT_AIM_IN = 10.0
@@ -856,16 +856,21 @@ RUSH_TURN_SLOWEST = math.radians(60)
 RUSH_TURN_MIN_SPD = 0.4
 
 
-BEHIND_ORBIT = True
-BEHIND_ANGLE = 150.0
-BEHIND_RANGE = 70.0
-BEHIND_GAP = R + cfg.BALL_RADIUS + 10.0
-BEHIND_CLOSE = 50.0
-BEHIND_SIDESTEP = 110.0
+CHASE_SLOW_DIST = 25.0      # cm from the ball where the striker slows down to catch it...
+CHASE_SLOW_MULTI = 0.75     # ...to this share of its chase speed (0.6 lost the ball to TS: see OVERNIGHT_LOG.md)
+ORBIT_BLEND_FRONT = 25.0    # deg off the attack direction: all direct approach within this...
+ORBIT_BLEND_WIDE = 90.0     # ...all tangent orbit beyond this (Righteousness 2026)
 
 
 def share(value, start, end):
     return min(1.0, max(0.0, (start - value) / (start - end)))
+
+
+def tangent_orbit_angle(a, d):
+    side = math.copysign(1.0, a or 1.0)
+    if d <= ORBIT_DIST:
+        return a + side * 90.0
+    return a + side * math.degrees(math.asin(ORBIT_DIST / d))
 
 
 def chase(me, ball):
@@ -880,14 +885,9 @@ def chase(me, ball):
     ang = a + (further_round - a) * t1
     t2 = share(d, 50.0, 20.0)
     ang = ang + (180.0 * soften(ang) / soften(180.0) - ang) * t2
-    if not BEHIND_ORBIT and d < BEHIND_CLOSE and abs(a) > BEHIND_ANGLE:
-        ang = math.copysign(BEHIND_SIDESTEP, a or 1.0)
+    orbit = tangent_orbit_angle(a, d)
+    ang = ang + share(abs(a), ORBIT_BLEND_FRONT, ORBIT_BLEND_WIDE) * ((orbit - ang + 180.0) % 360.0 - 180.0)
     target = [me[0] + math.sin(math.radians(ang)) * 40, me[1] + math.cos(math.radians(ang)) * 40]
-    if BEHIND_ORBIT and abs(a) > BEHIND_ANGLE and d < BEHIND_RANGE:
-        dx = me[0] - ball[0]
-        side = math.copysign(1.0, dx if abs(dx) > 2.0 else -ball[0] or 1.0)
-        beside = [ball[0] + side * BEHIND_GAP, ball[1]]
-        return clamp_in_field(around_ball(me, beside, ball), FIELD_MARGIN), 0.0, False, 1.0
 
     heading = 0.0
     if d <= CHASE_FACE_DIST and abs(a) <= CHASE_FACE_ANGLE:
@@ -897,8 +897,8 @@ def chase(me, ball):
         heading = math.radians(-a) * (1 - t)
 
     spd = 0.8 + 0.2 * share(d, 30, 45)
-    if d < 25:
-        spd *= 0.6
+    if d < CHASE_SLOW_DIST:
+        spd *= CHASE_SLOW_MULTI
 
     dribbler = d <= 33 and abs(a) <= 45
     return clamp_in_field(target, FIELD_MARGIN), heading, dribbler, spd

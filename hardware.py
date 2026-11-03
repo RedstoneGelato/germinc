@@ -71,6 +71,10 @@ class IMUThread(threading.Thread):
         return wrap_pi(self.heading - self.heading_offset)
 
 
+CARPET_READING = 4095     # no sensor reading = no line, so a missing PCB never looks like a line
+STALE_AFTER_ERRORS = 5
+
+
 class PCBThread(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -92,8 +96,10 @@ class PCBThread(threading.Thread):
         self.lock = threading.Lock()
         self.bus_lock = threading.Lock()
 
-        self.colours = [0] * self.COLOUR_SENSOR_COUNT
+        self.colours = [CARPET_READING] * self.COLOUR_SENSOR_COUNT
         self.ir = None
+        self.ir_on = cfg.IR_ON_PCB
+        self._ir_errors = 0
         self.brightness_target = 0
         self._brightness_sent = None
 
@@ -136,7 +142,26 @@ class PCBThread(threading.Thread):
 
     def _read_ir(self):
         data = self._read_packet(self.CMD_READ_IR, cfg.IR_COUNT * 2)
-        return [min(1.0, (data[2*i] | (data[2*i + 1] << 8)) / cfg.IR_RAW_MAX) for i in range(cfg.IR_COUNT)]
+        return [data[2*i] | (data[2*i + 1] << 8) for i in range(cfg.IR_COUNT)]
+
+    def _read_ir_or_none(self):
+        if not self.ir_on:
+            return None
+        try:
+            readings = self._read_ir()
+        except Exception as e:
+            self._ir_errors += 1
+            if self._ir_errors == STALE_AFTER_ERRORS:
+                self.ir_on = False      # each failed read costs ~0.1 s of line-sensor reads
+                print(f"IR ring not answering ({e!r}) - playing without it until the next pause")
+            return None
+        self._ir_errors = 0
+        return readings
+
+    def retry_ir(self):
+        if cfg.IR_ON_PCB and not self.ir_on:
+            self.ir_on = True
+            self._ir_errors = 0
 
     def set_brightness(self, value: float):
         self.brightness_target = int(max(0.0, min(65535.0, value)))
@@ -154,19 +179,27 @@ class PCBThread(threading.Thread):
                 time.sleep(self.RETRY_DELAY)
 
     def run(self):
+        errors = 0
         while self.running:
             try:
                 target = self.brightness_target
                 if target != self._brightness_sent:
                     self._write_brightness(target)
                 new_colours = self._read_colours()
-                new_ir = self._read_ir() if cfg.IR_ON_PCB else None
+                new_ir = self._read_ir_or_none()
                 with self.lock:
                     self.colours = new_colours
                     self.ir = new_ir
                 self.ready = True
+                errors = 0
             except Exception as e:
-                print(f"PCB I2C error: {e!r}")
+                errors += 1
+                if errors == 1 or errors % 500 == 0:
+                    print(f"PCB I2C error ({errors} in a row): {e!r}")
+                if errors == STALE_AFTER_ERRORS:
+                    with self.lock:
+                        self.colours = [CARPET_READING] * self.COLOUR_SENSOR_COUNT
+                        self.ir = None
                 self.ready = False
             time.sleep(0.02)
 

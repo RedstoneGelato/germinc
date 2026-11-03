@@ -38,7 +38,10 @@ Per robot:
 # SETUP & INSTALLATION
 On a Raspberry Pi 5 with Raspberry Pi OS installed:
 1.	Clone the repository into a directory of choice
-2.	Run the setup file that automatically gets all dependencies
+2.	Run the setup file that automatically gets all dependencies: `bash setup.sh attack` (striker) or `bash setup.sh defense` (goalie).
+	It installs the packages, turns on I2C (1 MHz, GPIO 2/3) and VNC, makes the virtual environment at `~/env` and sets the robot to start at boot.
+	Leave out `attack` / `defense` to install without autostart.
+	To keep the same IPv4 address on the current network, run it as `STATIC_IP=192.168.1.51/24 GATEWAY=192.168.1.1 bash setup.sh attack` (use your network's numbers). Reboot afterwards, then calibrate the camera with `test_camera.py`.
 
 # DEPLOYING & USAGE
 During competitions, both pi's are setup to automatically run the code on startup. To manually run the code, follow the below:
