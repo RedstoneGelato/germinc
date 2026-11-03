@@ -4,7 +4,3 @@ blender-mirror/
 .vibe-wise/
 .serena/
 graphify-out/
-past_versions/
-simulator.py
-sim_int.py
-arena.py
