@@ -831,7 +831,7 @@ CORNER_INSET = R + 5.0
 CORNER_REACHED = 8.0
 CARRY_AIM_CORNER = True
 FEINT = True
-FEINT_RANGE = 80.0          # cm from goal; 120 scored about half as many goals against TS (OVERNIGHT_LOG.md)
+FEINT_RANGE = 80.0
 FEINT_KEEPER_D = 50.0
 FEINT_MID = 4.0
 FEINT_AIM_IN = 10.0
@@ -856,10 +856,10 @@ RUSH_TURN_SLOWEST = math.radians(60)
 RUSH_TURN_MIN_SPD = 0.4
 
 
-CHASE_SLOW_DIST = 25.0      # cm from the ball where the striker slows down to catch it...
-CHASE_SLOW_MULTI = 0.75     # ...to this share of its chase speed (0.6 lost the ball to TS: see OVERNIGHT_LOG.md)
-ORBIT_BLEND_FRONT = 25.0    # deg off the attack direction: all direct approach within this...
-ORBIT_BLEND_WIDE = 90.0     # ...all tangent orbit beyond this (Righteousness 2026)
+CHASE_SLOW_DIST = 25.0      # cm from the ball where the striker slows down to catch it
+CHASE_SLOW_MULTI = 0.75
+ORBIT_BLEND_FRONT = 25.0
+ORBIT_BLEND_WIDE = 90.0
 
 
 def share(value, start, end):

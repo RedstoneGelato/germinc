@@ -6,7 +6,7 @@ TEAM_ID = "GERM_INC"
 COMMS_PORT = 5555
 
 SWITCH_PIN = 25
-REF_MODULE = True          # True = RCJ comms module (3.3 V = play), False = our own on/off switch (closed = paused)
+REF_MODULE = False          # True = RCJ comms module (3.3 V = play), False = our own on/off switch (closed = paused)
 ZERO_MAX_ERR = 0.17
 GOAL_SWITCH_PIN = 26
 GOAL_SWITCH_CLOSED = "yellow"   # swap to "blue" if the robots go for the wrong goal
@@ -18,7 +18,7 @@ VISION_CV_THREADS = 1
 
 CONTROL_PERIOD = 0.01
 
-ROBOT_RADIUS = 11.0                         # TUNE: centre to bumper, cm
+ROBOT_RADIUS = 11.0
 CAPTURE_ZONE = (-5.0, 5.0, ROBOT_RADIUS - 3.0, ROBOT_RADIUS + 4.0)   # TUNE in test_localisation.py
 BALL_RADIUS = 2.1
 BALL_BLIND_RING = 2.0
@@ -44,5 +44,5 @@ MOTOR_MAX = BASE_SPEED * 1.5
 TURN_MAX = 0.6
 TURN_FULL_ERR = 1.0
 DRIBBLE_TURN_MAX = 0.4
-DRIBBLE_SPEED_MIN = 0.38   # TUNE on the robot: fastest sideways / backwards speed that keeps the ball
+DRIBBLE_SPEED_MIN = 0.38
 DRIBBLE_MAX_ACCEL = 10.0
