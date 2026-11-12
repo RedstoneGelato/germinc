@@ -28,6 +28,7 @@ Per robot:
 - 6S 850mAh Li-Po battery
 - Raspberry Pi 5 (active cooler installed)
 - Raspberry Pi Camera Module 3 Wide
+- Custom hyperbolic mirror
 - Adafruit BNO085 IMU
 - Custom PCB:
   - 1x STM32H503RBT6 Microcontroller
@@ -47,7 +48,7 @@ On a Raspberry Pi 5 with Raspberry Pi OS installed:
 During competitions, both pi's are setup to automatically run the code on startup. To manually run the code, follow the below:
 1. Activate virtual environment
 2. Change directory to the folder with the github repository
-3. run either main_attack.py (striker robot), or main.py (goalie robot)
+3. run either main_attack.py (striker robot), or main_defence.py (goalie robot)
 4. Flick the switch (wired from GPIO 25 to ground on the Raspberry Pi) to run the code
 
 Note: It is recommended to startup in standby to calibrate the robot's bottom LED and compass

@@ -1,11 +1,13 @@
 from common import Brain
-from strategy import GoalieStrategy, StrikerStrategy
+from strategy import GoalieStrategy
 
 
 class GoalieBrain(Brain):
     def __init__(self, bot, log=print):
-        strategies = {"defend": GoalieStrategy(has_dribbler=bot.motors.has_dribbler), "attack": StrikerStrategy()}
-        super().__init__(bot, strategies, "defend", log)
+        super().__init__(bot, GoalieStrategy(has_dribbler=bot.motors.has_dribbler), log)
+
+    def extra_state(self):
+        return {"clear": getattr(self.strategy, "clear_plan", None)}
 
 
 def main():

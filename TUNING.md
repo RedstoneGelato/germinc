@@ -3,7 +3,7 @@
 The settings you are most likely to change, grouped by when you change them. Line numbers are as of this version;
 search for the name if they have moved. The full list is in [GUIDE.md](GUIDE.md) section 7.
 
-> **Two strategy files.** `strategy.py` is the RCJA field, `strategy_int.py` the international one (`main_int.py`,
+> **Two strategy files.** `strategy.py` is the RCJA field, `strategy_int.py` the international one (`main_defence_int.py`,
 > `main_attack_int.py`, `sim_int.py`). They have their own copies of the strategy constants: change both if you want
 > both fields to behave the same.
 
@@ -39,16 +39,16 @@ After changing behaviour, try it in the simulator before the robot: `python simu
 | `KICKER_PIN`, `KICK_PULSE`, `KICK_COOLDOWN` | [hardware_attack.py:16](hardware_attack.py:16), [hardware_defense.py:14](hardware_defense.py:14) | Solenoid GPIO pin (`None` = no kicker), seconds powered (change carefully, test with `test_solenoid.py`), seconds between kicks. |
 | `ROBOT_ID` | [hardware_attack.py:5](hardware_attack.py:5), [hardware_defense.py:3](hardware_defense.py:3) | Comms id: must differ between the two robots. |
 | `ROBOT_RADIUS` | [robot_config.py:21](robot_config.py:21) | Centre to bumper (cm). Used almost everywhere. |
-| `MOTOR_CURRENT_LIMIT`, `MOTOR_SPEED_LIMIT`, PIDs | [hardware.py:184](hardware.py:184), `MotorThread._make_driver` | Motor driver limits and PID constants, both robots. |
+| `MOTOR_CURRENT_LIMIT`, `MOTOR_SPEED_LIMIT`, PIDs | [hardware.py:221](hardware.py:221), `MotorThread._make_driver` | Motor driver limits and PID constants, both robots. |
 
 ## How it drives
 
 | Setting | Where | Now | What it does |
 | --- | --- | --- | --- |
-| `BASE_SPEED` | [robot_config.py:42](robot_config.py:42) | `80000000` | Top driving speed. `LINE_ESCAPE_SPEED` and `MOTOR_MAX` (lines 43-44) are multiples of it. |
-| `TURN_MAX`, `TURN_FULL_ERR` | [robot_config.py:45](robot_config.py:45) | `0.6`, `1.0` rad | Turning speed (x `BASE_SPEED`) and how far off the heading it turns at full speed. |
-| `DRIBBLE_SPEED_MIN` | [robot_config.py:48](robot_config.py:48) | `0.38` | Fastest sideways / backwards speed that keeps the ball. Tune on the robot. |
-| `DRIBBLE_TURN_MAX`, `DRIBBLE_MAX_ACCEL` | [robot_config.py:47](robot_config.py:47) | `0.4`, `10.0` | Gentler turning / speeding up while holding the ball. |
+| `BASE_SPEED` | [robot_config.py:41](robot_config.py:41) | `80000000` | Top driving speed. `LINE_ESCAPE_SPEED` and `MOTOR_MAX` (lines 43-44) are multiples of it. |
+| `TURN_MAX`, `TURN_FULL_ERR` | [robot_config.py:44](robot_config.py:44) | `0.6`, `1.0` rad | Turning speed (x `BASE_SPEED`) and how far off the heading it turns at full speed. |
+| `DRIBBLE_SPEED_MIN` | [robot_config.py:47](robot_config.py:47) | `0.38` | Fastest sideways / backwards speed that keeps the ball. Tune on the robot. |
+| `DRIBBLE_TURN_MAX`, `DRIBBLE_MAX_ACCEL` | [robot_config.py:46](robot_config.py:46) | `0.4`, `10.0` | Gentler turning / speeding up while holding the ball. |
 | `BRAKE_SMOOTH`, `BRAKE_LEAD` | [motion.py:7](motion.py:7) | `0.5`, `12` cm | How quickly it changes direction, and how far it still travels before slowing takes effect. |
 | `PARK_ENTER` / `PARK_RESUME` | [motion.py:10](motion.py:10) | `2` / `5` cm | Stops the wheels near the target to avoid jitter. |
 | Speed vs distance curve | [motion.py:13](motion.py:13) `SPEED_CURVE_*` | | How much it slows as it gets close to a target. |
@@ -69,24 +69,24 @@ After changing behaviour, try it in the simulator before the robot: `python simu
 | --- | --- | --- | --- |
 | `GUARD_RADIUS` | [strategy.py:31](strategy.py:31) | `20` cm | How far in front of its goal the goalie guards. |
 | `DANGER_DIST` | [strategy.py:40](strategy.py:40) | `35` cm | Ball this close inside our box: goalie goes for it. |
-| `GOALIE_MAX_OUT` | [strategy.py:73](strategy.py:73) | `12` cm | How far past its box the goalie may chase while the striker plays. |
-| `GOALIE_ALONE_ATTACKS` | [strategy.py:71](strategy.py:71) | `True` | Goalie plays striker when its teammate is off. |
+| `GOALIE_MAX_OUT` | [strategy.py:66](strategy.py:66) | `12` cm | How far past its box the goalie may chase while the striker plays. |
+| `GOALIE_ALONE_ATTACKS` | [strategy.py:64](strategy.py:64) | `True` | Goalie plays striker when its teammate is off. |
 | `BEHIND_DIST`, `ORBIT_DIST` | [strategy.py:13](strategy.py:13) | `R+12`, `R+14` cm | How far behind the ball the striker lines up, and how wide it goes round it. |
-| `CARRY_KICK_RANGE`, `CARRY_KICK_HOLD` | [strategy.py:810](strategy.py:810) | `70` cm, `0.2` s | Striker kicks when this close and facing the goal for this long. |
-| `QUICK_SHOT_RANGE`, `OPEN_SHOT_RANGE` | [strategy.py:813](strategy.py:813) | `130`, `120` cm | Longest shots it takes right after winning the ball / when charged. |
-| `FEINT`, `RESTART_RUSH` | [strategy.py:833](strategy.py:833) | `True`, `False` | Turn whole behaviours on or off. Other on/off switches sit next to them. |
+| `CARRY_KICK_RANGE`, `CARRY_KICK_HOLD` | [strategy.py:770](strategy.py:770) | `70` cm, `0.2` s | Striker kicks when this close and facing the goal for this long. |
+| `QUICK_SHOT_RANGE`, `OPEN_SHOT_RANGE` | [strategy.py:772](strategy.py:772) | `130`, `120` cm | Longest shots it takes right after winning the ball / when charged. |
+| `FEINT`, `RESTART_SCREEN`, `RESTART_CATCH` | [strategy.py:792](strategy.py:792) | all `True` | Turn whole behaviours on or off. Other on/off switches sit next to them. |
 | Not-localised behaviour | [strategy_fallback.py](strategy_fallback.py) | | What both robots do while they don't know where they are. |
 
 ## Camera and detection
 
 | Setting | Where | Now | What it does |
 | --- | --- | --- | --- |
-| `VISION_MAX_FPS` | [robot_config.py:16](robot_config.py:16) | `50` | Camera frame rate cap (`None` = no cap). |
+| `VISION_MAX_FPS` | [robot_config.py:16](robot_config.py:16) | `100` | Camera frame rate cap (`None` = no cap). `100` where mains power is 50 Hz, `120` where it is 60 Hz, so the lights do not flicker in the picture. The real rate shows on the `test_drive.py` and `test_localisation.py` pages. |
 | `VISION_CV_THREADS` | [robot_config.py:17](robot_config.py:17) | `1` | OpenCV threads. Try `2` on the Pi if the camera fps is low. |
-| `BALL_MIN_AREA`, `GOAL_MIN_AREA`, `FIELD_MIN_AREA` | [vision.py:390](vision.py:390) | `2`, `15`, `600` cm² | Smallest blobs that count as ball / goal / "can see the field". |
-| `LINE_MAX_RANGE` | [vision.py:397](vision.py:397) | `120` cm | White line points further than this are ignored. |
-| `OBSTACLE_MIN_SIZE`, `OBSTACLE_MAX_RANGE` | [vision.py:399](vision.py:399) | `12`, `82` cm | Smallest / furthest blob that counts as a robot. |
-| `WHITE_BODY_KERNEL` | [vision.py:412](vision.py:412) | `12` cm | White blobs thicker than this are white robots, not lines. `0` = off. |
+| `BALL_MIN_AREA`, `GOAL_MIN_AREA`, `FIELD_MIN_AREA` | [vision.py:402](vision.py:402) | `2`, `15`, `600` cm² | Smallest blobs that count as ball / goal / "can see the field". |
+| `LINE_MAX_RANGE` | [vision.py:409](vision.py:409) | `120` cm | White line points further than this are ignored. |
+| `OBSTACLE_MIN_SIZE`, `OBSTACLE_MAX_RANGE` | [vision.py:411](vision.py:411) | `12`, `82` cm | Smallest / furthest blob that counts as a robot. |
+| `WHITE_BODY_KERNEL` | [vision.py:424](vision.py:424) | `12` cm | White blobs thicker than this are white robots, not lines. `0` = off. |
 | `BALL_LOST_TIME` | [perception.py:12](perception.py:12) | `0.3` s | How long the ball is remembered after losing sight of it. |
 | `CAMERA_BLIND` | [common.py:15](common.py:15) | `0.3` s | No new frame for this long = stand still until frames come back. |
 

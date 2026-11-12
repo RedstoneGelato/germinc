@@ -19,7 +19,7 @@ import robot_config as cfg  # noqa: E402
 from common import LedCalibrator, Robot  # noqa: E402
 from lines import LineFusion  # noqa: E402
 from localisation import LocalisationThread  # noqa: E402
-from main import GoalieBrain  # noqa: E402
+from main_defence import GoalieBrain  # noqa: E402
 from main_attack import StrikerBrain  # noqa: E402
 from motion import Mover  # noqa: E402
 from perception import World  # noqa: E402
@@ -27,7 +27,7 @@ import vision as _vision_mod  # noqa: E402
 from utils import rotate, wrap_pi  # noqa: E402
 from vision import RobotVision, analyse_frame  # noqa: E402
 
-import common as _common, lines as _lines, localisation as _localisation, main as _main  # noqa: E402,E401
+import common as _common, lines as _lines, localisation as _localisation, main_defence as _main  # noqa: E402,E401
 import main_attack as _main_attack, motion as _motion, perception as _perception  # noqa: E402,E401
 
 CODE_MODULES = ["field", "robot_config", "utils", "robot_vision", "detection", "vision", "localisation", "perception",

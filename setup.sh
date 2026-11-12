@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fresh Raspberry Pi OS + git clone -> ready to run. As the normal user (it uses sudo):
 #   bash setup.sh attack      striker: installs everything and starts main_attack.py at boot
-#   bash setup.sh defense     goalie: same with main.py
+#   bash setup.sh defense     goalie: same with main_defence.py
 #   bash setup.sh             installs everything, no autostart
 # Fixed IPv4 address (optional, for the network connected right now):
 #   STATIC_IP=192.168.1.51/24 GATEWAY=192.168.1.1 bash setup.sh attack

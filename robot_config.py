@@ -13,8 +13,8 @@ GOAL_SWITCH_CLOSED = "yellow"   # swap to "blue" if the robots go for the wrong 
 GOAL_FROM_CAMERA = False
 
 VISION_CONFIG = "robot_vision_config.json"
-VISION_MAX_FPS = 50        # TUNE: None = no cap
-VISION_CV_THREADS = 1
+VISION_MAX_FPS = 100
+VISION_CV_THREADS = 2
 
 CONTROL_PERIOD = 0.01
 

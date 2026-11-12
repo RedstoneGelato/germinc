@@ -100,6 +100,7 @@ class PCBThread(threading.Thread):
         self.ir = None
         self.ir_on = cfg.IR_ON_PCB
         self._ir_errors = 0
+        self._ir_warned = False     # so the "not answering" message prints once, not on every retry
         self.brightness_target = 0
         self._brightness_sent = None
 
@@ -153,9 +154,12 @@ class PCBThread(threading.Thread):
             self._ir_errors += 1
             if self._ir_errors == STALE_AFTER_ERRORS:
                 self.ir_on = False      # each failed read costs ~0.1 s of line-sensor reads
-                print(f"IR ring not answering ({e!r}) - playing without it until the next pause")
+                if not self._ir_warned:
+                    self._ir_warned = True
+                    print(f"IR ring not answering ({e!r}) - playing without it until the next pause")
             return None
         self._ir_errors = 0
+        self._ir_warned = False
         return readings
 
     def retry_ir(self):

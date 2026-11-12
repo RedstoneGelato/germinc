@@ -47,16 +47,27 @@ def _rotate_point(point, size, rotation):
 
 # ==================================== geometry ====================================
 class IdentityWarp:
-    def __init__(self, capture_size, rotation=None):
+    def __init__(self, capture_size, rotation=None, seen=None):
         self.rotation = rotation
         width, height = capture_size
-        self.crop = (0, 0, width, height)
+        self._shape = (height, width)
+        # speed: colours are only worked out inside the box around what the camera can see (the mirror)
+        box = None if seen is None else cv2.boundingRect(seen)
+        self.crop = box if box and box[2] > 0 else (0, 0, width, height)
         self.valid = self._rotate(np.full((height, width), 255, np.uint8))
 
     def _rotate(self, image):
         return image if self.rotation is None else cv2.rotate(image, self.rotation)
 
-    colour = labels = mask = _rotate
+    def labels(self, labels):
+        if labels.shape != self._shape:      # put the box back into a full-size picture; outside it = no colour
+            x, y, w, h = self.crop
+            full = np.zeros(self._shape, np.uint8)
+            full[y:y + h, x:x + w] = labels
+            labels = full
+        return self._rotate(labels)
+
+    colour = mask = _rotate
 
 
 class RemapWarp:
@@ -154,7 +165,7 @@ def _morph_bits(image, k, combine):
         for offset in range(-anchor, k - anchor):
             if offset:
                 dst, src = _shifted(image, axis, offset)
-                combine(out[dst], image[src], out=out[dst])
+                combine(out[dst], image[src], dst=out[dst])
         image = out
     return image
 
@@ -162,8 +173,9 @@ def _morph_bits(image, k, combine):
 def open_bits(labels, k):
     if k <= 1:
         return labels
-    eroded = _morph_bits(labels, k, np.bitwise_and)
-    return _morph_bits(eroded, k, np.bitwise_or)
+    # speed: OpenCV bit operations are several times faster than the NumPy ones on whole pictures
+    eroded = _morph_bits(labels, k, cv2.bitwise_and)
+    return _morph_bits(eroded, k, cv2.bitwise_or)
 
 
 FALLBACK_PX_PER_CM = 1.0
@@ -227,13 +239,14 @@ class RobotVision:
         detection = config["detection"]
         self.morph_kernel = int(detection["morph_kernel"])
 
-        base_size = self._setup_geometry(config)
+        seen = camera_seen_mask(detection, self.size)
+        base_size = self._setup_geometry(config, seen)
         self.centre = self._robot_centre(config["robot_centre"], base_size)
         self.ignore_box = self._ignore_box(detection)
-        seen = camera_seen_mask(detection, self.size)
         self.seen = None if seen is None else self.warp.mask(seen)
         self.valid = self._valid_mask()
         self._far_keep = self._far_keep_mask()
+        self._bit_planes = {name: np.full(self.valid.shape, BITS[name], np.uint8) for name in COLOURS}
 
     def _build_colour_tables(self, hsv):
         self._luts = np.zeros((3, 256), np.uint8)
@@ -241,10 +254,8 @@ class RobotVision:
             low, high = hsv[name]["lo"], hsv[name]["hi"]
             for channel in range(3):
                 self._luts[channel, int(low[channel]):int(high[channel]) + 1] |= BITS[name]
-        values = np.arange(256)
-        self._mask_luts = {name: np.where(values & BITS[name], 255, 0).astype(np.uint8) for name in COLOURS}
 
-    def _setup_geometry(self, config):
+    def _setup_geometry(self, config, seen):
         lens, topdown, radial = config.get("lens"), config.get("topdown"), config.get("radial")
         self.mode = "raw"
         self.px_per_cm = FALLBACK_PX_PER_CM
@@ -267,7 +278,7 @@ class RobotVision:
             maps = _undistort_maps(K, D, self.size, view["balance"], view["fov_scale"])
             self.mode = "undistort"
         if maps is None:
-            self.warp = IdentityWarp(self.size, self.rotation)
+            self.warp = IdentityWarp(self.size, self.rotation, seen)
             return self.size
         outside_label = int(self.classify(np.zeros((1, 1, 3), np.uint8))[0, 0])
         self.warp = RemapWarp(maps[0], maps[1], self.size, self.rotation, outside_label)
@@ -381,7 +392,8 @@ class RobotVision:
         opened = open_bits(labels, self.morph_kernel)
         if self._far_keep is not None:
             opened = cv2.bitwise_or(opened, cv2.bitwise_and(labels, self._far_keep))
-        masks = {name: cv2.LUT(opened, self._mask_luts[name]) for name in COLOURS}
+        masks = {name: cv2.threshold(cv2.bitwise_and(opened, self._bit_planes[name]), 0, 255, cv2.THRESH_BINARY)[1]
+                 for name in COLOURS}
         return Result(masks, self.centre, opened, lambda: self.warp.colour(raw))
 
 
@@ -640,6 +652,14 @@ def _on_mask(view, mask, x, y):
     return hit
 
 
+def _nonzero_points(mask):
+    """Like cv2.findNonZero, but only searches the box around the white pixels (faster on a mostly empty mask)."""
+    x, y, w, h = cv2.boundingRect(mask)
+    if w == 0:
+        return None
+    return cv2.findNonZero(mask[y:y + h, x:x + w]) + np.array((x, y), np.int32)
+
+
 def _big_contours(mask, min_area, approx=cv2.CHAIN_APPROX_NONE):
     x, y, w, h = cv2.boundingRect(mask)
     if w == 0:
@@ -694,7 +714,7 @@ def _goals(rv, masks):
 
 
 def _line_points(rv, white, white_robots):
-    pixels = cv2.findNonZero(white)
+    pixels = _nonzero_points(white)
     if pixels is None:
         return None
     pixels = pixels.reshape(-1, 2).astype(np.float32)
@@ -711,7 +731,7 @@ def _line_points(rv, white, white_robots):
 
 
 def _uncoloured(rv, labels, field_area):
-    uncoloured = cv2.bitwise_and(field_area, cv2.compare(labels, 0, cv2.CMP_EQ))
+    uncoloured = cv2.bitwise_and(field_area, cv2.threshold(labels, 0, 255, cv2.THRESH_BINARY_INV)[1])
     x1, y1, x2, y2 = rv.ignore_box
     pad = int(round(OBSTACLE_BODY_MARGIN * rv.px_per_cm))
     uncoloured[max(y1 - pad, 0):y2 + pad, max(x1 - pad, 0):x2 + pad] = 0
@@ -722,8 +742,7 @@ def _uncoloured(rv, labels, field_area):
 def _near_white(rv, white):
     near_lines = cv2.dilate(white, _square(_odd_kernel_px(OBSTACLE_LINE_MARGIN, rv.px_per_cm)))
     far_lines = cv2.dilate(white, _square(_odd_kernel_px(OBSTACLE_LINE_MARGIN_FAR, rv.px_per_cm)))
-    near_lines |= cv2.bitwise_and(far_lines, _far_mask(rv, far_lines.shape))
-    return near_lines
+    return cv2.bitwise_or(near_lines, cv2.bitwise_and(far_lines, _far_mask(rv, far_lines.shape)))
 
 
 def _white_robots_in_view(white_robots, view, shape):
@@ -773,7 +792,7 @@ def _obstacles(rv, res, field_area, orange, white_robots):
         bodies, grown = _white_robots_in_view(white_robots, view, unknown.shape)
         unknown = cv2.bitwise_or(unknown, bodies)
         unknown = cv2.bitwise_or(unknown, cv2.bitwise_and(grown, _to_view(view, rv, uncoloured)))
-    cover = cv2.findNonZero(orange)
+    cover = _nonzero_points(orange)
     if cover is not None:
         cover = rv.to_cm(*cover.reshape(-1, 2).astype(np.float32).T)
     kernel_px = max(1, int(round(OBSTACLE_KERNEL * view.px_per_cm)))
@@ -831,11 +850,20 @@ class VisionThread(threading.Thread):
         controls = {}
         if cfg.VISION_MAX_FPS:
             frame_us = int(1e6 / cfg.VISION_MAX_FPS)
+            # a fixed exposure longer than one frame would be cut short: darker picture than the colours were tuned on
+            exposure_us = int(self.rv.config["camera"]["controls"].get("ExposureTime", 0))
+            if exposure_us > frame_us:
+                print(f"[vision] exposure {exposure_us} us is longer than a frame at {cfg.VISION_MAX_FPS} fps: "
+                      f"running at {1e6 / exposure_us:.0f} fps instead")
+                frame_us = exposure_us
             controls["FrameDurationLimits"] = (frame_us, frame_us)
         self.cap.configure(self.cap.create_preview_configuration(
             main={"size": self.rv.size, "format": "RGB888"}, controls=controls))
         self.rv.apply_camera(self.cap)
         self.cap.start()
+        sensor_mode = (self.cap.camera_configuration().get("raw") or {}).get("size")
+        print(f"[vision] picture {self.rv.size}, sensor mode {sensor_mode}, "
+              f"frame time {controls.get('FrameDurationLimits')} us")
 
         self.cond = threading.Condition()
         self.frame_id = first_frame_id

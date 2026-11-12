@@ -12,10 +12,6 @@ def angdiff(a, b):
     return math.atan2(math.sin(a - b), math.cos(a - b))
 
 
-def circular_mean(angles):
-    return math.atan2(sum(math.sin(a) for a in angles), sum(math.cos(a) for a in angles))
-
-
 def rotate(v, angle):
     c, s = math.cos(angle), math.sin(angle)
     return [v[0] * c - v[1] * s, v[0] * s + v[1] * c]

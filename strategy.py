@@ -61,13 +61,6 @@ SOLO_CHASE_Y = 0.0
 SOLO_CLOSER = 15.0
 PUSHBACK_GAP = 6.0
 PUSHBACK_ANGLE = math.radians(50)
-GOALIE_STEP_UP = False
-STEP_UP_BALL_Y = 50.0
-STEP_UP_CLEAR_Y = -20.0
-STEP_UP_X_SHARE = 0.3
-STEP_UP_Y = -40.0
-GOALIE_LOOK_AT_SPOT = False
-LOOK_DIST = 55.0
 GOALIE_ALONE_ATTACKS = True
 KICK_RETURN_T = 1.0
 GOALIE_MAX_OUT = 12.0
@@ -461,7 +454,6 @@ class GoalieStrategy:
         self.possession = None
         self.out_side = None
         self.kicked_at = -1e9
-        self.out_ball = None
         self.sealing = False
         self.alone = None
         self.avoid = Avoider()
@@ -487,7 +479,6 @@ class GoalieStrategy:
             return self._play_alone(world, compass, mate, line_touches)
         self.alone = None
 
-        self._remember_ball_going_out(ball, world.ball_vel)
         self._update_botstate(world, mate, me, ball, goal, striker_on)
         centres = obstacle_centres(me, world.obstacles_field)
         action = self._seal_post(world, me, ball, centres, pose) or self._handle_shover(world, compass, me, ball, centres, pose)
@@ -495,7 +486,6 @@ class GoalieStrategy:
             return action
         self.speed = {}
         return (self._block_shot(world, me, ball, centres, pose)
-                or self._look_at_restart_spot(me, ball, striker_on, pose)
                 or self._play_botstate(world, compass, mate, me, ball, goal, centres, striker_on, pose))
 
     def _use_fallback(self, world, compass, mate, line_touches):
@@ -520,14 +510,6 @@ class GoalieStrategy:
         self.command = self.alone.command
         self.phase = "alone: " + self.alone.phase
         return out
-
-    def _remember_ball_going_out(self, ball, vel):
-        if ball is None:
-            return
-        if going_out(ball, vel):
-            self.out_ball = (list(ball), time.monotonic())
-        elif not ball_out(ball):
-            self.out_ball = None
 
     def _raw_botstate(self, world, mate, me, ball, goal, striker_on):
         if ball is None:
@@ -613,35 +595,12 @@ class GoalieStrategy:
         self.speed = {"spd_multi": min(1.0, max(0.1, dist(me, target) / BLOCK_GAIN)), "smooth": GUARD_SMOOTH}
         return rel(target, pose), heading, False
 
-    def _look_at_restart_spot(self, me, ball, striker_on, pose):
-        ball_is_out = ball is None or ball_out(ball)
-        if not (GOALIE_LOOK_AT_SPOT and self.out_ball is not None and striker_on and ball_is_out
-                and time.monotonic() - self.out_ball[1] < RESTART_WAIT):
-            return None
-        spot = restart_spot(self.out_ball[0])
-        others = [q for q in field.NEUTRAL_SPOTS if dist(q, spot) > 1]
-        if abs(spot[0]) > 1:
-            watch = max(others, key=lambda q: dist(q, spot))
-        else:
-            watch = min(others, key=lambda q: abs(q[0] - me[0]))
-        u = unit((0.0 - watch[0], field.OWN_GOAL_Y - watch[1]))
-        target = [watch[0] + u[0] * LOOK_DIST, watch[1] + u[1] * LOOK_DIST]
-        heading = heading_for((watch[0] - target[0], watch[1] - target[1]))
-        self.speed = {"spd_multi": 1.0}
-        self.phase = "look at spot"
-        return rel(target, pose), heading, False
-
     def _play_botstate(self, world, compass, mate, me, ball, goal, centres, striker_on, pose):
         dribbler = False
-        nobody_back_here = all(o[1] > STEP_UP_CLEAR_Y for o in world.opponents)
         if self.botstate == 0:
             target, heading = (0.0, goal[1] + GUARD_RADIUS), 0.0
             self.phase = "guard middle"
             self.speed = guard_speed(me, target)
-        elif GOALIE_STEP_UP and self.botstate == 3 and striker_on and ball[1] > STEP_UP_BALL_Y and nobody_back_here:
-            target, heading = [ball[0] * STEP_UP_X_SHARE, STEP_UP_Y], 0.0
-            self.speed = {"spd_multi": 1.0}
-            self.phase = "step up"
         elif self.botstate in (3, 4):
             target, heading = self._guard_position(world, me, ball)
         else:
@@ -844,16 +803,7 @@ SCREEN_OPP = 60.0
 RESTART_CATCH = True
 CATCH_RESTART_TIME = 1.5
 CATCH_RESTART_OPP = 70.0
-RESTART_RUSH = False
-RUSH_TIME = 4.0
-RUSH_SPOT = 8.0
-RUSH_BEHIND_X = 12.0
-RUSH_FLICK_RANGE = 200.0
-RUSH_CLEAR = 50.0
-RUSH_TURN_TIME = 1.5
-RUSH_TURN_FREE = math.radians(30)
-RUSH_TURN_SLOWEST = math.radians(60)
-RUSH_TURN_MIN_SPD = 0.4
+RESTART_SPOT_R = 8.0
 
 
 CHASE_SLOW_DIST = 25.0      # cm from the ball where the striker slows down to catch it
@@ -991,7 +941,6 @@ class StrikerStrategy:
         self.facing_since = None
         self.won_at = None
         self.out_at = None
-        self.rushed_at = None
         self.feint_since = None
         self.feint_side = None
         self.last_ball = None
@@ -1085,11 +1034,11 @@ class StrikerStrategy:
                 self.speed = {"spd_min": 0.6}
         return target, heading
 
-    def restart_ball(self, ball, within=RUSH_TIME):
+    def restart_ball(self, ball, within):
         if self.out_at is None:
             return False
         recently_out = time.monotonic() - self.out_at < within
-        on_a_spot = min(dist(ball, spot) for spot in field.NEUTRAL_SPOTS) < RUSH_SPOT
+        on_a_spot = min(dist(ball, spot) for spot in field.NEUTRAL_SPOTS) < RESTART_SPOT_R
         return recently_out and on_a_spot
 
     @staticmethod
@@ -1175,14 +1124,7 @@ class StrikerStrategy:
         if RESTART_CATCH and self.restart_ball(ball, CATCH_RESTART_TIME) and behind_ball and they_are_coming:
             side = math.copysign(1.0, (me[0] - ball[0]) or 1.0)
             return self._orbit_restart_ball(me, ball, side, "restart orbit")
-        ball_behind_x = abs(me[0] - ball[0]) < RUSH_BEHIND_X
-        nobody_near = all(dist(o, ball) > RUSH_CLEAR for o in world.opponents)
-        if RESTART_RUSH and self.restart_ball(ball) and me[1] < ball[1] and ball_behind_x and nobody_near:
-            spd = 1.0
-            self.phase = "rush"
-            self.rushed_at = time.monotonic()
-        else:
-            self.phase = "chase"
+        self.phase = "chase"
         self.speed = {"spd_multi": spd}
         return target, heading, dribbler
 
@@ -1196,13 +1138,6 @@ class StrikerStrategy:
         target = [me[0] + sideways[0] * SLIP_SIDE + fwd[0] * SLIP_FORWARD,
                   me[1] + sideways[1] * SLIP_SIDE + fwd[1] * SLIP_FORWARD]
         return target, heading, True
-
-    def _carry_speed(self, carry_heading, compass, now):
-        just_rushed = self.rushed_at is not None and now - self.rushed_at <= RUSH_TURN_TIME
-        turn = abs(angle_diff(carry_heading, compass))
-        if just_rushed and turn >= RUSH_TURN_FREE:
-            return max(RUSH_TURN_MIN_SPD, 1.0 - (turn - RUSH_TURN_FREE) / RUSH_TURN_SLOWEST * 0.6)
-        return 1.0
 
     def _kick_when_lined_up(self, compass, me, goal, heading, now):
         if abs(angle_diff(heading, compass)) >= CARRY_FACING:
@@ -1227,9 +1162,6 @@ class StrikerStrategy:
                 return out
         if self.won_at is None:
             self.won_at = now
-        flicked = RESTART_RUSH and self.restart_ball(ball) and shot_open(compass, me, [], RUSH_FLICK_RANGE)
-        if flicked:
-            self.kick = True
         if now - self.won_at < QUICK_SHOT_TIME and clear_shot(compass, me, centres, QUICK_SHOT_RANGE):
             self.kick = True
         pairs = [(o, v) for o, v in zip(world.opponents, world.opponent_vel)
@@ -1237,8 +1169,8 @@ class StrikerStrategy:
         opps, vels = [o for o, _ in pairs], [v for _, v in pairs]
         u = carry_dir(me, self.carry_target(me, goal), opps, vels)
         carry_heading = heading_for(u)
-        self.speed = {"spd_multi": self._carry_speed(carry_heading, compass, now)}
-        self.phase = "flick" if flicked else "carry"
+        self.speed = {"spd_multi": 1.0}
+        self.phase = "carry"
         if charged(me, opps, vels) and clear_shot(compass, me, centres, OPEN_SHOT_RANGE):
             self.kick = True
         self._kick_when_lined_up(compass, me, goal, heading, now)
