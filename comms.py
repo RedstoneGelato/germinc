@@ -1,3 +1,4 @@
+"""The two robots tell each other what they see and do: small UDP messages over Wi-Fi (TeammateLinkThread)."""
 import json
 import socket
 import threading

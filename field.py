@@ -1,3 +1,5 @@
+"""Sizes and lines of the RCJA field, in cm. (0, 0) = centre, +y = towards the goal we attack.
+field_int.py takes this file's place on the international field."""
 import math
 
 import cv2

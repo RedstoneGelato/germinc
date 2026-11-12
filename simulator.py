@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""The game on a PC: field, ball and four robots running the real robot code, in a window.
+    python simulator.py                 our robots against simple opponents
+    python simulator.py --opp v90       against an older version from past_versions/
+    python simulator.py --help          every option"""
 import argparse
 import math
 import os
@@ -13,8 +17,6 @@ _SIM_T = [1000.0]
 time.monotonic = lambda: _SIM_T[0]
 
 import field  # noqa: E402  (imports after the clock patch on purpose)
-import hardware_attack  # noqa: E402  (plain data: dribbler / kicker settings)
-import hardware_defense  # noqa: E402
 import robot_config as cfg  # noqa: E402
 from common import LedCalibrator, Robot  # noqa: E402
 from lines import LineFusion  # noqa: E402
@@ -677,8 +679,8 @@ class Sim:
         self.progress = ([0.0, 0.0], 0.0)
         self.logs = []
         self.robots = [
-            SimRobot(0, 0, 0, "goalie", (255, 200, 0), GoalieBrain, hardware_defense, self.rv, self.log),
-            SimRobot(0, 0, 0, "striker", (255, 0, 255), StrikerBrain, hardware_attack, self.rv, self.log),
+            SimRobot(0, 0, 0, "goalie", (255, 200, 0), GoalieBrain, cfg.DefenseRobot, self.rv, self.log),
+            SimRobot(0, 0, 0, "striker", (255, 0, 255), StrikerBrain, cfg.AttackRobot, self.rv, self.log),
         ]
         g, s = self.robots
         g.bot.comms.partner, s.bot.comms.partner = s.bot.comms, g.bot.comms
@@ -686,9 +688,9 @@ class Sim:
             self.opponents = [Body(0, 0, math.pi, "opp", ROBOT), Body(0, 0, math.pi, "opp", ROBOT)]
         else:
             self.opponents = [
-                SimRobot(0, 0, math.pi, "opp striker", ROBOT, opp_code.StrikerBrain, hardware_attack, self.rv,
+                SimRobot(0, 0, math.pi, "opp striker", ROBOT, opp_code.StrikerBrain, cfg.AttackRobot, self.rv,
                          self.log, opp_code, "them"),
-                SimRobot(0, 0, math.pi, "opp goalie", ROBOT, opp_code.GoalieBrain, hardware_defense, self.rv,
+                SimRobot(0, 0, math.pi, "opp goalie", ROBOT, opp_code.GoalieBrain, cfg.DefenseRobot, self.rv,
                          self.log, opp_code, "them"),
             ]
             o_s, o_g = self.opponents

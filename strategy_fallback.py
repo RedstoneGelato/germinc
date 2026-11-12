@@ -1,3 +1,5 @@
+"""Simple strategies for when the robot does not know where it is on the field:
+it then plays from what it can see (ball and goal directions) only."""
 import math
 import time
 

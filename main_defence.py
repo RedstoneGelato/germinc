@@ -1,5 +1,17 @@
-from common import Brain
-from strategy import GoalieStrategy
+"""Starts the goalie robot. On the Pi:
+
+    python3 main_defence.py          RCJA field (strategy.py)
+    python3 main_defence.py --int    international field (strategy_int.py)
+"""
+import sys
+
+if "--int" in sys.argv:      # must come first: the imports below then get the international field and strategy
+    import field_int
+    field_int.install_international()
+
+import robot_config as cfg  # noqa: E402
+from common import Brain, run_robot  # noqa: E402
+from strategy import GoalieStrategy  # noqa: E402
 
 
 class GoalieBrain(Brain):
@@ -10,11 +22,5 @@ class GoalieBrain(Brain):
         return {"clear": getattr(self.strategy, "clear_plan", None)}
 
 
-def main():
-    import hardware_defense as hw
-    from common import run_robot
-    run_robot(hw, GoalieBrain)
-
-
 if __name__ == "__main__":
-    main()
+    run_robot(cfg.DefenseRobot, GoalieBrain)

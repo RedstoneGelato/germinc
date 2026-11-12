@@ -1,3 +1,5 @@
+"""Staying inside the field: is the robot on a white line, and which way is back in (LineFusion).
+Uses the line sensors under the robot, the camera's line points and the robot's position together."""
 import math
 import time
 

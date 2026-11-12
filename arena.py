@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Plays many simulator games at once without a window and prints the scores, to compare strategy changes.
+    python arena.py --opp v90 --games 40 --fast"""
 import argparse
 import os
 import math

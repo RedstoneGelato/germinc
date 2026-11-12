@@ -1,3 +1,6 @@
+"""The robot program's main loop, shared by the striker and the goalie.
+Robot = all the sensor / motor threads of one robot. Brain.tick() runs 100 times a second:
+sensors -> World (perception.py) -> strategy -> wheel speeds (motion.py) -> motors. run_robot() starts it all."""
 import json
 import math
 import os
@@ -41,15 +44,15 @@ class Robot:
 
     def __init__(self, hw):
         from comms import TeammateLinkThread      # Pi-only imports, so the simulator can use this class
-        from hardware import IMUThread, PCBThread
+        from hardware import IMUThread, PCBThread, make_kicker, make_motors
         from localisation import LocalisationThread
         from vision import VisionThread
 
         self.imu = IMUThread()
         self.imu.start()
-        self.motors = hw.make_motors()
+        self.motors = make_motors(hw)
         self.motors.start()
-        self.kicker = hw.make_kicker()
+        self.kicker = make_kicker(hw)
         self.pcb = PCBThread()
         self.pcb.start()
         self.comms = TeammateLinkThread(hw.ROBOT_ID)

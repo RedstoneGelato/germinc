@@ -1,3 +1,4 @@
+"""Sizes and lines of the international field. install() puts this file in place of field.py for the whole program."""
 import math
 import sys
 
@@ -175,3 +176,11 @@ def install():
     lines.IGNORE_INNER_LINES = True
     lines.BOUNDARY_BAND = LINE_W + 0.5
     return me
+
+
+def install_international():
+    """Switches the whole program to the international field and its strategy (strategy_int.py).
+    Must be called before anything imports field or strategy."""
+    install()
+    import strategy_int
+    sys.modules["strategy"] = strategy_int

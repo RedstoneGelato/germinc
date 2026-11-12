@@ -1,3 +1,4 @@
+"""Breaks sensors on purpose in the simulator (frozen camera, lost position ...) to test that the robots cope."""
 import math
 
 import numpy as np

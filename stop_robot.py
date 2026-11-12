@@ -1,3 +1,9 @@
+"""Safety stop: sets every motor to speed 0 and turns the PCB LEDs off. The boot service runs it whenever the
+robot program ends (the motor drivers keep their last speed otherwise). By hand:
+
+    python3 stop_robot.py attack      (or defense)
+
+It never raises an error: what went wrong is written to robot_stop.log."""
 import logging
 import sys
 import time
@@ -58,11 +64,12 @@ def stop_pcb_leds():
         log.error(f"Could not reset PCB brightness: {e}")
 
 
-def run(load_hardware):
+def run(role):
     try:
         log.info("=== ExecStopPost safety shutdown triggered ===")
         try:
-            addresses = motor_addresses(load_hardware())
+            import robot_config as cfg
+            addresses = motor_addresses(cfg.DefenseRobot if role == "defense" else cfg.AttackRobot)
         except Exception as e:
             log.error(f"Could not read motor addresses: {e}")
             addresses = {}
@@ -72,3 +79,7 @@ def run(load_hardware):
     except Exception as e:
         log.error(f"Unexpected top-level error: {e}")
     sys.exit(0)
+
+
+if __name__ == "__main__":
+    run(sys.argv[1] if len(sys.argv) > 1 else "attack")

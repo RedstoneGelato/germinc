@@ -1,3 +1,5 @@
+"""The robot's picture of the game (World): ball, goals, other robots and its own position,
+put together from the camera, the IR ring and the teammate's messages."""
 import math
 import time
 

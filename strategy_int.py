@@ -1,3 +1,5 @@
+"""The same job as strategy.py, for the international field (bigger field, penalty box rules).
+It has its own copies of the settings: a change in strategy.py does not reach this file."""
 import math
 import time
 

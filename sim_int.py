@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""simulator.py on the international field with the international rules:  python sim_int.py  (same options)."""
 import math
 import os
 import sys

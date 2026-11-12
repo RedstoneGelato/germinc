@@ -1,3 +1,5 @@
+"""Everything that talks to the electronics, one thread each: compass (IMU), sensor board (PCB), motors, kicker.
+Only runs on the Pi. hw below = robot_config.AttackRobot or robot_config.DefenseRobot."""
 import math
 import threading
 import time
@@ -305,3 +307,11 @@ class Kicker:
     def close(self):
         self.out.off()
         self.out.close()
+
+
+def make_motors(hw):
+    return MotorThread(hw.DRIVE_MOTORS, hw.DRIBBLER, hw.DRIBBLER_SPEED)
+
+
+def make_kicker(hw):
+    return None if hw.KICKER_PIN is None else Kicker(hw.KICKER_PIN, hw.KICK_PULSE, hw.KICK_COOLDOWN)

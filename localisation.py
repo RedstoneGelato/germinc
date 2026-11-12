@@ -1,3 +1,4 @@
+"""Where the robot is on the field (x, y in cm), worked out from the white lines and goals the camera sees."""
 import math
 import threading
 import time

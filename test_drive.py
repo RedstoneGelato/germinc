@@ -9,7 +9,7 @@ Stop the normal robot program first (it uses the same motors). Put the robot on 
 The robot stops by itself when the page stops sending commands for STOP_AFTER seconds (page closed, Wi-Fi lost).
 With --host 0.0.0.0 anyone on the same network can drive the robot, so only use it on a network you trust.
 The camera view is the picture the robot's own vision works on. It needs robot_vision_config.json (test_camera.py).
-Nothing is saved: copy the numbers you like into robot_config.py and hardware_attack.py / hardware_defense.py.
+Nothing is saved: copy the numbers you like into robot_config.py.
 """
 import argparse
 import json
@@ -196,10 +196,11 @@ def start_hardware(role):
         motors, kicker, camera = FakeMotors(), FakeKicker(), FakeCamera()
         return {"dribbler_speed": FakeMotors.dribbler_on_speed, "kick_pulse": FakeKicker.pulse}
 
-    hw = __import__("hardware_" + role)
-    motors = hw.make_motors()
+    from hardware import make_kicker, make_motors
+    hw = cfg.AttackRobot if role == "attack" else cfg.DefenseRobot
+    motors = make_motors(hw)
     motors.start()
-    kicker = hw.make_kicker()
+    kicker = make_kicker(hw)
     try:
         from hardware import IMUThread
         imu = IMUThread()
@@ -326,7 +327,7 @@ PAGE = """<!doctype html>
     <button data-key="3">Wheel 3</button>
     <button data-key="4">Wheel 4</button>
   </div>
-  <p class="hint">Uses the drive speed above. Order = DRIVE_MOTORS in hardware_attack.py / hardware_defense.py.</p>
+  <p class="hint">Uses the drive speed above. Order = DRIVE_MOTORS in robot_config.py.</p>
 </fieldset>
 
 <fieldset>

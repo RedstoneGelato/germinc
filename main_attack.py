@@ -1,5 +1,17 @@
-from common import Brain
-from strategy import StrikerStrategy
+"""Starts the striker robot. On the Pi:
+
+    python3 main_attack.py          RCJA field (strategy.py)
+    python3 main_attack.py --int    international field (strategy_int.py)
+"""
+import sys
+
+if "--int" in sys.argv:      # must come first: the imports below then get the international field and strategy
+    import field_int
+    field_int.install_international()
+
+import robot_config as cfg  # noqa: E402
+from common import Brain, run_robot  # noqa: E402
+from strategy import StrikerStrategy  # noqa: E402
 
 
 class StrikerBrain(Brain):
@@ -12,11 +24,5 @@ class StrikerBrain(Brain):
         return {"command": self.strategy.command}
 
 
-def main():
-    import hardware_attack as hw
-    from common import run_robot
-    run_robot(hw, StrikerBrain)
-
-
 if __name__ == "__main__":
-    main()
+    run_robot(cfg.AttackRobot, StrikerBrain)

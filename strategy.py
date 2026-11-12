@@ -1,3 +1,5 @@
+"""What the robots decide to do on the RCJA field: StrikerStrategy and GoalieStrategy.
+Each update() takes the World and answers: where to go, which way to face, dribbler on or off, kick or not."""
 import math
 import time
 

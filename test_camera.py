@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Camera calibration web page (colours, lens, distances). Run on the Pi:  python3 test_camera.py
+It writes robot_vision_config.json, which the robot program needs."""
 import argparse
 import base64
 import copy

@@ -2,15 +2,21 @@
 # Install / update the systemd service that runs the robot at boot and restarts it if it ever stops.
 #   ./deploy/install_service.sh attack      (striker: main_attack.py)
 #   ./deploy/install_service.sh defense     (goalie: main_defence.py)
+#   ./deploy/install_service.sh attack int  (add int for the international field: main_attack.py --int)
 # Run it on the Pi as the normal user (it uses sudo). Replaces /etc/systemd/system/germinc.service.
 # Afterwards:  sudo systemctl stop germinc     before running anything by hand (only one program can open the camera)
 #              sudo systemctl start germinc    to start it again
 #              journalctl -u germinc -f        to watch its output (crashes, watchdog restarts)
 set -e
 case "$1" in
-    attack)  SCRIPT=main_attack.py; STOP=STOP_attack.py ;;
-    defense) SCRIPT=main_defence.py;STOP=STOP_defense.py ;;
-    *) echo "usage: $0 attack|defense"; exit 1 ;;
+    attack)  SCRIPT=main_attack.py;  STOP="stop_robot.py attack" ;;
+    defense) SCRIPT=main_defence.py; STOP="stop_robot.py defense" ;;
+    *) echo "usage: $0 attack|defense [int]"; exit 1 ;;
+esac
+case "${2:-}" in
+    "")  ;;
+    int) SCRIPT="$SCRIPT --int" ;;
+    *) echo "usage: $0 attack|defense [int]"; exit 1 ;;
 esac
 CODE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PY="${VENV:-$HOME/env}/bin/python3"

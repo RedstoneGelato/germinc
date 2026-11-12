@@ -1,3 +1,4 @@
+"""Small maths helpers used everywhere: angles, rotating points, smoothing filters."""
 import math
 import time
 
