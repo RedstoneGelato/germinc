@@ -52,6 +52,7 @@ guard = None              # TickGuard around the role's Brain, with drive
 last_command = 0.0        # time.monotonic() of the newest command from the page
 FIELD_SCALE = 2.0         # field picture pixels per cm
 field_base = None         # field picture without the robot, made once
+problems = []             # parts that did not start, shown at the top of the page
 
 
 class FakeMotors:
@@ -441,6 +442,8 @@ class Handler(BaseHTTPRequestHandler):
             if picture is None:
                 return self.reply(503, "text/plain", b"no picture yet")
             return self.reply(200, "image/jpeg", picture)
+        if "__DEFAULTS__" in PAGE:          # main() is still starting the hardware
+            return self.reply(200, "text/html; charset=utf-8", STARTING_PAGE.encode())
         self.reply(200, "text/html; charset=utf-8", PAGE.encode())
 
     def do_POST(self):
@@ -474,30 +477,53 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def problem(text):
+    """A part that did not start: printed here and listed at the top of the page."""
+    print(text)
+    problems.append(text)
+
+
 def start_hardware(role):
+    """Starts each part on its own, so a missing camera, dribbler or other part only takes that part away."""
     global motors, kicker, imu, camera, drive, guard
     if role is None:
         motors, kicker, camera = FakeMotors(), FakeKicker(), FakeCamera()
         return {"dribbler_speed": FakeMotors.dribbler_on_speed, "kick_pulse": FakeKicker.pulse}
 
-    from hardware import make_kicker, make_motors
     hw = cfg.AttackRobot if role == "attack" else cfg.DefenseRobot
-    motors = make_motors(hw)
-    motors.start()
-    kicker = make_kicker(hw)
+    try:
+        from hardware import MotorThread
+        try:
+            motors = MotorThread(hw.DRIVE_MOTORS, hw.DRIBBLER, hw.DRIBBLER_SPEED)
+        except Exception as e:
+            if hw.DRIBBLER is None:
+                raise
+            problem(f"No dribbler (its motor driver did not answer: {e!r}). Trying the wheels without it.")
+            motors = MotorThread(hw.DRIVE_MOTORS, None, 0)
+        motors.start()
+    except Exception as e:
+        problem(f"No wheels (motor drivers did not start: {e!r})")
+        motors = FakeMotors()
+        motors.has_dribbler = False
+    try:
+        from hardware import make_kicker
+        kicker = make_kicker(hw)
+    except Exception as e:
+        problem(f"No kicker (it did not start: {e!r})")
     try:
         from hardware import IMUThread
         imu = IMUThread()
         imu.start()
     except Exception as e:
-        print(f"No compass on the page (IMU did not start: {e!r})")
+        problem(f"No compass (IMU did not start: {e!r})")
     try:
         from vision import VisionThread
         compass = imu.compass if imu is not None else (lambda: 0.0)
         camera = VisionThread(compass, keep_frames=True)    # keep_frames: it keeps the newest picture for us
         camera.start()
     except Exception as e:
-        print(f"No camera view on the page (camera did not start: {e!r})")
+        camera = None
+        problem(f"No camera view (camera did not start: {e!r})")
     if camera is not None and imu is not None:
         try:
             drive = DriveBot(hw, motors, kicker, imu, camera)
@@ -508,14 +534,16 @@ def start_hardware(role):
             guard = TickGuard(brain_cls(drive))
             record_intent(guard.brain)
         except Exception as e:
-            print(f"No autonomous mode (could not start it: {e!r})")
+            problem(f"No autonomous mode (could not start it: {e!r})")
             drive = guard = None
     else:
-        print("No autonomous mode: it needs the camera and the IMU")
+        problem("No autonomous mode: it needs the camera and the IMU")
     return {"dribbler_speed": hw.DRIBBLER_SPEED if motors.has_dribbler else 0, "kick_pulse": hw.KICK_PULSE}
 
 
 def stop_hardware():
+    if motors is None:                  # Ctrl+C before the hardware finished starting
+        return
     motors.stop()
     time.sleep(0.05)                    # lets the motor thread send the stop
     for driver in motors.drivers:
@@ -544,19 +572,22 @@ def main():
     if args.fake == (args.role is not None):
         parser.error("give attack or defense, or --fake")
 
-    defaults = start_hardware(None if args.fake else args.role)
-    defaults["camera"] = camera is not None
-    defaults["auto"] = drive is not None
-    defaults["base_speed"] = cfg.BASE_SPEED
-    defaults["turn_max"] = cfg.TURN_MAX
-    defaults["max_speed"] = MAX_SPEED
-    defaults["max_kick_pulse"] = MAX_KICK_PULSE
-    PAGE = PAGE.replace("__DEFAULTS__", json.dumps(defaults))
-
+    # the page server starts first, so the page loads (with a "starting" note) even while a part is slow to start
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"Open http://localhost:{args.port}   (Ctrl+C here to quit)")
     try:
+        defaults = start_hardware(None if args.fake else args.role)
+        defaults["camera"] = camera is not None
+        defaults["auto"] = drive is not None
+        defaults["problems"] = problems
+        defaults["dribbler"] = motors.has_dribbler
+        defaults["base_speed"] = cfg.BASE_SPEED
+        defaults["turn_max"] = cfg.TURN_MAX
+        defaults["max_speed"] = MAX_SPEED
+        defaults["max_kick_pulse"] = MAX_KICK_PULSE
+        PAGE = PAGE.replace("__DEFAULTS__", json.dumps(defaults))
+        print("Hardware started" + (f", {len(problems)} part(s) missing (listed above)" if problems else ""))
         next_loop = time.monotonic()
         while True:
             next_loop = keep_rate(next_loop)
@@ -572,6 +603,14 @@ def main():
         server.shutdown()
         stop_hardware()
 
+
+STARTING_PAGE = """<!doctype html>
+<meta charset="utf-8"><meta http-equiv="refresh" content="1">
+<title>Robot manual drive</title>
+<body style="font-family: sans-serif; background: #14171c; color: #e8eaed; padding: 16px">
+Starting the robot's parts... this page reloads by itself. If it stays here, look at the terminal.
+</body>
+"""
 
 PAGE = """<!doctype html>
 <html lang="en">
@@ -607,6 +646,7 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <h1>Robot manual drive</h1>
+<div id="problems" class="bad" hidden></div>
 <button id="stop">STOP (Space)</button>
 
 <fieldset id="autoBox">
@@ -705,7 +745,7 @@ showSliders();
 function showHeld() {
   document.querySelectorAll("button[data-key]").forEach(b => b.classList.toggle("on", held.has(b.dataset.key)));
   $("dribbler").classList.toggle("on", dribblerOn);
-  $("dribbler").textContent = "Dribbler is " + (dribblerOn ? "ON" : "OFF") + " (R)";
+  if (D.dribbler) $("dribbler").textContent = "Dribbler is " + (dribblerOn ? "ON" : "OFF") + " (R)";
   $("auto").classList.toggle("on", autoOn);
   $("auto").textContent = "Autonomous is " + (autoOn ? "ON - press to stop" : "OFF") + " (T)";
 }
@@ -794,6 +834,11 @@ function keepLoading(img, path) {    // load the next picture a moment after eac
   img.onerror = () => setTimeout(next, 1000);
   next();
 }
+if (D.problems.length) {
+  $("problems").hidden = false;
+  $("problems").innerText = "Not connected (the rest still works):\\n- " + D.problems.join("\\n- ");
+}
+if (!D.dribbler) { $("dribbler").disabled = true; $("dribbler").textContent = "No dribbler on this robot"; }
 if (D.camera) keepLoading($("camera"), "/camera.jpg"); else $("cameraBox").hidden = true;
 if (D.auto) keepLoading($("field"), "/field.jpg"); else { $("field").hidden = true; $("autoBox").hidden = true; }
 
