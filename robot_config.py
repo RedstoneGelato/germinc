@@ -59,11 +59,11 @@ Motor = namedtuple("Motor", "i2c_address elec_angle_offset sincos_centre")
 
 class AttackRobot:               # the striker (main_attack.py)
     ROBOT_ID = 1                 # comms id: must differ between the two robots
-    DRIVE_MOTORS = [
-        Motor(27, 1764227840, 1247),
+    DRIVE_MOTORS = [             # order = wheels at 45, 135, 225, 315 deg (front-right, front-left, back-left, back-right)
         Motor(25, 1352943616, 1239),
         Motor(26, 1562013184, 1257),
         Motor(28, 1790344448, 1226),
+        Motor(27, 1764227840, 1247),
     ]
     DRIBBLER = None   # None = no dribbler
     DRIBBLER_SPEED = 200000000   # TUNE: flip the sign if it spins the ball away
