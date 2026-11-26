@@ -19,34 +19,35 @@ time.monotonic = lambda: _SIM_T[0]
 import field  # noqa: E402  (imports after the clock patch on purpose)
 import robot_config as cfg  # noqa: E402
 from common import LedCalibrator, Robot  # noqa: E402
-from lines import LineFusion  # noqa: E402
-from localisation import LocalisationThread  # noqa: E402
 from main_defence import GoalieBrain  # noqa: E402
 from main_attack import StrikerBrain  # noqa: E402
 from motion import Mover  # noqa: E402
-from perception import World  # noqa: E402
 import vision as _vision_mod  # noqa: E402
 from utils import rotate, wrap_pi  # noqa: E402
 from vision import RobotVision, analyse_frame  # noqa: E402
 
-import common as _common, lines as _lines, localisation as _localisation, main_defence as _main  # noqa: E402,E401
-import main_attack as _main_attack, motion as _motion, perception as _perception  # noqa: E402,E401
+import common as _common, main_defence as _main, main_attack as _main_attack  # noqa: E402,E401
+import motion as _motion, world as _world  # noqa: E402,E401
 
-CODE_MODULES = ["field", "robot_config", "utils", "robot_vision", "detection", "vision", "localisation", "perception",
-                "lines", "motion", "comms", "common", "strategy_fallback", "strategy", "main", "main_attack"]
+CODE_MODULES = ["field", "robot_config", "utils", "robot_vision", "detection", "vision", "world", "localisation",
+                "perception", "lines", "motion", "comms", "common", "strategy_fallback", "strategy", "main", "main_attack"]
 
 
 class Code:
     def __init__(self, name, mods):
         self.name = name
         self.GoalieBrain, self.StrikerBrain = mods["main"].GoalieBrain, mods["main_attack"].StrikerBrain
-        self.LocalisationThread = mods["localisation"].LocalisationThread
-        self.World, self.LineFusion = mods["perception"].World, mods["lines"].LineFusion
+        if "world" in mods:
+            self.LocalisationThread, self.World = mods["world"].LocalisationThread, mods["world"].World
+            self.LineFusion = None
+        else:
+            self.LocalisationThread = mods["localisation"].LocalisationThread
+            self.World, self.LineFusion = mods["perception"].World, mods["lines"].LineFusion
         self.Mover, self.LedCalibrator = mods["motion"].Mover, mods["common"].LedCalibrator
 
 
-CURRENT_CODE = Code("current", {"main": _main, "main_attack": _main_attack, "localisation": _localisation,
-                                "perception": _perception, "lines": _lines, "motion": _motion, "common": _common})
+CURRENT_CODE = Code("current", {"main": _main, "main_attack": _main_attack, "world": _world, "motion": _motion,
+                                "common": _common})
 
 
 PAST_VERSIONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "past_versions")
@@ -125,7 +126,7 @@ PUSHED_TIME = 0.5
 PUSHED_OUT_SPEED = 20.0
 PARK = (1e4, 1e4)
 
-LDR_RING_RADIUS = cfg.ROBOT_RADIUS - 3.0
+LDR_RING_RADIUS = cfg.LDR_RING_RADIUS
 LDR_PHYSICAL_OFFSET = math.pi
 LDR_WHITE, LDR_GREEN, LDR_GREY = 800, 3200, 2400
 GREY_CARPET = False
@@ -603,7 +604,8 @@ class SimBot(Robot):
         self.attack = "yellow"
         self.loc = code.LocalisationThread(self.vision, lambda: self.attack)
         self.world = code.World()
-        self.lines = code.LineFusion()
+        if code.LineFusion is not None:
+            self.lines = code.LineFusion()
         self.mover = code.Mover()
         self.leds = code.LedCalibrator(self.pcb)
 
@@ -1229,7 +1231,7 @@ class TruthLoc:
         pass
 
     def get(self):
-        from localisation import Pose
+        from world import Pose
         t = time.monotonic()
         if t < self.lost_until:
             return Pose(0.0, 0.0, 1e3, t)

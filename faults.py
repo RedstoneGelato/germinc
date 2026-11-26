@@ -123,7 +123,10 @@ class FaultInjector:
             bot.comms.enabled = "comms drop" not in self.until[r.name]
             bot.world.reset()
             bot.mover.reset()
-            bot.lines = type(bot.lines)()
+            if getattr(bot, "lines", None) is not None:
+                bot.lines = type(bot.lines)()
+            else:
+                bot.world.line_fusion = type(bot.world.line_fusion)()
             bot.loc.relocalise()
             log = r.brain.log
             r.brain = type(r.brain)(bot, log=log)

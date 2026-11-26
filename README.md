@@ -60,13 +60,13 @@ To start the international version at boot instead: `bash deploy/install_service
 How the robot program fits together, 100 times a second:
 
 ```
-camera  ->  vision.py  ->  localisation.py (where am I?)  \
-line sensors, IR ring, compass  ->  hardware.py            ->  perception.py (World: ball, goals, robots, me)
-teammate's messages  ->  comms.py                         /
-                                                               |
-                 strategy.py (what to do)  <-------------------+
+camera  ->  vision.py                    \
+line sensors, IR ring, compass  ->  hardware.py  ->  world.py (World: me, ball, goals, robots, lines)
+teammate's messages  ->  comms.py         /
+                                                        |
+                 strategy.py (what to do)  <------------+
                        |
-                 motion.py (wheel speeds)  ->  lines.py (stay inside the field)  ->  hardware.py (motors, kicker)
+                 motion.py (wheel speeds, slows near the line)  ->  hardware.py (motors, kicker)
 ```
 
 `common.py` is the loop that runs these steps in order.
@@ -95,14 +95,12 @@ teammate's messages  ->  comms.py                         /
 | `common.py` | The main loop: reads sensors, asks the strategy, drives the motors. Restarts parts that crash. | everything below |
 | `hardware.py` | Talks to the electronics: compass, sensor board (line sensors, IR ring, LEDs), motors, kicker. | the Pi's pins |
 | `vision.py` | Camera picture to ball, goals, white lines and other robots, in cm from the robot. | camera, `robot_vision_config.json` |
-| `localisation.py` | Where the robot is on the field. | `vision.py`, `field.py` |
-| `perception.py` | One picture of the game (`World`) from all sensors and the teammate. | `vision.py`, `localisation.py`, `hardware.py`, `comms.py` |
+| `world.py` | Everything the robot knows about the game (`World`): where it is on the field, the ball, goals, other robots, whether it is on a white line and which way is back in. | `vision.py`, `hardware.py`, `comms.py`, `field.py` |
 | `comms.py` | Messages between the two robots over Wi-Fi. | the other robot |
-| `strategy.py` | What to do on the RCJA field: where to go, where to face, dribble, kick. | `perception.py` |
-| `strategy_int.py` | The same for the international field. | `perception.py` |
-| `strategy_fallback.py` | Simple play for when the robot does not know where it is. | `perception.py` |
+| `strategy.py` | What to do on the RCJA field: where to go, where to face, dribble, kick. | `world.py` |
+| `strategy_int.py` | The same for the international field. | `world.py` |
+| `strategy_fallback.py` | Simple play for when the robot does not know where it is. | `world.py` |
 | `motion.py` | Turns "go there, face that way" into four wheel speeds. | the strategy |
-| `lines.py` | Is the robot on a white line, and which way is back in. | `hardware.py`, `vision.py`, `localisation.py` |
 | `utils.py` | Small maths helpers (angles, filters). | - |
 
 **Tools to run on the Pi** (stop the robot program first: `sudo systemctl stop germinc`)

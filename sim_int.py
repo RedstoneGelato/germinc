@@ -46,7 +46,7 @@ def load_code(folder):
             mods[k] = importlib.import_module(k)
             if k == "robot_config":
                 mods[k].MAX_OUT = field.max_out(mods[k].ROBOT_RADIUS)
-            elif k == "lines":
+            elif k in ("lines", "world"):
                 mods[k].IGNORE_INNER_LINES = True
     finally:
         sys.path.pop(0)

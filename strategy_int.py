@@ -6,7 +6,7 @@ import time
 import field_int as field
 field.install()
 import robot_config as cfg  # noqa: E402  (after install(): it sets cfg.MAX_OUT for these walls)
-from strategy_fallback import GoalieFallback, StrikerFallback
+from strategy_fallback import GoalieFallback, RoughFrame, StrikerFallback
 from utils import Hysteresis
 
 R = cfg.ROBOT_RADIUS
@@ -581,6 +581,8 @@ class BoxGuard:
             self.speed = math.hypot(pose.x - x0, pose.y - y0) / (now - t0)
         move, heading, dribbler = out
         me = (pose.x, pose.y)
+        unsure = max(0.0, pose.std - cfg.PRECISE_STD)
+        limits = {s: lim - unsure for s, lim in limits.items()}
         brake = min(BRAKE_MAX, self.speed * BRAKE_TIME) if self.brake else 0.0
         target = box_guard(me, (me[0] + move[0], me[1] + move[1]), limits, brake)
         return rel(target, pose), heading, dribbler
@@ -591,6 +593,7 @@ class GoalieStrategy:
     def __init__(self, has_dribbler=True):
         self.has_dribbler = has_dribbler
         self.fallback = GoalieFallback()
+        self.rough = RoughFrame()
         self.botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
         self.botstate = 0
         self.speed = {}
@@ -610,11 +613,16 @@ class GoalieStrategy:
 
     def reset(self):
         self.fallback.reset()
+        self.rough.reset()
         self.botstate_hyst.reset()
 
     def update(self, world, compass, mate, line_touches):
         planned_at = self.clear_plan_at
+        view = None if world.pose is not None and world.pose.confident else self.rough.view(world, mate)
+        world = view or world
         out = self._update(world, compass, mate, line_touches)
+        if view is not None:
+            self.phase = "rough " + self.phase
         if self.clear_plan is not None and self.clear_plan_at == planned_at:
             now = time.monotonic()
             if not (self.kicked_at >= self.clear_plan_at and now - self.kicked_at < CLEAR_SHARE_AFTER):
@@ -1220,6 +1228,7 @@ class StrikerStrategy:
 
     def __init__(self):
         self.fallback = StrikerFallback()
+        self.rough = RoughFrame()
         self.avoid = Avoider()
         self.kick = False
         self.speed = {}
@@ -1242,12 +1251,17 @@ class StrikerStrategy:
 
     def reset(self):
         self.fallback.reset()
+        self.rough.reset()
         self.last_ball = None
         self.facing_since = None
         self.won_at = None
 
     def update(self, world, compass, mate, line_touches):
+        view = None if world.pose is not None and world.pose.confident else self.rough.view(world, mate)
+        world = view or world
         out = self._update(world, compass, mate, line_touches)
+        if view is not None:
+            self.phase = "rough " + self.phase
         return self.box_guard(out, world.pose, {-1: box_limit(partly_ok=not self.goalie_on), 1: box_limit()})
 
     def _update(self, world, compass, mate, line_touches):

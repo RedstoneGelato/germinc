@@ -59,9 +59,9 @@ After changing behaviour, try it in the simulator before the robot: `python simu
 | --- | --- | --- | --- |
 | `LINE_TOUCH_SAFETY` | [robot_config.py:29](robot_config.py:29) | `6` cm | How much of the robot must still be over the line at the furthest out it goes (sets `MAX_OUT`). |
 | `PRECISE_STD` | [robot_config.py:31](robot_config.py:31) | `6` cm | Below this position spread the robot trusts its position for out-of-bounds; above it the LDRs decide. |
-| `SLOW_START`, `SLOW_STOP` | [lines.py:18](lines.py:18) | `20`, `2` cm | Starts slowing this far from the edge, stops this close. |
-| `LDR_VECTOR_IS_ESCAPE` | [lines.py:12](lines.py:12) | `True` | Flip if the robot drives **into** the line instead of away from it. |
-| `SPEED_MULTI` | [lines.py:23](lines.py:23) | `{0: 1, 1: 0.6, ...}` | Slows down after several line touches within 3 s. |
+| `SLOW_START`, `SLOW_STOP` | [world.py:32](world.py:32) | `20`, `2` cm | Starts slowing this far from the edge, stops this close. |
+| `LDR_VECTOR_IS_ESCAPE` | [world.py:26](world.py:26) | `True` | Flip if the robot drives **into** the line instead of away from it. |
+| `SPEED_MULTI` | [world.py:37](world.py:37) | `{0: 1, 1: 0.6, ...}` | Slows down after several line touches within 3 s. |
 
 ## Strategy (`strategy.py`, and the copy in `strategy_int.py`)
 
@@ -87,8 +87,8 @@ After changing behaviour, try it in the simulator before the robot: `python simu
 | `LINE_MAX_RANGE` | [vision.py:409](vision.py:409) | `120` cm | White line points further than this are ignored. |
 | `OBSTACLE_MIN_SIZE`, `OBSTACLE_MAX_RANGE` | [vision.py:411](vision.py:411) | `12`, `82` cm | Smallest / furthest blob that counts as a robot. |
 | `WHITE_BODY_KERNEL` | [vision.py:424](vision.py:424) | `12` cm | White blobs thicker than this are white robots, not lines. `0` = off. |
-| `BALL_LOST_TIME` | [perception.py:14](perception.py:14) | `0.3` s | How long the ball is remembered after losing sight of it. |
-| `CAMERA_BLIND` | [common.py:18](common.py:18) | `0.3` s | No new frame for this long = stand still until frames come back. |
+| `BALL_LOST_TIME` | [world.py:517](world.py:517) | `0.3` s | How long the ball is remembered after losing sight of it. |
+| `CAMERA_BLIND` | [common.py:17](common.py:17) | `0.3` s | No new frame for this long = stand still until frames come back. |
 
 ## Wiring and comms (rarely)
 

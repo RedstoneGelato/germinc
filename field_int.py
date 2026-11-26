@@ -172,9 +172,9 @@ def install():
     sys.modules["field"] = me
     import robot_config as cfg
     cfg.MAX_OUT = max_out(cfg.ROBOT_RADIUS)
-    import lines
-    lines.IGNORE_INNER_LINES = True
-    lines.BOUNDARY_BAND = LINE_W + 0.5
+    import world
+    world.IGNORE_INNER_LINES = True
+    world.BOUNDARY_BAND = LINE_W + 0.5
     return me
 
 

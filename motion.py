@@ -2,7 +2,7 @@
 import math
 
 import robot_config as cfg
-from lines import limit_outward
+from world import limit_outward
 from utils import wrap_pi
 
 BRAKE_SMOOTH = 0.5

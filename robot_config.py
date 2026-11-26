@@ -33,6 +33,7 @@ PRECISE_STD = 6.0
 LDR_COUNT = 32
 LDR_LINE_THRESHOLD = 1500  # TUNE on each new carpet: below this = white line
 LDR_START_ANGLE = math.pi / 2
+LDR_RING_RADIUS = 5.0       # cm from the robot centre: the LDRs sit on a 10 cm diameter ring under the middle of the robot
 LED_BRIGHTNESS_START = 40000
 
 IR_COUNT = 12
@@ -59,9 +60,9 @@ Motor = namedtuple("Motor", "i2c_address elec_angle_offset sincos_centre")
 class AttackRobot:               # the striker (main_attack.py)
     ROBOT_ID = 1                 # comms id: must differ between the two robots
     DRIVE_MOTORS = [
-        Motor(26, 1559051008, 1258),
+        Motor(27, 1559051008, 1258),
         Motor(25, 1349926656, 1247),
-        Motor(27, 1769756160, 1247),
+        Motor(26, 1769756160, 1247),
         Motor(28, 1790054912, 1227),
     ]
     DRIBBLER = Motor(32, 1431223552, 1245)   # None = no dribbler

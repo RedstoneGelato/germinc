@@ -1,6 +1,6 @@
 """The robot program's main loop, shared by the striker and the goalie.
 Robot = all the sensor / motor threads of one robot. Brain.tick() runs 100 times a second:
-sensors -> World (perception.py) -> strategy -> wheel speeds (motion.py) -> motors. run_robot() starts it all."""
+sensors -> World (world.py) -> strategy -> wheel speeds (motion.py) -> motors. run_robot() starts it all."""
 import json
 import math
 import os
@@ -9,9 +9,8 @@ import time
 import traceback
 
 import robot_config as cfg
-from lines import LineFusion
 from motion import Mover
-from perception import World
+from world import World, goal_colour_from_view, heading_from_goals, own_goal_ahead
 from utils import other_goal, wrap_pi
 
 # TUNE
@@ -24,11 +23,8 @@ STATUS_PERIOD = 1.0
 STATE_FILE = "/dev/shm/germinc_state.json"   # RAM disk: survives a program restart, cleared on reboot
 STATE_MAX_AGE = 30.0
 CAM_HEADING_WRONG = math.radians(100)
-CAM_HEADING_SNAP = math.radians(35)
 CAM_VOTES_PAUSED = 20
 CAM_VOTES_RUNNING = 50
-MIN_GOAL_SEPARATION = 50.0
-OWN_GOAL_NO_KICK = math.radians(30)
 LED_STEP = 50
 LED_MAX = 65535
 LED_HEADROOM = 3000
@@ -45,8 +41,8 @@ class Robot:
     def __init__(self, hw):
         from comms import TeammateLinkThread      # Pi-only imports, so the simulator can use this class
         from hardware import IMUThread, PCBThread, make_kicker, make_motors
-        from localisation import LocalisationThread
         from vision import VisionThread
+        from world import LocalisationThread
 
         self.imu = IMUThread()
         self.imu.start()
@@ -65,7 +61,6 @@ class Robot:
         self.loc.start()
 
         self.world = World()
-        self.lines = LineFusion()
         self.mover = Mover()
         self.leds = LedCalibrator(self.pcb)
 
@@ -308,8 +303,8 @@ class Brain:
         mate = bot.comms.teammate()
         world = bot.world
         ir = bot.pcb.ir_snapshot() if hasattr(bot.pcb, "ir_snapshot") else None
-        world.update(frame_id, det, pose, bot.attack, mate, ir)
-        line = bot.lines.update(colours, compass, world.line_pts, pose)
+        world.update(frame_id, det, pose, bot.attack, mate, ir, colours, compass, bot.mover.vel)
+        line = world.line
 
         desired_pos, desired_heading, dribbler_on = strategy.update(world, compass, mate, line.touches)
         speeds = bot.mover.step(desired_pos, desired_heading, compass, line, pose, **strategy.speed,
@@ -447,46 +442,6 @@ class LedCalibrator:
 
 def goal_colour_from_switch(closed):
     return cfg.GOAL_SWITCH_CLOSED if closed else other_goal(cfg.GOAL_SWITCH_CLOSED)
-
-
-def goal_colour_from_view(det, current):
-    if det is None:
-        return current
-    yellow, blue = det.goals["yellow"], det.goals["blue"]
-    if yellow is not None:
-        return "yellow" if yellow.centre[1] > 0 else "blue"
-    if blue is not None:
-        return "blue" if blue.centre[1] > 0 else "yellow"
-    return current
-
-
-def _snap_to_axis(heading):
-    if abs(heading) < CAM_HEADING_SNAP:
-        return 0.0
-    if abs(wrap_pi(heading - math.pi)) < CAM_HEADING_SNAP:
-        return math.pi
-    return heading
-
-
-def heading_from_goals(det, attack, both_only=False):
-    if det is None:
-        return None
-    ahead, behind = det.goals.get(attack), det.goals.get(other_goal(attack))
-    if ahead is not None and behind is not None:
-        vx, vy = ahead.centre[0] - behind.centre[0], ahead.centre[1] - behind.centre[1]
-        return math.atan2(vx, vy) if vx * vx + vy * vy > MIN_GOAL_SEPARATION ** 2 else None
-    if both_only or (ahead is None and behind is None):
-        return None
-    if ahead is not None:
-        return _snap_to_axis(math.atan2(ahead.centre[0], ahead.centre[1]))
-    return _snap_to_axis(wrap_pi(math.atan2(behind.centre[0], behind.centre[1]) + math.pi))
-
-
-def own_goal_ahead(det, attack):
-    if det is None:
-        return False
-    own = det.goals.get(other_goal(attack))
-    return own is not None and own.centre[1] > 0 and abs(math.atan2(own.centre[0], own.centre[1])) < OWN_GOAL_NO_KICK
 
 
 def keep_rate(next_loop):

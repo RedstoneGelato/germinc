@@ -11,10 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 
 import robot_config as cfg
-from lines import LineFusion
-from localisation import LocalisationThread
-from perception import World
 from vision import VisionThread
+from world import LocalisationThread, World
 
 FIELD_SCALE = 2.0
 
@@ -37,7 +35,6 @@ class Debug:
         self.vision, self.loc, self.imu, self.pcb = vision, loc, imu, pcb
         self.attack = attack
         self.world = World()
-        self.lines = LineFusion()
         self.line_state = None
         self.lock = threading.Lock()
         self.cam_img = self.field_img = None
@@ -62,9 +59,10 @@ class Debug:
             with self.vision.cond:
                 res = self.vision.last_res
             pose = self.loc.get()
-            self.world.update(last, det, pose, self.attack)
+            colours = self.pcb.snapshot() if self.pcb is not None else None
+            self.world.update(last, det, pose, self.attack, colours=colours, compass=det.compass)
             if self.pcb is not None:
-                self.line_state = self.lines.update(self.pcb.snapshot(), det.compass, self.world.line_pts, pose)
+                self.line_state = self.world.line
             cam = self.draw_cam(res, det) if res is not None else None
             fld = self.draw_field(det, pose)
             st = self.make_status(det, pose)

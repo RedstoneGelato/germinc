@@ -1,17 +1,18 @@
-"""Simple strategies for when the robot does not know where it is on the field:
-it then plays from what it can see (ball and goal directions) only."""
+"""Play for when the localisation is not confident.
+RoughFrame works out a rough field position from the goals the camera sees, so the main strategies can keep
+playing; GoalieFallback and StrikerFallback play from what the robot sees (ball and goal directions) when no goal is seen."""
 import math
 import time
 
 import field
 import robot_config as cfg
+from world import GOAL_POSE_STD, Pose, position_from_goal_centres
 
 R = cfg.ROBOT_RADIUS
 
 # ---- TUNE (cm)
 DEFAULT_GOAL = [0.0, 200.0]
 GOALIE_DIST = 20.0
-BACKUP_Y = -60.0
 GOALIE_CLEAR_DIST = 35.0
 GOALIE_KICK_TOL = math.radians(35)
 BLOCK_SPEED = 20.0
@@ -26,6 +27,8 @@ HOME_DIST = 25.0
 CHASE_MARGIN = R + 4.0
 CARRY_MARGIN = R + 16.0
 GOAL_CENTRE_Y = field.ATTACK_GOAL_Y + field.GOAL_DEPTH / 2
+BALL_VEL_SMOOTH = 0.3
+BALL_VEL_MAX = 400.0
 
 
 def rough_position(world):
@@ -35,6 +38,74 @@ def rough_position(world):
     if own is not None:
         return (-own.centre[0], -GOAL_CENTRE_Y - own.centre[1])
     return None
+
+
+class RoughWorld:
+
+    def __init__(self, world, **values):
+        self._world = world
+        self.__dict__.update(values)
+
+    def __getattr__(self, name):
+        return getattr(self._world, name)
+
+
+class RoughFrame:
+    """Field-frame view of the world from a position worked out from the visible goals' centres (nearer goal
+    weighted more), for the main strategies to use while the localisation is not confident."""
+
+    def __init__(self, fld=field):
+        self.field = fld
+        self.reset()
+
+    def reset(self):
+        self.prev_ball = None
+        self.ball_vel = [0.0, 0.0]
+        self.frame_id = None
+
+    def position(self, world):
+        return position_from_goal_centres(world.attack_goal, world.own_goal)
+
+    def view(self, world, mate=None):
+        me = self.position(world)
+        if me is None:
+            self.reset()
+            return None
+        f = self.field
+        now = time.monotonic()
+        pose = Pose(me[0], me[1], GOAL_POSE_STD, now, getattr(world.pose, "dh", 0.0))
+        ball_field = None
+        if world.ball is not None:
+            ball_field = [world.ball[0] + me[0], world.ball[1] + me[1]]
+        elif mate and mate.get("bot active") == 1 and mate.get("ball"):
+            ball_field = list(mate["ball"])
+        if world.frame_id != self.frame_id:
+            self.frame_id = world.frame_id
+            self._update_ball_vel(None if world.ball_hidden else ball_field, now)
+        obstacles = [([p[0] + me[0], p[1] + me[1]], s) for p, s in world.obstacles]
+        opponents = []
+        for p, _ in obstacles:
+            dx, dy = p[0] - me[0], p[1] - me[1]
+            d = math.hypot(dx, dy) or 1.0
+            c = (p[0] + dx / d * R, p[1] + dy / d * R)
+            if f.inside_play_area(c[0], c[1], -R):
+                opponents.append(c)
+        return RoughWorld(world, pose=pose, ball_field=ball_field, ball_vel=list(self.ball_vel),
+                          obstacles_field=obstacles, opponents=opponents, opponent_vel=[[0.0, 0.0]] * len(opponents))
+
+    def _update_ball_vel(self, b, now):
+        prev = self.prev_ball
+        if b is None:
+            if prev is None or now - prev[1] > 0.3:
+                self.ball_vel, self.prev_ball = [0.0, 0.0], None
+            return
+        if prev is not None and now - prev[1] > 1e-3:
+            dt = now - prev[1]
+            v = [(b[0] - prev[0][0]) / dt, (b[1] - prev[0][1]) / dt]
+            if math.hypot(v[0], v[1]) < BALL_VEL_MAX:
+                k = BALL_VEL_SMOOTH
+                self.ball_vel = [self.ball_vel[0] * (1 - k) + v[0] * k, self.ball_vel[1] * (1 - k) + v[1] * k]
+        self.prev_ball = (list(b), now)
 
 
 def keep_in_field(target, world, margin):
@@ -105,7 +176,7 @@ class GoalieFallback:
         ball, own = world.ball, world.own_goal
         if own is None:
             self.botstate, self.chasing = 0, False
-            return [0.0, BACKUP_Y], 0.0, False
+            return [0.0, 0.0], 0.0, False
         g = own.centre
         if ball is None:
             self.botstate, self.chasing = 0, False

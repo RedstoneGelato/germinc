@@ -5,7 +5,7 @@ import time
 
 import field
 import robot_config as cfg
-from strategy_fallback import GoalieFallback, StrikerFallback
+from strategy_fallback import GoalieFallback, RoughFrame, StrikerFallback
 from utils import Hysteresis
 
 R = cfg.ROBOT_RADIUS
@@ -447,6 +447,7 @@ class GoalieStrategy:
     def __init__(self, has_dribbler=True):
         self.has_dribbler = has_dribbler
         self.fallback = GoalieFallback()
+        self.rough = RoughFrame()
         self.botstate_hyst = Hysteresis(hold_time=0.11, instant_enter=lambda v: v == 1)
         self.botstate = 0
         self.speed = {}
@@ -463,10 +464,18 @@ class GoalieStrategy:
 
     def reset(self):
         self.fallback.reset()
+        self.rough.reset()
         self.botstate_hyst.reset()
 
     def update(self, world, compass, mate, line_touches):
         mate = self.mate_mem(mate)
+        view = None if world.pose is not None and world.pose.confident else self.rough.view(world, mate)
+        out = self._update(view or world, compass, mate, line_touches)
+        if view is not None:
+            self.phase = "rough " + self.phase
+        return out
+
+    def _update(self, world, compass, mate, line_touches):
         pose = world.pose
         self.kick = False
         self.possession = possession(world, mate)
@@ -932,6 +941,7 @@ class StrikerStrategy:
 
     def __init__(self):
         self.fallback = StrikerFallback()
+        self.rough = RoughFrame()
         self.avoid = Avoider()
         self.kick = False
         self.speed = {}
@@ -950,12 +960,20 @@ class StrikerStrategy:
 
     def reset(self):
         self.fallback.reset()
+        self.rough.reset()
         self.last_ball = None
         self.facing_since = None
         self.won_at = None
 
     def update(self, world, compass, mate, line_touches):
         mate = self.mate_mem(mate)
+        view = None if world.pose is not None and world.pose.confident else self.rough.view(world, mate)
+        out = self._update(view or world, compass, mate, line_touches)
+        if view is not None:
+            self.phase = "rough " + self.phase
+        return out
+
+    def _update(self, world, compass, mate, line_touches):
         pose = world.pose
         self.kick = False
         self.command = 0
