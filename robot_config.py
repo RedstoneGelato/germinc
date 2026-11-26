@@ -65,7 +65,7 @@ class AttackRobot:               # the striker (main_attack.py)
         Motor(26, 1562013184, 1257),
         Motor(28, 1790344448, 1226),
     ]
-    DRIBBLER = Motor(32, 1431223552, 1245)   # None = no dribbler
+    DRIBBLER = None   # None = no dribbler
     DRIBBLER_SPEED = 200000000   # TUNE: flip the sign if it spins the ball away
     KICKER_PIN = 17              # GPIO pin of the solenoid, None = no kicker
     KICK_PULSE = 0.05            # TUNE carefully: seconds the solenoid is powered
